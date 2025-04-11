@@ -9,6 +9,7 @@ A modern web API built with Elysia, Bun, and PostgreSQL, featuring user-specific
 - Permission-based access control
 - RESTful API endpoints
 - Type-safe database operations with Prisma
+- Continuous Integration with GitHub Actions
 
 ## Prerequisites
 
@@ -86,6 +87,26 @@ Run tests:
 ```bash
 bun test
 ```
+
+## Continuous Integration
+
+The project uses GitHub Actions for continuous integration:
+
+### Test Workflow
+- Runs on push to main and pull requests
+- Sets up PostgreSQL test database
+- Runs database migrations
+- Executes test suite
+
+### Lint Workflow
+- Runs on push to main and pull requests
+- Performs type checking
+- Runs linting
+
+### Deploy Workflow
+- Runs on push to main
+- Builds the application
+- Deploys to production (requires configuration)
 
 ## Database Schema
 
