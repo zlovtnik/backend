@@ -40,19 +40,28 @@ jobs:
       - name: Setup environment variables
         run: |
           echo "DATABASE_URL=postgresql://postgres:postgres@postgres:5432/production_db" >> .env
+          echo "PORT=3000" >> .env
       
       - name: Run database migrations
         run: bunx prisma migrate deploy
       
       - name: Deploy to Production
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: postgresql://postgres:postgres@postgres:5432/production_db
+          PORT: 3000
         run: |
-          # Start the application
+          # Start the application in the background
           bun run start &
+          APP_PID=$!
           
           # Wait for the application to start
           sleep 10
           
           # Check if the application is running
-          curl -f http://localhost:3000/api/health || exit 1 
+          if curl -f http://localhost:3000/api/health; then
+            echo "Application started successfully"
+          else
+            echo "Application failed to start"
+            kill $APP_PID
+            exit 1
+          fi 
