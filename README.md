@@ -11,6 +11,7 @@ Uma API web moderna construída com Elysia, Bun e PostgreSQL, com gerenciamento 
 - Operações de banco de dados com tipagem segura usando Prisma
 - Integração Contínua com GitHub Actions
 - Verificação estrita de tipos TypeScript
+- Containerização com Docker para fácil replicação
 
 ## Documentação TypeScript
 
@@ -158,8 +159,11 @@ class App extends Elysia {
 - [Bun](https://bun.sh/) (v1.0.0 ou superior)
 - Banco de dados PostgreSQL
 - Node.js (para CLI do Prisma)
+- [Docker](https://www.docker.com/) e [Docker Compose](https://docs.docker.com/compose/) (para containerização)
 
 ## Instalação
+
+### Instalação Local
 
 1. Clone o repositório
 2. Instale as dependências:
@@ -180,6 +184,92 @@ PORT=3000
 4. Execute as migrações do banco de dados:
 ```bash
 bunx prisma migrate dev
+```
+
+### Instalação com Docker
+
+1. Clone o repositório
+2. Construa e inicie os containers:
+```bash
+docker-compose up --build
+```
+
+3. Para parar os containers:
+```bash
+docker-compose down
+```
+
+4. Para reiniciar os containers:
+```bash
+docker-compose restart
+```
+
+5. Para visualizar os logs:
+```bash
+docker-compose logs -f
+```
+
+### Duplicação de Instâncias
+
+Para criar múltiplas instâncias do backend:
+
+1. Crie um novo diretório para a instância:
+```bash
+mkdir instance-2
+cd instance-2
+```
+
+2. Copie os arquivos necessários:
+```bash
+cp ../Dockerfile .
+cp ../docker-compose.yml .
+cp -r ../src .
+cp -r ../prisma .
+cp ../package.json .
+cp ../bun.lockb .
+```
+
+3. Modifique o docker-compose.yml para a nova instância:
+```yaml
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3001:3000"  # Porta diferente para a nova instância
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/ai_alibaba_cloud_2
+      - PORT=3000
+    depends_on:
+      - db
+    networks:
+      - app-network
+
+  db:
+    image: postgres:latest
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=ai_alibaba_cloud_2
+    ports:
+      - "5433:5432"  # Porta diferente para o banco de dados
+    volumes:
+      - postgres_data_2:/var/lib/postgresql/data
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  postgres_data_2:
+```
+
+4. Inicie a nova instância:
+```bash
+docker-compose up --build
 ```
 
 ## Desenvolvimento

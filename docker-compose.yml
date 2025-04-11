@@ -1,8 +1,20 @@
 version: '3.8'
 
 services:
-  postgres:
-    image: postgres:15
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/ai_alibaba_cloud
+      - PORT=3000
+    depends_on:
+      - db
+    networks:
+      - app-network
+
+  db:
+    image: postgres:latest
     container_name: ai_alibaba_cloud_postgres
     environment:
       POSTGRES_USER: postgres
@@ -14,7 +26,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf
     networks:
-      - postgres_network
+      - app-network
     command: postgres -c 'listen_addresses=*' -c 'hba_file=/etc/postgresql/pg_hba.conf'
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -34,14 +46,13 @@ services:
     ports:
       - "5050:80"
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
     networks:
-      - postgres_network
+      - app-network
 
 networks:
-  postgres_network:
-    name: postgres_network
+  app-network:
     driver: bridge
 
 volumes:
