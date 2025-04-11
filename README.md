@@ -1,15 +1,46 @@
-# Elysia with Bun runtime
+# AI Alibaba Cloud Test
 
-## Getting Started
-To get started with this template, simply paste this command into your terminal:
+This is a backend project built with Elysia.js and Bun.
+
+## Prerequisites
+
+- [Bun](https://bun.sh/) (v1.0.0 or later)
+
+## Installation
+
 ```bash
-bun create elysia ./elysia-example
+bun install
 ```
 
-## Development
-To start the development server run:
+## Running the project
+
+### Development
+
 ```bash
 bun run dev
 ```
 
-Open http://localhost:3000/ with your browser to see the result.
+### Production
+
+```bash
+bun run start
+```
+
+## Testing
+
+```bash
+bun test
+```
+
+## Project Structure
+
+- `src/` - Source code
+  - `index.ts` - Main entry point
+- `package.json` - Project configuration
+- `tsconfig.json` - TypeScript configuration
+- `.gitignore` - Git ignore file
+
+## API Endpoints
+
+- `GET /` - Hello world
+- `GET /health` - Health check

@@ -1,7 +1,41 @@
-import { Elysia } from "elysia";
+import express from 'express';
+import cors from 'cors';
+import { checkDatabaseConnection } from './database';
+import { callProcedures } from './database/procedures';
 
-const app = new Elysia().get("/", () => "Hello Elysia").listen(3000);
+const app = express();
+const port = process.env.PORT || 3000;
 
-console.log(
-  `🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`
-);
+app.use(cors());
+app.use(express.json());
+
+app.get('/api/organizations', async (req, res) => {
+  try {
+    const result = await callProcedures('get_organization_statistics');
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/users', async (req, res) => {
+  try {
+    const result = await callProcedures('get_users_by_organization');
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/permissions', async (req, res) => {
+  try {
+    const result = await callProcedures('get_users_by_organization');
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.listen(port, () => {
+  console.log(`Server is running on port ${port}`);
+});
