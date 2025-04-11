@@ -27,9 +27,12 @@ export const organizationRepository = {
 
     async findAll(): Promise<Organization[]> {
         const results = await prisma.organization.findMany();
-        return results.map((result: { description: string | null }) => ({
-            ...result,
-            description: result.description || undefined
+        return results.map((result: { id: string; name: string; description: string | null; createdAt: Date; updatedAt: Date }) => ({
+            id: result.id,
+            name: result.name,
+            description: result.description || undefined,
+            createdAt: result.createdAt,
+            updatedAt: result.updatedAt
         }));
     },
 
