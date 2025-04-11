@@ -8,6 +8,21 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     
+    services:
+      postgres:
+        image: postgres:latest
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: production_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
       
@@ -24,10 +39,10 @@ jobs:
       
       - name: Setup environment variables
         run: |
-          echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" >> .env
+          echo "DATABASE_URL=postgresql://postgres:postgres@postgres:5432/production_db" >> .env
       
       - name: Run database migrations
-        run: npx prisma migrate deploy
+        run: bunx prisma migrate deploy
       
       - name: Deploy to Production
         env:

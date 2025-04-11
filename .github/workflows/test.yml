@@ -41,7 +41,7 @@ jobs:
           echo "DATABASE_URL=postgresql://postgres:postgres@postgres:5432/test_db" >> .env
       
       - name: Run database migrations
-        run: npx prisma migrate deploy
+        run: bunx prisma migrate deploy
       
       - name: Run tests
         run: bun test 
