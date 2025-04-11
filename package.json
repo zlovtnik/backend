@@ -7,7 +7,7 @@
     "start": "bun run src/index.ts",
     "test": "bun test",
     "build": "bun build ./src/index.ts --outdir ./dist --target node",
-    "typecheck": "bun typecheck",
+    "typecheck": "tsc --noEmit",
     "lint": "bun lint"
   },
   "dependencies": {
@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "bun-types": "latest",
-    "prisma": "^6.6.0"
+    "prisma": "^6.6.0",
+    "typescript": "^5.0.0"
   }
 }
