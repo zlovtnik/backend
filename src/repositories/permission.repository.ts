@@ -25,6 +25,18 @@ export const permissionRepository = {
         };
     },
 
+    async findByUser(userId: string): Promise<Permission[]> {
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            include: { permissions: true }
+        });
+        if (!user) return [];
+        return user.permissions.map(permission => ({
+            ...permission,
+            description: permission.description || undefined
+        }));
+    },
+
     async findAll(): Promise<Permission[]> {
         const results = await prisma.permission.findMany();
         return results.map((result: any) => ({

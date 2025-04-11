@@ -1,16 +1,32 @@
 version: '3.8'
 
 services:
-  app:
-    build: .
-    ports:
-      - "3000:3000"
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/ai_alibaba_cloud
       - PORT=3000
     depends_on:
-      db:
-        condition: service_healthy
+      - db
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      - VITE_API_URL=http://localhost/api
+    ports:
+      - "4200:4200"
     networks:
       - app-network
 
@@ -28,7 +44,7 @@ services:
       - app-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 5
 

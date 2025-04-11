@@ -12,6 +12,8 @@ Uma API web moderna construída com Elysia, Bun e PostgreSQL, com gerenciamento 
 - Integração Contínua com GitHub Actions
 - Verificação estrita de tipos TypeScript
 - Containerização com Docker para fácil replicação
+- Proxy reverso com Nginx para desenvolvimento e produção
+- Gerenciamento de banco de dados com pgAdmin
 
 ## Documentação TypeScript
 
@@ -160,6 +162,7 @@ class App extends Elysia {
 - Banco de dados PostgreSQL
 - Node.js (para CLI do Prisma)
 - [Docker](https://www.docker.com/) e [Docker Compose](https://docs.docker.com/compose/) (para containerização)
+- [Nginx](https://nginx.org/) (para proxy reverso)
 
 ## Instalação
 
@@ -189,88 +192,79 @@ bunx prisma migrate dev
 ### Instalação com Docker
 
 1. Clone o repositório
-2. Construa e inicie os containers:
+2. Crie os diretórios necessários:
 ```bash
-docker-compose up --build
+mkdir -p nginx/ssl frontend
 ```
 
-3. Para parar os containers:
+3. Para desenvolvimento:
+```bash
+# Inicie todos os serviços
+docker-compose up
+
+# Acesse a aplicação
+http://localhost
+```
+
+4. Para produção:
+```bash
+# Configure o ambiente para produção
+export NGINX_CONF=production.conf
+
+# Inicie todos os serviços
+docker-compose up
+
+# Acesse a aplicação
+https://localhost
+```
+
+5. Para parar os containers:
 ```bash
 docker-compose down
 ```
 
-4. Para reiniciar os containers:
+6. Para reiniciar os containers:
 ```bash
 docker-compose restart
 ```
 
-5. Para visualizar os logs:
+7. Para visualizar os logs:
 ```bash
 docker-compose logs -f
 ```
 
-### Duplicação de Instâncias
+### Configuração do Nginx
 
-Para criar múltiplas instâncias do backend:
+O projeto inclui duas configurações do Nginx:
 
-1. Crie um novo diretório para a instância:
-```bash
-mkdir instance-2
-cd instance-2
-```
+1. **Desenvolvimento** (`nginx/development.conf`):
+   - Proxy reverso para frontend Angular (porta 4200)
+   - Proxy reverso para backend (porta 3000)
+   - Sem SSL/TLS
+   - Configurações básicas de proxy
 
-2. Copie os arquivos necessários:
-```bash
-cp ../Dockerfile .
-cp ../docker-compose.yml .
-cp -r ../src .
-cp -r ../prisma .
-cp ../package.json .
-cp ../bun.lockb .
-```
+2. **Produção** (`nginx/production.conf`):
+   - SSL/TLS com HTTP/2
+   - Headers de segurança
+   - Compressão Gzip
+   - Cache de arquivos estáticos
+   - Redirecionamento HTTP para HTTPS
+   - Timeouts configurados
+   - Proteção contra acesso a arquivos ocultos
 
-3. Modifique o docker-compose.yml para a nova instância:
-```yaml
-version: '3.8'
+### Acesso ao pgAdmin
 
-services:
-  app:
-    build: .
-    ports:
-      - "3001:3000"  # Porta diferente para a nova instância
-    environment:
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/ai_alibaba_cloud_2
-      - PORT=3000
-    depends_on:
-      - db
-    networks:
-      - app-network
+O pgAdmin está disponível em:
+- URL: http://localhost:5050
+- Email: admin@admin.com
+- Senha: admin
 
-  db:
-    image: postgres:latest
-    environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=ai_alibaba_cloud_2
-    ports:
-      - "5433:5432"  # Porta diferente para o banco de dados
-    volumes:
-      - postgres_data_2:/var/lib/postgresql/data
-    networks:
-      - app-network
-
-networks:
-  app-network:
-    driver: bridge
-
-volumes:
-  postgres_data_2:
-```
-
-4. Inicie a nova instância:
-```bash
-docker-compose up --build
-```
+Para conectar ao banco de dados no pgAdmin:
+- Host: db
+- Port: 5432
+- Database: ai_alibaba_cloud
+- Username: postgres
+- Password: postgres
 
 ## Desenvolvimento
 
