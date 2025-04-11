@@ -1,7 +1,7 @@
 export type Permission = {
     id: string
     name: string
-    description?: string
+    description: string | null
     organizationId: string
     createdAt: Date
     updatedAt: Date

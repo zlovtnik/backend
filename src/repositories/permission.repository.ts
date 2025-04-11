@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 import { PrismaClient } from '@prisma/client';
+=======
+import prisma from '../database/index'
+>>>>>>> 2d11823 (asd)
 import { Permission, CreatePermissionInput, UpdatePermissionInput } from '../types/permission'
 
 const prisma = new PrismaClient();

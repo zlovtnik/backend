@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 import { PrismaClient } from '@prisma/client';
+=======
+import prisma from '../database/index'
+>>>>>>> 2d11823 (asd)
 import { User, CreateUserInput, UpdateUserInput } from '../types/user'
 
 const prisma = new PrismaClient();

@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 import { PrismaClient } from '@prisma/client';
+=======
+import prisma from '../database/index'
+>>>>>>> 2d11823 (asd)
 import { Organization, CreateOrganizationInput, UpdateOrganizationInput } from '../types/organization'
 
 const prisma = new PrismaClient();
