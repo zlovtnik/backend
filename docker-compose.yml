@@ -9,25 +9,23 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/ai_alibaba_cloud
       - PORT=3000
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     networks:
       - app-network
 
   db:
     image: postgres:latest
-    container_name: ai_alibaba_cloud_postgres
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: ai_alibaba_cloud
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=ai_alibaba_cloud
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf
     networks:
       - app-network
-    command: postgres -c 'listen_addresses=*' -c 'hba_file=/etc/postgresql/pg_hba.conf'
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -56,5 +54,4 @@ networks:
     driver: bridge
 
 volumes:
-  postgres_data:
-    name: postgres_data 
+  postgres_data: 
