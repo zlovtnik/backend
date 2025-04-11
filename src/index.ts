@@ -5,6 +5,7 @@ import { callProcedures } from './database/procedures';
 
 const app = new Elysia()
   .use(cors())
+  .get('/api/health', () => ({ status: 'ok' }))
   .get('/api/organizations', async ({ headers }) => {
     try {
       const userId = headers['x-user-id'];

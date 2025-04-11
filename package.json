@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "build": "bun build ./src/index.ts --outdir ./dist",
+    "typecheck": "bun typecheck",
+    "lint": "bun lint"
   },
   "dependencies": {
     "@elysiajs/cors": "^1.2.0",

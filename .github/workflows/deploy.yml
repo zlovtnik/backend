@@ -22,13 +22,22 @@ jobs:
       - name: Build
         run: bun run build
       
+      - name: Setup environment variables
+        run: |
+          echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" >> .env
+      
+      - name: Run database migrations
+        run: npx prisma migrate deploy
+      
       - name: Deploy to Production
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          # Add other environment variables as needed
         run: |
-          # Add your deployment commands here
-          # For example, if using a cloud platform:
-          # - Configure the platform CLI
-          # - Deploy the application
-          echo "Deployment commands would go here" 
+          # Start the application
+          bun run start &
+          
+          # Wait for the application to start
+          sleep 10
+          
+          # Check if the application is running
+          curl -f http://localhost:3000/api/health || exit 1 
