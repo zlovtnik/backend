@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { Pool } from 'pg';
 import pool from '../database.js';
+import { getUserConnection, releaseUserConnection } from './connection';
 
 const prisma = new PrismaClient();
 
@@ -74,45 +75,58 @@ export async function getOrganizationStats(organizationId: string) {
   `;
 }
 
-export const getUsersByOrganization = async (organizationId: string) => {
-  const query = `
-    SELECT 
-      u.id,
-      u.name,
-      u.email,
-      p.name as permission_name,
-      p.description as permission_description
-    FROM users u
-    JOIN user_permissions up ON u.id = up.user_id
-    JOIN permissions p ON up.permission_id = p.id
-    WHERE u.organization_id = $1
-  `;
-  const result = await pool.query(query, [organizationId]);
-  return result.rows;
-};
-
-export const getOrganizationStatistics = async (organizationId: string) => {
-  const query = `
-    SELECT 
-      COUNT(DISTINCT u.id) as total_users,
-      COUNT(DISTINCT p.id) as total_permissions,
-      COUNT(DISTINCT up.id) as total_user_permissions
-    FROM organizations o
-    LEFT JOIN users u ON o.id = u.organization_id
-    LEFT JOIN user_permissions up ON u.id = up.user_id
-    LEFT JOIN permissions p ON up.permission_id = p.id
-    WHERE o.id = $1
-  `;
-  const result = await pool.query(query, [organizationId]);
-  return result.rows[0];
-};
-
-export const callProcedures = async (procedureName: string, params: any[] = []) => {
+export const getUsersByOrganization = async (organizationId: string, userId: string) => {
+  const client = await getUserConnection(userId);
   try {
-    const result = await pool.query(`SELECT * FROM ${procedureName}($1)`, params);
+    const query = `
+      SELECT 
+        u.id,
+        u.name,
+        u.email,
+        p.name as permission_name,
+        p.description as permission_description
+      FROM users u
+      JOIN user_permissions up ON u.id = up.user_id
+      JOIN permissions p ON up.permission_id = p.id
+      WHERE u.organization_id = $1
+    `;
+    const result = await client.query(query, [organizationId]);
+    return result.rows;
+  } finally {
+    await releaseUserConnection(userId, client);
+  }
+};
+
+export const getOrganizationStatistics = async (organizationId: string, userId: string) => {
+  const client = await getUserConnection(userId);
+  try {
+    const query = `
+      SELECT 
+        COUNT(DISTINCT u.id) as total_users,
+        COUNT(DISTINCT p.id) as total_permissions,
+        COUNT(DISTINCT up.id) as total_user_permissions
+      FROM organizations o
+      LEFT JOIN users u ON o.id = u.organization_id
+      LEFT JOIN user_permissions up ON u.id = up.user_id
+      LEFT JOIN permissions p ON up.permission_id = p.id
+      WHERE o.id = $1
+    `;
+    const result = await client.query(query, [organizationId]);
+    return result.rows[0];
+  } finally {
+    await releaseUserConnection(userId, client);
+  }
+};
+
+export const callProcedures = async (procedureName: string, userId: string, params: any[] = []) => {
+  const client = await getUserConnection(userId);
+  try {
+    const result = await client.query(`SELECT * FROM ${procedureName}($1)`, params);
     return result.rows;
   } catch (error) {
     console.error(`Error calling procedure ${procedureName}:`, error);
     throw error;
+  } finally {
+    await releaseUserConnection(userId, client);
   }
 }; 

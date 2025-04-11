@@ -1,5 +1,7 @@
-import prisma from '../database'
+import { PrismaClient } from '@prisma/client';
 import { Permission, CreatePermissionInput, UpdatePermissionInput } from '../types/permission'
+
+const prisma = new PrismaClient();
 
 export const permissionRepository = {
     async create(data: CreatePermissionInput): Promise<Permission> {

@@ -1,4 +1,7 @@
-import prisma from '../database'
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
 import { Organization, CreateOrganizationInput, UpdateOrganizationInput } from '../types/organization'
 
 export const organizationRepository = {

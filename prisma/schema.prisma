@@ -28,6 +28,7 @@ model User {
   organizationId String
   organization   Organization  @relation(fields: [organizationId], references: [id])
   permissions    Permission[]
+  maxConnections Int          @default(1)
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 }

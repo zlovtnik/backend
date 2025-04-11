@@ -1,5 +1,7 @@
-import prisma from '../database'
+import { PrismaClient } from '@prisma/client';
 import { User, CreateUserInput, UpdateUserInput } from '../types/user'
+
+const prisma = new PrismaClient();
 
 export const userRepository = {
     async create(data: CreateUserInput): Promise<User> {
