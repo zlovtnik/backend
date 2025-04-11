@@ -38,7 +38,7 @@ jobs:
       
       - name: Setup environment variables
         run: |
-          echo "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/test_db" >> .env
+          echo "DATABASE_URL=postgresql://postgres:postgres@postgres:5432/test_db" >> .env
       
       - name: Run database migrations
         run: npx prisma migrate deploy
