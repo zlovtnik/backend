@@ -1,85 +1,121 @@
-import express, { Router, RequestHandler } from 'express';
-import cors from 'cors';
-import { getOrganizationStatistics } from './database/procedures';
+import { Elysia } from 'elysia';
+import { cors } from '@elysiajs/cors';
 import { organizationRepository } from './repositories/organization.repository';
+import { userRepository } from './repositories/user.repository';
+import { checkDatabaseConnection } from './database/connection';
 
-type OrganizationStats = {
-  total_users: number;
-  total_permissions: number;
-  created_at: Date;
-};
+/**
+ * Main application server using Elysia
+ * @class App
+ * @description Handles all API routes and middleware configuration
+ */
+const app = new Elysia()
+  .use(cors({
+    origin: ['http://localhost:4200'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'x-user-id', 'X-User-ID'],
+    exposedHeaders: ['Content-Type'],
+    credentials: true
+  }))
+  .onError(({ code, error, set }) => {
+    console.error('Error details:', {
+      code,
+      error: error.message,
+      stack: error.stack,
+      timestamp: new Date().toISOString()
+    });
 
-const app = express();
-const router = Router();
-const port = process.env.PORT || 3000;
-
-app.use(cors());
-app.use(express.json());
-
-// Organization routes
-const getOrganizations: RequestHandler = async (req, res) => {
-  try {
-    const organizations = await organizationRepository.findAll();
-    res.json(organizations);
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-  return;
-};
-
-const getOrganizationById: RequestHandler = async (req, res) => {
-  try {
-    const organization = await organizationRepository.findById(req.params.id);
-    if (!organization) {
-      res.status(404).json({ error: 'Organization not found' });
-      return;
+    if (code === 'NOT_FOUND') {
+      set.status = 404;
+      return { error: 'Resource not found' };
     }
-    const stats = await getOrganizationStatistics(req.params.id) as OrganizationStats[];
-    res.json({ ...organization, stats: stats[0] });
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-  return;
-};
 
-const createOrganization: RequestHandler = async (req, res) => {
+    set.status = 500;
+    return { error: error.message || 'Internal server error' };
+  })
+  .onRequest(({ request }) => {
+    console.log(`[${new Date().toISOString()}] ${request.method} ${request.url}`);
+    console.log('Headers:', Object.fromEntries(request.headers.entries()));
+  })
+  .onResponse(({ request, set }) => {
+    console.log(`[${new Date().toISOString()}] Response:`, {
+      method: request.method,
+      url: request.url,
+      status: set.status
+    });
+  })
+  .get('/api/health', () => ({ status: 'ok' }))
+  .get('/health', () => ({ status: 'ok' }))
+  .get('/api/organizations', async ({ headers, set }) => {
+    try {
+      const userId = headers['x-user-id'] || headers['X-User-ID'];
+      if (!userId) {
+        set.status = 400;
+        return { error: 'User ID is required in x-user-id header' };
+      }
+
+      console.log('Fetching user:', userId);
+      const user = await userRepository.findById(userId);
+      if (!user) {
+        set.status = 404;
+        return { error: 'User not found' };
+      }
+
+      console.log('User found:', user);
+      const organizations = await organizationRepository.findAll();
+      console.log('Organizations found:', organizations);
+      return organizations;
+    } catch (error) {
+      console.error('Error in GET /api/organizations:', error);
+      throw error;
+    }
+  })
+  .get('/organizations', async ({ headers, set }) => {
+    try {
+      const userId = headers['x-user-id'] || headers['X-User-ID'];
+      if (!userId) {
+        set.status = 400;
+        return { error: 'User ID is required in x-user-id header' };
+      }
+
+      console.log('Fetching user:', userId);
+      const user = await userRepository.findById(userId);
+      if (!user) {
+        set.status = 404;
+        return { error: 'User not found' };
+      }
+
+      console.log('User found:', user);
+      const organizations = await organizationRepository.findAll();
+      console.log('Organizations found:', organizations);
+      return organizations;
+    } catch (error) {
+      console.error('Error in GET /organizations:', error);
+      throw error;
+    }
+  });
+
+/**
+ * Start the server
+ * @async
+ * @function startServer
+ * @description Initializes the server and establishes database connection
+ * @throws {Error} If database connection fails
+ */
+async function startServer() {
   try {
-    const organization = await organizationRepository.create(req.body);
-    res.status(201).json(organization);
+    const isConnected = await checkDatabaseConnection();
+    if (!isConnected) {
+      throw new Error('Failed to connect to database');
+    }
+
+    const port = process.env.PORT || 3000;
+    app.listen(port);
+    console.log(`Server is running on port ${port}`);
   } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Failed to start server:', error);
+    process.exit(1);
   }
-  return;
-};
+}
 
-const updateOrganization: RequestHandler = async (req, res) => {
-  try {
-    const organization = await organizationRepository.update(req.params.id, req.body);
-    res.json(organization);
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-  return;
-};
-
-const deleteOrganization: RequestHandler = async (req, res) => {
-  try {
-    await organizationRepository.delete(req.params.id);
-    res.status(204).send();
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-  return;
-};
-
-router.get('/organizations', getOrganizations);
-router.get('/organizations/:id', getOrganizationById);
-router.post('/organizations', createOrganization);
-router.put('/organizations/:id', updateOrganization);
-router.delete('/organizations/:id', deleteOrganization);
-
-app.use('/api', router);
-
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
-});
+startServer();

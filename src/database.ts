@@ -1,5 +1,9 @@
 import { Pool } from 'pg';
 
+/**
+ * PostgreSQL connection pool
+ * @type {Pool}
+ */
 const pool = new Pool({
     user: process.env.DB_USER,
     host: process.env.DB_HOST,
@@ -8,6 +12,12 @@ const pool = new Pool({
     port: parseInt(process.env.DB_PORT || '5432'),
 });
 
+/**
+ * Checks the database connection
+ * @async
+ * @function checkDatabaseConnection
+ * @returns {Promise<boolean>} True if the connection is successful, false otherwise
+ */
 export const checkDatabaseConnection = async () => {
     try {
         const client = await pool.connect();
@@ -20,6 +30,11 @@ export const checkDatabaseConnection = async () => {
     }
 };
 
+/**
+ * Performs a health check on the database connection
+ * @async
+ * @function healthCheck
+ */
 const healthCheck = async () => {
     const isConnected = await checkDatabaseConnection();
     if (!isConnected) {
@@ -27,6 +42,7 @@ const healthCheck = async () => {
     }
 };
 
+// Run health check every 30 seconds
 setInterval(healthCheck, 30000);
 
 export default pool; 
