@@ -1,4 +1,4 @@
-import { Pool, PoolClient } from 'pg';
+import { Pool } from 'pg';
 import { PrismaClient } from '@prisma/client';
 
 /**
@@ -9,63 +9,42 @@ export const db = new PrismaClient();
 
 /**
  * Map to store active connections per user
- * @type {Map<string, PoolClient[]>}
+ * @type {Map<string, Pool>}
  */
-const userConnections = new Map<string, PoolClient[]>();
+const userConnections = new Map<string, Pool>();
 
 /**
  * Gets a database connection for a specific user
- * @async
- * @function getUserConnection
- * @param {string} userId - The ID of the user requesting the connection
- * @returns {Promise<PoolClient>} A database connection client
- * @throws {Error} If the user is not found or has reached their connection limit
+ * @param {string} userId - The ID of the user
+ * @returns {Promise<Pool>} A PostgreSQL connection pool
+ * @throws {Error} If the connection limit is exceeded
  */
-export async function getUserConnection(userId: string): Promise<PoolClient> {
-    const user = await db.user.findUnique({
-        where: { id: userId },
-        select: { maxConnections: true }
-    });
-
-    if (!user) {
-        throw new Error('User not found');
+export async function getUserConnection(userId: string): Promise<Pool> {
+    if (userConnections.has(userId)) {
+        return userConnections.get(userId)!;
     }
 
-    const activeConnections = userConnections.get(userId) || [];
-
-    // Check if user has reached their connection limit
-    if (activeConnections.length >= user.maxConnections) {
-        throw new Error(`User has reached maximum connection limit of ${user.maxConnections}`);
-    }
-
-    // Create new connection
-    const pool = new Pool({
-        connectionString: process.env.DATABASE_URL,
-        max: user.maxConnections
+    const connection = new Pool({
+        user: process.env.DB_USER || 'postgres',
+        host: process.env.DB_HOST || 'localhost',
+        database: process.env.DB_NAME || 'ai_alibaba_cloud',
+        password: process.env.DB_PASSWORD || 'postgres',
+        port: parseInt(process.env.DB_PORT || '5432'),
     });
 
-    const client = await pool.connect();
-    activeConnections.push(client);
-    userConnections.set(userId, activeConnections);
-
-    return client;
+    userConnections.set(userId, connection);
+    return connection;
 }
 
 /**
- * Releases a database connection for a specific user
- * @async
- * @function releaseUserConnection
- * @param {string} userId - The ID of the user releasing the connection
- * @param {PoolClient} client - The database connection client to release
+ * Releases a user's database connection
+ * @param {string} userId - The ID of the user
  */
-export async function releaseUserConnection(userId: string, client: PoolClient) {
-    const activeConnections = userConnections.get(userId) || [];
-    const index = activeConnections.indexOf(client);
-
-    if (index !== -1) {
-        activeConnections.splice(index, 1);
-        userConnections.set(userId, activeConnections);
-        await client.release();
+export function releaseUserConnection(userId: string): void {
+    const connection = userConnections.get(userId);
+    if (connection) {
+        connection.end();
+        userConnections.delete(userId);
     }
 }
 
@@ -75,13 +54,34 @@ export async function releaseUserConnection(userId: string, client: PoolClient) 
  * @function checkDatabaseConnection
  * @returns {Promise<boolean>} True if the connection is successful, false otherwise
  */
-export async function checkDatabaseConnection() {
+export async function checkDatabaseConnection(): Promise<boolean> {
     try {
+        // Try connecting with Prisma first
         await db.$connect();
-        console.log('Database connection established');
+        console.log('Database connection established with Prisma');
         return true;
-    } catch (error) {
-        console.error('Database connection error:', error);
-        return false;
+    } catch (prismaError) {
+        console.warn('Prisma connection failed, trying direct PostgreSQL connection:', prismaError);
+
+        try {
+            // Fallback to direct PostgreSQL connection
+            const pool = new Pool({
+                user: process.env.DB_USER || 'postgres',
+                host: process.env.DB_HOST || 'localhost',
+                database: process.env.DB_NAME || 'ai_alibaba_cloud',
+                password: process.env.DB_PASSWORD || 'postgres',
+                port: parseInt(process.env.DB_PORT || '5432'),
+            });
+
+            const client = await pool.connect();
+            client.release();
+            pool.end();
+
+            console.log('Database connection established with direct PostgreSQL');
+            return true;
+        } catch (pgError) {
+            console.error('Both Prisma and direct PostgreSQL connections failed:', pgError);
+            return false;
+        }
     }
 } 

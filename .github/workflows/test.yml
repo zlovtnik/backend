@@ -16,7 +16,7 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: test_db
+          POSTGRES_DB: ai_alibaba_cloud
         ports:
           - 5432:5432
         options: >-
@@ -26,7 +26,7 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v3
       
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
@@ -36,12 +36,36 @@ jobs:
       - name: Install dependencies
         run: bun install
       
-      - name: Setup environment variables
+      - name: Setup environment
         run: |
-          echo "DATABASE_URL=postgresql://postgres:postgres@postgres:5432/test_db" >> .env
+          echo "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/ai_alibaba_cloud?schema=public" >> .env
+          echo "DB_USER=postgres" >> .env
+          echo "DB_HOST=localhost" >> .env
+          echo "DB_NAME=ai_alibaba_cloud" >> .env
+          echo "DB_PASSWORD=postgres" >> .env
+          echo "DB_PORT=5432" >> .env
+          echo "PORT=3000" >> .env
       
       - name: Run database migrations
         run: bunx prisma migrate deploy
+      
+      - name: Start application
+        run: |
+          # Start the application in the background
+          bun run start &
+          APP_PID=$!
+          
+          # Wait for the application to start
+          sleep 10
+          
+          # Check if the application is running
+          if curl -f http://localhost:3000/api/health; then
+            echo "Application started successfully"
+          else
+            echo "Application failed to start"
+            kill $APP_PID
+            exit 1
+          fi
       
       - name: Run tests
         run: bun test 
