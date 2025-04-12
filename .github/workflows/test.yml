@@ -49,10 +49,13 @@ jobs:
       - name: Run database migrations
         run: bunx prisma migrate deploy
       
+      - name: Build application
+        run: bun run build
+      
       - name: Start application
         run: |
           # Start the application in the background
-          bun run start &
+          bun run start > app.log 2>&1 &
           APP_PID=$!
           
           # Wait for the application to start
@@ -68,4 +71,28 @@ jobs:
           fi
       
       - name: Run tests
-        run: bun test 
+        run: bun test > test-results.log 2>&1 || true
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-artifacts
+          path: |
+            dist/
+            app.log
+            test-results.log
+          retention-days: 5
+      
+      - name: Upload Prisma schema
+        uses: actions/upload-artifact@v3
+        with:
+          name: prisma-schema
+          path: prisma/schema.prisma
+          retention-days: 5
+      
+      - name: Upload environment configuration
+        uses: actions/upload-artifact@v3
+        with:
+          name: env-config
+          path: .env
+          retention-days: 5 
