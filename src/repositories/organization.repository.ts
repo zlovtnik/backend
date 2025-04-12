@@ -1,11 +1,5 @@
-<<<<<<< HEAD
-import { PrismaClient } from '@prisma/client';
-=======
 import prisma from '../database/index'
->>>>>>> 2d11823 (asd)
 import { Organization, CreateOrganizationInput, UpdateOrganizationInput } from '../types/organization'
-
-const prisma = new PrismaClient();
 
 export const organizationRepository = {
     async create(data: CreateOrganizationInput): Promise<Organization> {
@@ -14,7 +8,7 @@ export const organizationRepository = {
         });
         return {
             ...result,
-            description: result.description || undefined
+            description: result.description || null
         };
     },
 
@@ -25,7 +19,7 @@ export const organizationRepository = {
         if (!result) return null;
         return {
             ...result,
-            description: result.description || undefined
+            description: result.description || null
         };
     },
 
@@ -34,7 +28,7 @@ export const organizationRepository = {
         return results.map((result: { id: string; name: string; description: string | null; createdAt: Date; updatedAt: Date }) => ({
             id: result.id,
             name: result.name,
-            description: result.description || undefined,
+            description: result.description || null,
             createdAt: result.createdAt,
             updatedAt: result.updatedAt
         }));
@@ -47,7 +41,7 @@ export const organizationRepository = {
         });
         return {
             ...result,
-            description: result.description || undefined
+            description: result.description || null
         };
     },
 
@@ -57,7 +51,7 @@ export const organizationRepository = {
         });
         return {
             ...result,
-            description: result.description || undefined
+            description: result.description || null
         };
     },
 } 

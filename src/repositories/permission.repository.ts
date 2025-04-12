@@ -1,11 +1,5 @@
-<<<<<<< HEAD
-import { PrismaClient } from '@prisma/client';
-=======
 import prisma from '../database/index'
->>>>>>> 2d11823 (asd)
 import { Permission, CreatePermissionInput, UpdatePermissionInput } from '../types/permission'
-
-const prisma = new PrismaClient();
 
 export const permissionRepository = {
     async create(data: CreatePermissionInput): Promise<Permission> {
@@ -14,7 +8,7 @@ export const permissionRepository = {
         });
         return {
             ...result,
-            description: result.description || undefined
+            description: result.description || null
         };
     },
 
@@ -25,7 +19,7 @@ export const permissionRepository = {
         if (!result) return null;
         return {
             ...result,
-            description: result.description || undefined
+            description: result.description || null
         };
     },
 
@@ -37,7 +31,7 @@ export const permissionRepository = {
         if (!user) return [];
         return user.permissions.map(permission => ({
             ...permission,
-            description: permission.description || undefined
+            description: permission.description || null
         }));
     },
 
@@ -45,7 +39,7 @@ export const permissionRepository = {
         const results = await prisma.permission.findMany();
         return results.map((result: any) => ({
             ...result,
-            description: result.description || undefined
+            description: result.description || null
         }));
     },
 
@@ -56,7 +50,7 @@ export const permissionRepository = {
         });
         return {
             ...result,
-            description: result.description || undefined
+            description: result.description || null
         };
     },
 
@@ -66,7 +60,7 @@ export const permissionRepository = {
         });
         return {
             ...result,
-            description: result.description || undefined
+            description: result.description || null
         };
     },
 } 
