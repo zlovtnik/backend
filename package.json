@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun --watch src/index.ts",
-    "start": "bun dist/index.js",
+    "start": "bun src/index.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts",
@@ -19,7 +19,7 @@
     "bun-types": "latest",
     "eslint": "^8.57.0",
     "prisma": "^5.10.2",
-    "typescript": "^5.3.3"
+    "typescript": "5.5.3"
   },
   "dependencies": {
     "@elysiajs/cors": "^0.7.1",
@@ -30,5 +30,8 @@
   },
   "prisma": {
     "seed": "bun prisma/seed.ts"
+  },
+  "resolutions": {
+    "typescript": "5.5.3"
   }
 }

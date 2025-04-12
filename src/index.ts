@@ -1,6 +1,6 @@
-import express, { Request, Response, Router, RequestHandler } from 'express';
+import express, { Router, RequestHandler } from 'express';
 import cors from 'cors';
-import { callProcedures, getOrganizationStatistics } from './database/procedures';
+import { getOrganizationStatistics } from './database/procedures';
 import { organizationRepository } from './repositories/organization.repository';
 
 type OrganizationStats = {
@@ -34,7 +34,7 @@ const getOrganizationById: RequestHandler = async (req, res) => {
       res.status(404).json({ error: 'Organization not found' });
       return;
     }
-    const stats = await getOrganizationStatistics(req.params.id);
+    const stats = await getOrganizationStatistics(req.params.id) as OrganizationStats[];
     res.json({ ...organization, stats: stats[0] });
   } catch (error) {
     res.status(500).json({ error: 'Internal server error' });

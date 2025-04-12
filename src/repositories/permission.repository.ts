@@ -37,7 +37,7 @@ export const permissionRepository = {
 
     async findAll(): Promise<Permission[]> {
         const results = await prisma.permission.findMany();
-        return results.map((result: any) => ({
+        return results.map((result: Permission) => ({
             ...result,
             description: result.description || null
         }));

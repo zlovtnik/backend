@@ -1,7 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { Pool } from 'pg';
 import pool from '../database.js';
-import { getUserConnection, releaseUserConnection } from './connection';
 
 const prisma = new PrismaClient();
 
@@ -147,11 +145,11 @@ export async function getOrganizationStatistics(organizationId: string) {
 /**
  * Calls a stored procedure by name with the provided parameters.
  * @param {string} procedureName - The name of the stored procedure to call
- * @param {any[]} [params=[]] - Optional array of parameters to pass to the procedure
- * @returns {Promise<any[]>} A promise that resolves to the result rows from the procedure
+ * @param {unknown[]} [params=[]] - Optional array of parameters to pass to the procedure
+ * @returns {Promise<unknown[]>} A promise that resolves to the result rows from the procedure
  * @throws {Error} If there's an error calling the procedure
  */
-export const callProcedures = async (procedureName: string, params: any[] = []) => {
+export const callProcedures = async (procedureName: string, params: unknown[] = []) => {
   try {
     const result = await pool.query(`SELECT * FROM ${procedureName}($1)`, params);
     return result.rows;
