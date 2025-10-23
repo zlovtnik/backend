@@ -1,0 +1,12 @@
+# Nixpacks ignore file - exclude frontend from auto-detection
+# This ensures only the Rust backend is built
+
+frontend/
+frontend/*
+**/frontend/**
+
+# Ignore other non-backend files
+docs/
+.github/
+*.md
+!README.md

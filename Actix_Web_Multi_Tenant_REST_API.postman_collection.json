@@ -1,0 +1,695 @@
+{
+  "info": {
+    "name": "Actix Web Multi-Tenant REST API",
+    "description": "Comprehensive collection for the Actix Web REST API with JWT authentication and multi-tenant database isolation.\n\n## Authentication\nMost endpoints require JWT authentication via Bearer token. The JWT token includes tenant_id claims for database routing.\n\n## Multi-Tenant Architecture\nRequests are routed to tenant-specific databases based on JWT token's tenant_id claim. The TenantPoolManager maintains separate connection pools per tenant.\n\n## Variables\n- **base_url**: API base URL (default: http://localhost:8000)\n- **token**: JWT access token (automatically set on login)\n- **tenant_id**: Current tenant ID (default: tenant1)\n\n## Getting Started\n1. Update the `base_url` and `tenant_id` variables if needed\n2. Use the Signup endpoint to create a user\n3. Use the Login endpoint - token will be auto-saved\n4. Start making authenticated requests!",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health & Monitoring",
+      "description": "Health check and system monitoring endpoints. No authentication required.",
+      "item": [
+        {
+          "name": "Root Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            },
+            "description": "Basic health check endpoint at root level. Returns OK if service is running."
+          }
+        },
+        {
+          "name": "API Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/health",
+              "host": ["{{base_url}}"],
+              "path": ["api", "health"]
+            },
+            "description": "Health check endpoint under /api scope."
+          }
+        },
+        {
+          "name": "Detailed Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/health/detailed",
+              "host": ["{{base_url}}"],
+              "path": ["api", "health", "detailed"]
+            },
+            "description": "Detailed health check with component status information including database and Redis connectivity."
+          }
+        },
+        {
+          "name": "Performance Metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/health/performance",
+              "host": ["{{base_url}}"],
+              "path": ["api", "health", "performance"]
+            },
+            "description": "Performance metrics and monitoring data. Requires ENABLE_PERFORMANCE_MONITORING=true in environment."
+          }
+        },
+        {
+          "name": "Backward Compatibility Validation",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/health/compatibility",
+              "host": ["{{base_url}}"],
+              "path": ["api", "health", "compatibility"]
+            },
+            "description": "Validate backward compatibility of API endpoints and functionality. Requires ENABLE_COMPATIBILITY_CHECKS=true in environment."
+          }
+        },
+        {
+          "name": "Ping",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/ping",
+              "host": ["{{base_url}}"],
+              "path": ["api", "ping"]
+            },
+            "description": "Simple ping endpoint to verify API availability. No authentication required."
+          }
+        },
+        {
+          "name": "Get Logs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/logs",
+              "host": ["{{base_url}}"],
+              "path": ["api", "logs"]
+            },
+            "description": "Retrieve application logs. Requires ENABLE_LOG_STREAM=true in environment."
+          }
+        }
+      ]
+    },
+    {
+      "name": "🔐 Authentication",
+      "description": "User authentication and authorization endpoints. All endpoints require tenant_id in the request body.",
+      "item": [
+        {
+          "name": "Signup",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"testuser\",\n  \"email\": \"testuser@example.com\",\n  \"password\": \"SecurePass123!\",\n  \"tenant_id\": \"{{tenant_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/signup",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "signup"]
+            },
+            "description": "Create a new user account in the specified tenant's database.\n\nRequired fields:\n- username: Unique username\n- email: Valid email address\n- password: Strong password\n- tenant_id: Target tenant database"
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const response = pm.response.json();",
+                  "if (response.data && response.data.token) {",
+                  "    pm.collectionVariables.set('token', response.data.token);",
+                  "    console.log('✓ Token saved to collection variable');",
+                  "} else {",
+                  "    console.log('Response:', JSON.stringify(response, null, 2));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username_or_email\": \"testuser\",\n  \"password\": \"SecurePass123!\",\n  \"tenant_id\": \"{{tenant_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "login"]
+            },
+            "description": "Authenticate user and receive JWT token. The token includes tenant_id claims for database routing.\n\nToken is automatically saved to collection variables for subsequent requests.\n\nFields:\n- username_or_email: Can be either username or email\n- password: User password\n- tenant_id: Tenant database to authenticate against"
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/logout",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "logout"]
+            },
+            "description": "Invalidate the current user session. Requires valid JWT token in Authorization header."
+          }
+        },
+        {
+          "name": "Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const response = pm.response.json();",
+                  "if (response.data && response.data.token) {",
+                  "    pm.collectionVariables.set('token', response.data.token);",
+                  "    console.log('✓ Token refreshed and saved');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/refresh",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "refresh"]
+            },
+            "description": "Refresh the JWT token to extend the session. Returns a new token with updated expiration.\n\nNew token is automatically saved to collection variables."
+          }
+        },
+        {
+          "name": "Get Current User",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/me",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "me"]
+            },
+            "description": "Get information about the currently authenticated user including username, email, and login session details."
+          }
+        }
+      ]
+    },
+    {
+      "name": "📇 Address Book (Contacts)",
+      "description": "CRUD operations for managing contacts/people in the address book. All operations are tenant-scoped based on JWT token.",
+      "item": [
+        {
+          "name": "List All Contacts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/address-book",
+              "host": ["{{base_url}}"],
+              "path": ["api", "address-book"]
+            },
+            "description": "Retrieve all contacts from the authenticated tenant's database. Requires JWT authentication.\n\nContacts are scoped to the tenant specified in the JWT token."
+          }
+        },
+        {
+          "name": "Get Contact by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/address-book/:id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "address-book", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "Contact ID"
+                }
+              ]
+            },
+            "description": "Retrieve a specific contact by ID from the tenant's database.\n\nReplace :id in the URL with the actual contact ID."
+          }
+        },
+        {
+          "name": "Filter Contacts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/address-book/filter?name=John&page_num=1&page_size=10&sort_by=name&sort_order=asc",
+              "host": ["{{base_url}}"],
+              "path": ["api", "address-book", "filter"],
+              "query": [
+                {
+                  "key": "name",
+                  "value": "John",
+                  "description": "Filter by name (partial match, optional)"
+                },
+                {
+                  "key": "email",
+                  "value": "",
+                  "description": "Filter by email (partial match, optional)",
+                  "disabled": true
+                },
+                {
+                  "key": "phone",
+                  "value": "",
+                  "description": "Filter by phone (partial match, optional)",
+                  "disabled": true
+                },
+                {
+                  "key": "page_num",
+                  "value": "1",
+                  "description": "Page number (default: 1)"
+                },
+                {
+                  "key": "page_size",
+                  "value": "10",
+                  "description": "Items per page (default: 10)"
+                },
+                {
+                  "key": "sort_by",
+                  "value": "name",
+                  "description": "Sort field (name, email, age, etc.)"
+                },
+                {
+                  "key": "sort_order",
+                  "value": "asc",
+                  "description": "Sort order: asc or desc"
+                }
+              ]
+            },
+            "description": "Filter and paginate contacts with various criteria.\n\nQuery Parameters:\n- name: Filter by name (partial match)\n- email: Filter by email (partial match)\n- phone: Filter by phone (partial match)\n- page_num: Page number (default: 1)\n- page_size: Items per page (default: 10)\n- sort_by: Sort field (name, email, age, etc.)\n- sort_order: asc or desc"
+          }
+        },
+        {
+          "name": "Create Contact",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"John Doe\",\n  \"gender\": true,\n  \"age\": 30,\n  \"address\": \"123 Main St, City, State 12345\",\n  \"phone\": \"+1-555-0123\",\n  \"email\": \"john.doe@example.com\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/address-book",
+              "host": ["{{base_url}}"],
+              "path": ["api", "address-book"]
+            },
+            "description": "Create a new contact in the tenant's database.\n\nFields:\n- name (string): Full name\n- gender (boolean): true = male, false = female\n- age (integer): Age in years\n- address (string): Full address\n- phone (string): Phone number\n- email (string): Email address"
+          }
+        },
+        {
+          "name": "Update Contact",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"John Doe Updated\",\n  \"gender\": true,\n  \"age\": 31,\n  \"address\": \"456 New St, City, State 12345\",\n  \"phone\": \"+1-555-0124\",\n  \"email\": \"john.doe.updated@example.com\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/address-book/:id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "address-book", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "Contact ID to update"
+                }
+              ]
+            },
+            "description": "Update an existing contact by ID. All fields must be provided (full replacement).\n\nReplace :id in the URL with the actual contact ID."
+          }
+        },
+        {
+          "name": "Delete Contact",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/address-book/:id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "address-book", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "Contact ID to delete"
+                }
+              ]
+            },
+            "description": "Delete a contact by ID from the tenant's database.\n\nReplace :id in the URL with the actual contact ID.\n\n⚠️ WARNING: This action cannot be undone!"
+          }
+        }
+      ]
+    },
+    {
+      "name": "🏢 Tenant Management",
+      "description": "CRUD operations for managing tenants. Each tenant represents a separate database connection.",
+      "item": [
+        {
+          "name": "List All Tenants",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/tenants?page_num=1&page_size=10",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tenants"],
+              "query": [
+                {
+                  "key": "page_num",
+                  "value": "1",
+                  "description": "Page number (default: 1)"
+                },
+                {
+                  "key": "page_size",
+                  "value": "10",
+                  "description": "Items per page (default: 10)"
+                }
+              ]
+            },
+            "description": "Retrieve all tenants with pagination. Returns tenant configurations from the main database.\n\nQuery Parameters:\n- page_num: Page number (default: 1)\n- page_size: Items per page (default: 10)"
+          }
+        },
+        {
+          "name": "Get Tenant by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/tenants/:id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tenants", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "tenant1",
+                  "description": "Tenant ID"
+                }
+              ]
+            },
+            "description": "Retrieve a specific tenant configuration by ID.\n\nReplace :id in the URL with the tenant ID."
+          }
+        },
+        {
+          "name": "Filter Tenants",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/tenants/filter?name=Tenant&page_num=1&page_size=10",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tenants", "filter"],
+              "query": [
+                {
+                  "key": "name",
+                  "value": "Tenant",
+                  "description": "Filter by tenant name (partial match)"
+                },
+                {
+                  "key": "id",
+                  "value": "",
+                  "description": "Filter by tenant ID (partial match)",
+                  "disabled": true
+                },
+                {
+                  "key": "page_num",
+                  "value": "1",
+                  "description": "Page number"
+                },
+                {
+                  "key": "page_size",
+                  "value": "10",
+                  "description": "Items per page"
+                }
+              ]
+            },
+            "description": "Filter tenants by name or ID with pagination support.\n\nQuery Parameters:\n- name: Filter by tenant name (partial match)\n- id: Filter by tenant ID (partial match)\n- page_num: Page number\n- page_size: Items per page"
+          }
+        },
+        {
+          "name": "Create Tenant",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"tenant2\",\n  \"name\": \"Tenant Two\",\n  \"db_url\": \"postgres://user:password@localhost/tenant2_db\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/tenants",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tenants"]
+            },
+            "description": "Create a new tenant with its own database connection.\n\nThe db_url must be a valid PostgreSQL connection string. The system will:\n1. Validate the database URL\n2. Create a connection pool for this tenant\n3. Add the tenant to the TenantPoolManager\n\nFields:\n- id: Unique tenant identifier\n- name: Human-readable tenant name\n- db_url: PostgreSQL connection string"
+          }
+        },
+        {
+          "name": "Update Tenant",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Tenant Name\",\n  \"db_url\": \"postgres://user:password@localhost/updated_db\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/tenants/:id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tenants", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "tenant2",
+                  "description": "Tenant ID to update"
+                }
+              ]
+            },
+            "description": "Update tenant configuration. Both name and db_url are optional.\n\nIf db_url is updated:\n1. The old connection pool will be closed\n2. A new connection pool will be created\n3. The TenantPoolManager will be updated\n\nReplace :id in the URL with the tenant ID."
+          }
+        },
+        {
+          "name": "Delete Tenant",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/tenants/:id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tenants", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "tenant2",
+                  "description": "Tenant ID to delete"
+                }
+              ]
+            },
+            "description": "Delete a tenant configuration and close its database connection pool.\n\n⚠️ WARNING: This does NOT delete the actual database, only the tenant configuration and closes the connection pool.\n\nReplace :id in the URL with the tenant ID."
+          }
+        }
+      ]
+    },
+    {
+      "name": "👨‍💼 Admin - Tenant Monitoring",
+      "description": "Administrative endpoints for monitoring tenant health and system statistics.",
+      "item": [
+        {
+          "name": "System Statistics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/tenant/stats",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "tenant", "stats"]
+            },
+            "description": "Get comprehensive system statistics including:\n- Total tenants in the system\n- Active tenants (with connection pools)\n- Total users across all tenants\n- Logged-in users count\n- Per-tenant statistics\n\nThis endpoint aggregates data from all tenant databases."
+          }
+        },
+        {
+          "name": "Tenant Health Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/tenant/health",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "tenant", "health"]
+            },
+            "description": "Check health status of all tenant database connections.\n\nTests connectivity to each tenant's database and reports:\n- tenant_id: Tenant identifier\n- name: Tenant name\n- status: true if healthy, false if connection failed\n- error_message: Error details if connection failed"
+          }
+        },
+        {
+          "name": "Tenant Connection Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/tenant/status",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "tenant", "status"]
+            },
+            "description": "Get detailed connection pool status for all tenants including:\n- Pool statistics\n- Connection availability\n- Active connections\n- Idle connections\n\nUseful for monitoring and debugging connection pool issues."
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tenant_id",
+      "value": "tenant1",
+      "type": "string"
+    }
+  ]
+}

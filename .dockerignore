@@ -1,0 +1,65 @@
+# Docker ignore file - what to exclude from Docker build context
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+!README.md
+docs/
+reviews.profile
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rust
+target/
+**/*.rs.bk
+
+# Frontend node_modules (we copy these separately)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/dist/
+
+# Frontend dev files
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# Logs
+*.log
+app.log
+backend.log
+backend.pid
+
+# Test
+coverage/
+*.test
+*.spec
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Don't ignore these security files - they're needed for build
+!src/secret.key
+!src/secret.key.sample

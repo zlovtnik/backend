@@ -1,0 +1,11 @@
+[build]
+# Build configuration - jobs defaults to logical CPU count
+
+[target.x86_64-unknown-linux-gnu]
+# Additional rustflags for Linux builds
+# Note: lld linker can be enabled by setting RUSTFLAGS="-C link-arg=-fuse-ld=lld"
+# or by setting RUSTFLAGS="-C link-arg=-fuse-ld=lld" locally
+rustflags = []
+
+[registries.crates-io]
+protocol = "sparse"

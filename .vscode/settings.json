@@ -1,0 +1,4 @@
+{
+    "postman.settings.dotenv-detection-notification-visibility": false,
+    "rust-analyzer.cargo.features": ["functional", "performance_monitoring"]
+}

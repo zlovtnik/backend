@@ -1,0 +1,15 @@
+APP_HOST=localhost
+APP_PORT=8000
+MAX_AGE=604800
+REDIS_URL=redis://127.0.0.1:6379
+SESSION_SECRET_KEY=your-secret-key-here-change-in-production
+# For Postgres
+DATABASE_URL=postgres://user:password@localhost/rust_rest_api_db
+# For SQLite (commented out)
+# DATABASE_URL_SQLITE=
+ENABLE_LOG_STREAM=true
+LOG_FILE=./app.log
+JWT_SECRET=your-super-secret-jwt-key-here
+CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
+CORS_ALLOW_CREDENTIALS=false
+APP_ENV=development
