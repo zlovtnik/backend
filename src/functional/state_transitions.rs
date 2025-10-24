@@ -825,7 +825,12 @@ impl TransactionBuilder {
     }
 
     /// Returns the transitions and checkpoint names
-    pub fn build(self) -> (Vec<Box<dyn FnOnce(&TenantApplicationState) -> TenantApplicationState>>, Vec<Option<String>>) {
+    pub fn build(
+        self,
+    ) -> (
+        Vec<Box<dyn FnOnce(&TenantApplicationState) -> TenantApplicationState>>,
+        Vec<Option<String>>,
+    ) {
         (self.transitions, self.checkpoint_names)
     }
 }
@@ -856,30 +861,24 @@ pub fn build_user_onboarding_transaction(
 
     // Step 2: Set initial configuration (checkpoint: "config_initialized")
     for (key, value) in initial_config {
-        builder = builder.add_transition_with_checkpoint(
-            format!("config_{}", key),
-            move |state| {
-                let mut new_state = state.clone();
-                new_state.app_data = state.app_data.insert(key, value);
-                new_state.last_updated = Utc::now();
-                new_state
-            },
-        );
+        builder = builder.add_transition_with_checkpoint(format!("config_{}", key), move |state| {
+            let mut new_state = state.clone();
+            new_state.app_data = state.app_data.insert(key, value);
+            new_state.last_updated = Utc::now();
+            new_state
+        });
     }
 
     // Step 3: Mark onboarding complete
-    builder = builder.add_transition_with_checkpoint(
-        "onboarding_complete".to_string(),
-        move |state| {
+    builder =
+        builder.add_transition_with_checkpoint("onboarding_complete".to_string(), move |state| {
             let mut new_state = state.clone();
-            new_state.app_data = state.app_data.insert(
-                format!("user_{}_onboarded", user_id),
-                JsonValue::Bool(true),
-            );
+            new_state.app_data = state
+                .app_data
+                .insert(format!("user_{}_onboarded", user_id), JsonValue::Bool(true));
             new_state.last_updated = Utc::now();
             new_state
-        },
-    );
+        });
 
     builder
 }
@@ -904,12 +903,14 @@ pub fn create_state_diff_summary(
     }
 
     // Compare app data keys
-    let old_keys: std::collections::HashSet<_> = old_state.app_data.iter().map(|(k, _)| k).collect();
-    let new_keys: std::collections::HashSet<_> = new_state.app_data.iter().map(|(k, _)| k).collect();
-    
+    let old_keys: std::collections::HashSet<_> =
+        old_state.app_data.iter().map(|(k, _)| k).collect();
+    let new_keys: std::collections::HashSet<_> =
+        new_state.app_data.iter().map(|(k, _)| k).collect();
+
     let added_keys: Vec<_> = new_keys.difference(&old_keys).collect();
     let removed_keys: Vec<_> = old_keys.difference(&new_keys).collect();
-    
+
     if !added_keys.is_empty() {
         diff.insert("added_keys".to_string(), format!("{:?}", added_keys));
     }
@@ -934,11 +935,12 @@ pub fn create_state_diff_summary(
 ///
 /// This is useful for maintenance operations and can be combined with snapshots
 /// to ensure you can rollback if cleanup goes wrong
-pub fn cleanup_expired_sessions() -> impl FnOnce(&TenantApplicationState) -> TenantApplicationState {
+pub fn cleanup_expired_sessions() -> impl FnOnce(&TenantApplicationState) -> TenantApplicationState
+{
     move |state| {
         let mut new_state = state.clone();
         let now = Utc::now();
-        
+
         // Filter out expired sessions
         let mut updated_sessions = state.user_sessions.clone();
         for (session_id, session_data) in state.user_sessions.iter() {
@@ -946,7 +948,7 @@ pub fn cleanup_expired_sessions() -> impl FnOnce(&TenantApplicationState) -> Ten
                 updated_sessions = updated_sessions.remove(session_id);
             }
         }
-        
+
         new_state.user_sessions = updated_sessions;
         new_state.last_updated = now;
         new_state
@@ -954,25 +956,27 @@ pub fn cleanup_expired_sessions() -> impl FnOnce(&TenantApplicationState) -> Ten
 }
 
 /// Creates a transition that prunes old cache entries
-pub fn prune_cache(max_entries: usize) -> impl FnOnce(&TenantApplicationState) -> TenantApplicationState {
+pub fn prune_cache(
+    max_entries: usize,
+) -> impl FnOnce(&TenantApplicationState) -> TenantApplicationState {
     move |state| {
         let mut new_state = state.clone();
         let cache_len = state.query_cache.iter().count();
-        
+
         if cache_len > max_entries {
             // Keep only the most recent entries (assuming they're ordered)
             let to_skip = cache_len - max_entries;
             let mut new_cache = PersistentVector::new();
-            
+
             for (idx, entry) in state.query_cache.iter().enumerate() {
                 if idx >= to_skip {
-                    new_cache = new_cache.push_back(entry.clone());
+                    new_cache = new_cache.append(entry.clone());
                 }
             }
-            
+
             new_state.query_cache = new_cache;
         }
-        
+
         new_state.last_updated = Utc::now();
         new_state
     }

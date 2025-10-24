@@ -74,9 +74,11 @@ impl<T> QueryReader<T> {
     {
         QueryReader::new(move |conn| {
             conn.transaction::<T, diesel::result::Error, _>(|conn| {
-                self.run(conn).map_err(|e| {
-                    diesel::result::Error::RollbackTransaction
-                })
+                self.run(conn)
+                    .map_err(|e| {
+                        log::error!("Transaction operation failed, rolling back: {}", e);
+                        diesel::result::Error::RollbackTransaction
+                    })
             })
             .map_err(|e| ServiceError::internal_server_error(format!("Transaction failed: {}", e)))
         })
@@ -341,7 +343,9 @@ impl<T> Validator<T> {
                 }
             }
             if all_ok {
-                Err(ServiceError::bad_request("Validation should fail".to_string()))
+                Err(ServiceError::bad_request(
+                    "Validation should fail".to_string(),
+                ))
             } else {
                 Ok(())
             }
@@ -380,20 +384,26 @@ pub mod validation_rules {
     use super::{ServiceError, ServiceResult};
     use regex::Regex;
     use std::sync::OnceLock;
-    
+
     /// Validate that a string is not empty
     pub fn required(field_name: &'static str) -> impl Fn(&String) -> ServiceResult<()> {
         move |value: &String| {
             if value.trim().is_empty() {
-                Err(ServiceError::bad_request(format!("{} is required", field_name)))
+                Err(ServiceError::bad_request(format!(
+                    "{} is required",
+                    field_name
+                )))
             } else {
                 Ok(())
             }
         }
     }
-    
+
     /// Validate that a string has a minimum length
-    pub fn min_length(field_name: &'static str, min: usize) -> impl Fn(&String) -> ServiceResult<()> {
+    pub fn min_length(
+        field_name: &'static str,
+        min: usize,
+    ) -> impl Fn(&String) -> ServiceResult<()> {
         move |value: &String| {
             if value.chars().count() < min {
                 Err(ServiceError::bad_request(format!(
@@ -405,9 +415,12 @@ pub mod validation_rules {
             }
         }
     }
-    
+
     /// Validate that a string has a maximum length
-    pub fn max_length(field_name: &'static str, max: usize) -> impl Fn(&String) -> ServiceResult<()> {
+    pub fn max_length(
+        field_name: &'static str,
+        max: usize,
+    ) -> impl Fn(&String) -> ServiceResult<()> {
         move |value: &String| {
             if value.chars().count() > max {
                 Err(ServiceError::bad_request(format!(
@@ -419,7 +432,7 @@ pub mod validation_rules {
             }
         }
     }
-    
+
     /// Validate that a number is within a range
     pub fn range<T>(field_name: &'static str, min: T, max: T) -> impl Fn(&T) -> ServiceResult<()>
     where
@@ -436,19 +449,20 @@ pub mod validation_rules {
             }
         }
     }
-    
+
     /// Validate that a value matches a regex pattern
-    pub fn pattern(field_name: &'static str, pattern: &'static str) -> impl Fn(&String) -> ServiceResult<()> {
+    pub fn pattern(
+        field_name: &'static str,
+        pattern: &'static str,
+    ) -> impl Fn(&String) -> ServiceResult<()> {
         move |value: &String| {
             static mut REGEX_CACHE: Option<std::collections::HashMap<&'static str, Regex>> = None;
             static REGEX_INIT: OnceLock<()> = OnceLock::new();
-            
-            REGEX_INIT.get_or_init(|| {
-                unsafe {
-                    REGEX_CACHE = Some(std::collections::HashMap::new());
-                }
+
+            REGEX_INIT.get_or_init(|| unsafe {
+                REGEX_CACHE = Some(std::collections::HashMap::new());
             });
-            
+
             let regex = unsafe {
                 REGEX_CACHE
                     .as_mut()
@@ -457,7 +471,7 @@ pub mod validation_rules {
                     .or_insert_with(|| Regex::new(pattern).expect("Invalid regex pattern"))
                     .clone()
             };
-            
+
             if !regex.is_match(value) {
                 Err(ServiceError::bad_request(format!(
                     "{} format is invalid",
@@ -468,17 +482,17 @@ pub mod validation_rules {
             }
         }
     }
-    
+
     /// Validate that a string contains only alphanumeric characters
     pub fn alphanumeric(field_name: &'static str) -> impl Fn(&String) -> ServiceResult<()> {
         pattern(field_name, "^[a-zA-Z0-9]*$")
     }
-    
+
     /// Validate that a string is a valid email
     pub fn email(field_name: &'static str) -> impl Fn(&String) -> ServiceResult<()> {
         pattern(field_name, r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     }
-    
+
     /// Validate that a value is true
     pub fn must_be_true(field_name: &'static str) -> impl Fn(&bool) -> ServiceResult<()> {
         move |value: &bool| {
@@ -492,9 +506,12 @@ pub mod validation_rules {
             }
         }
     }
-    
+
     /// Validate that a collection has a minimum number of elements
-    pub fn min_items<T>(field_name: &'static str, min: usize) -> impl Fn(&Vec<T>) -> ServiceResult<()> {
+    pub fn min_items<T>(
+        field_name: &'static str,
+        min: usize,
+    ) -> impl Fn(&Vec<T>) -> ServiceResult<()> {
         move |_value: &Vec<T>| {
             // We can't check the actual length without consuming the vector,
             // so we'll assume this is checked elsewhere
@@ -665,9 +682,9 @@ impl<T> Retry<T> {
     pub fn execute(&self) -> ServiceResult<T> {
         let mut attempts = 0;
         let mut delay_ms = self.delay_ms;
-        let mut fib_prev = 0u64;
-        let mut fib_curr = 1u64;
-        
+        let fib_prev = 0u64;
+        let fib_curr = 1u64;
+
         loop {
             attempts += 1;
             match (self.operation)() {
@@ -677,13 +694,17 @@ impl<T> Retry<T> {
                         return Err(err);
                     }
                     // In a real implementation, add async sleep here
-                    log::warn!("Retry attempt {} failed, retrying in {}ms...", attempts, delay_ms);
-                    
+                    log::warn!(
+                        "Retry attempt {} failed, retrying in {}ms...",
+                        attempts,
+                        delay_ms
+                    );
+
                     // Calculate next delay based on strategy
                     // For now, we'll just use exponential backoff as default
                     let next_delay = delay_ms * 2;
                     delay_ms = next_delay;
-                    
+
                     // For fibonacci, we would do:
                     // let next_fib = fib_prev + fib_curr;
                     // fib_prev = fib_curr;
@@ -701,7 +722,7 @@ impl<T> Retry<T> {
     {
         let mut attempts = 0;
         let mut delay_ms = self.delay_ms;
-        
+
         loop {
             attempts += 1;
             match (self.operation)() {
@@ -712,7 +733,11 @@ impl<T> Retry<T> {
                     }
                     // Calculate delay using custom backoff function
                     delay_ms = backoff_fn(attempts, delay_ms);
-                    log::warn!("Retry attempt {} failed, retrying in {}ms...", attempts, delay_ms);
+                    log::warn!(
+                        "Retry attempt {} failed, retrying in {}ms...",
+                        attempts,
+                        delay_ms
+                    );
                 }
             }
         }
@@ -809,7 +834,7 @@ where
         // Store in cache
         {
             let mut cache = self.cache.write().unwrap();
-            
+
             // Check size limit
             if let Some(max_size) = self.config.max_size {
                 if cache.len() >= max_size {
@@ -819,11 +844,14 @@ where
                     }
                 }
             }
-            
-            cache.insert(key.clone(), CacheEntry {
-                value: value.clone(),
-                timestamp: std::time::Instant::now(),
-            });
+
+            cache.insert(
+                key.clone(),
+                CacheEntry {
+                    value: value.clone(),
+                    timestamp: std::time::Instant::now(),
+                },
+            );
         }
 
         Ok(value)
@@ -923,10 +951,13 @@ mod tests {
             ttl_seconds: Some(1), // 1 second TTL
         };
 
-        let memoized = Memoized::with_config(move |&x: &i32| {
-            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(x * 3)
-        }, config);
+        let memoized = Memoized::with_config(
+            move |&x: &i32| {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(x * 3)
+            },
+            config,
+        );
 
         // First call should compute
         assert_eq!(memoized.get(&5).unwrap(), 15);

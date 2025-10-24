@@ -331,10 +331,10 @@ impl PureFunctionRegistry {
         let first_sig_owned = first_sig.to_string();
         let second_sig_owned = second_sig.to_string();
         let category_owned = category;
-        
+
         // Clone self for use in the composed function
-        let self_clone = self.clone();
-        
+        let self_clone = self;
+
         // Drop the read lock before acquiring a write lock
         drop(functions);
 
@@ -558,7 +558,6 @@ impl PureFunctionRegistry {
         Ok(())
     }
 }
-
 
 /// Errors that can occur during registry operations.
 #[derive(Debug, thiserror::Error)]

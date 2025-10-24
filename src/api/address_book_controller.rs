@@ -42,6 +42,7 @@ fn respond_with_page(
         page_size,
         total_elements,
         next_cursor,
+        ..
     } = page;
 
     let count = data.len();

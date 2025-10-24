@@ -549,6 +549,61 @@ where
     pub fn reset_metrics(&mut self) {
         self.metrics.reset();
     }
+
+    /// Applies unified cursor-based pagination to the lazy pipeline
+    pub fn paginate_with_cursor(
+        self,
+        request: crate::unified_pagination::PaginationRequest<crate::unified_pagination::PageCursor>,
+    ) -> Result<crate::pagination::PaginatedPage<T>, LazyPipelineError>
+    {
+        match request.cursor {
+            Some(cursor) => {
+                let mut page_cursor = cursor.page();
+                if request.direction == crate::unified_pagination::PaginationDirection::Backward {
+                    if page_cursor > 0 {
+                        page_cursor -= 1;
+                    }
+                }
+                let page_size = request.page_size;
+                // Request one extra item to determine if there are more
+                let skip_count = page_cursor * page_size;
+                let pipeline = self.skip(skip_count).take(page_size + 1);
+                let mut items = pipeline.collect()?;
+                // Check if we have more items than requested
+                let has_more = items.len() > page_size;
+                // Truncate to the requested page size
+                items.truncate(page_size);
+
+                let pagination = crate::pagination::Pagination::new(page_cursor, page_size);
+
+                Ok(crate::pagination::PaginatedPage::from_items(
+                    items,
+                    pagination,
+                    has_more,
+                    None,
+                ))
+            }
+            None => {
+                // First page
+                let page_size = request.page_size;
+                // Request one extra item to determine if there are more
+                let pipeline = self.take(page_size + 1);
+                let mut items = pipeline.collect()?;
+                // Check if we have more items than requested
+                let has_more = items.len() > page_size;
+                // Truncate to the requested page size
+                items.truncate(page_size);
+
+                let pagination = crate::pagination::Pagination::new(0, page_size);
+                Ok(crate::pagination::PaginatedPage::from_items(
+                    items,
+                    pagination,
+                    has_more,
+                    None,
+                ))
+            }
+        }
+    }
 }
 
 /// Streaming iterator for large dataset processing

@@ -27,7 +27,7 @@ use crate::{
         user::{LoginDTO, LoginInfoDTO, UserDTO, UserResponseDTO, UserUpdateDTO},
         user_token::UserToken,
     },
-    services::functional_patterns::{Either, Validator, validation_rules},
+    services::functional_patterns::{validation_rules, Either, Validator},
     services::functional_service_base::{FunctionalErrorHandling, FunctionalQueryService},
     utils::token_utils,
 };
@@ -77,8 +77,12 @@ fn create_user_validator() -> Validator<UserDTO> {
 /// Iterator-based validation using functional combinator pattern for LoginDTO
 fn create_login_validator() -> Validator<LoginDTO> {
     Validator::new()
-        .rule(|dto: &LoginDTO| validation_rules::required("username_or_email")(&dto.username_or_email))
-        .rule(|dto: &LoginDTO| validation_rules::max_length("username_or_email", 255)(&dto.username_or_email))
+        .rule(|dto: &LoginDTO| {
+            validation_rules::required("username_or_email")(&dto.username_or_email)
+        })
+        .rule(|dto: &LoginDTO| {
+            validation_rules::max_length("username_or_email", 255)(&dto.username_or_email)
+        })
         .rule(|dto: &LoginDTO| validation_rules::required("password")(&dto.password))
         .rule(|dto: &LoginDTO| validation_rules::max_length("password", 128)(&dto.password))
 }

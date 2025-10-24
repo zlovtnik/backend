@@ -99,7 +99,6 @@ pub fn try_init_db_pool_functional(url: &str) -> Either<String, Pool> {
     }
 }
 
-
 /// Applies all embedded, pending database migrations to the provided PostgreSQL connection.
 ///
 /// On success the database schema is advanced to the latest embedded migrations.

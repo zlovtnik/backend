@@ -699,6 +699,8 @@ fn concurrent_processor_config() {
         min_parallel_size: 10,
         enable_work_stealing: true,
         chunk_size: 100,
+        adaptive_chunk_sizing: false,
+        max_chunk_size: 1024,
     };
 
     let processor = ConcurrentProcessor::new(config).expect("should build processor");
@@ -714,6 +716,8 @@ fn concurrent_processor_with_config() {
         min_parallel_size: 50,
         enable_work_stealing: false,
         chunk_size: 200,
+        adaptive_chunk_sizing: true,
+        max_chunk_size: 2048,
     };
 
     let new_processor = processor.with_config(new_config).expect("should build");
@@ -910,6 +914,8 @@ fn concurrent_processing_error_invalid_thread_pool() {
         min_parallel_size: 10,
         enable_work_stealing: true,
         chunk_size: 100,
+        adaptive_chunk_sizing: false,
+        max_chunk_size: 1024,
     };
 
     // Should succeed with 0 threads (uses default)

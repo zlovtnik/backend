@@ -14,11 +14,115 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
+use log;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fmt;
-use std::hash::Hash;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+
+/// Performance history entry for adaptive chunk sizing
+#[derive(Debug, Clone)]
+struct PerformanceEntry {
+    chunk_size: usize,
+    data_size: usize,
+    thread_count: usize,
+    efficiency: f64,
+    throughput: u64,
+    timestamp: Instant,
+}
+
+/// Global performance history for adaptive chunk sizing
+static PERFORMANCE_HISTORY: std::sync::OnceLock<
+    Arc<RwLock<HashMap<String, Vec<PerformanceEntry>>>>,
+> = std::sync::OnceLock::new();
+
+/// Get or initialize the performance history store
+fn get_performance_history() -> Arc<RwLock<HashMap<String, Vec<PerformanceEntry>>>> {
+    PERFORMANCE_HISTORY
+        .get_or_init(|| Arc::new(RwLock::new(HashMap::new())))
+        .clone()
+}
+
+/// Record a performance entry for adaptive learning
+fn record_performance(operation_key: String, entry: PerformanceEntry) {
+    let history = get_performance_history();
+    let mut map = match history.write() {
+        Ok(guard) => guard,
+        Err(_) => {
+            log::warn!("Performance history lock was poisoned, skipping recording");
+            return;
+        }
+    };
+
+    let entries = map.entry(operation_key).or_insert_with(Vec::new);
+    entries.push(entry);
+
+    // Keep only recent entries (last 100 per operation type) - use split_off for efficient removal of old entries
+    if entries.len() > 100 {
+        let keep = entries.len() - 100;
+        *entries = entries.split_off(keep);
+    }
+
+    // Remove entries older than 1 hour - use checked_sub to prevent panic
+    let now = Instant::now();
+    let one_hour_ago = now
+        .checked_sub(Duration::from_secs(3600))
+        .unwrap_or(now);
+    entries.retain(|entry| entry.timestamp > one_hour_ago);
+}
+
+/// Calculate optimal chunk size based on performance history
+fn calculate_adaptive_chunk_size(
+    operation_key: &str,
+    data_size: usize,
+    thread_count: usize,
+    base_chunk_size: usize,
+    max_chunk_size: usize,
+) -> usize {
+    if data_size == 0 {
+        return base_chunk_size;
+    }
+
+    let history = get_performance_history();
+    let map = match history.read() {
+        Ok(map) => map,
+        Err(poison) => {
+            log::warn!("Performance history lock was poisoned, using default chunk size");
+            return base_chunk_size;
+        }
+    };
+
+    if let Some(entries) = map.get(operation_key) {
+        // Find entries with similar data size range (±20%)
+        let similar_entries: Vec<_> = entries
+            .iter()
+            .filter(|entry| {
+                let size_ratio = entry.data_size as f64 / data_size as f64;
+                size_ratio >= 0.8 && size_ratio <= 1.2
+            })
+            .collect();
+
+        if similar_entries.len() >= 3 {
+            // Calculate weighted average of chunk sizes based on efficiency
+            let total_weight: f64 = similar_entries.iter().map(|e| e.efficiency.max(0.1)).sum();
+            let weighted_sum: f64 = similar_entries
+                .iter()
+                .map(|e| e.chunk_size as f64 * e.efficiency.max(0.1))
+                .sum();
+
+            let optimal_chunk = (weighted_sum / total_weight) as usize;
+
+            // Constrain to reasonable bounds
+            optimal_chunk.max(64).min(max_chunk_size)
+        } else {
+            // Not enough data, use base calculation
+            base_chunk_size
+        }
+    } else {
+        base_chunk_size
+    }
+}
 
 /// Parallel processing configuration for performance tuning
 #[derive(Debug, Clone)]
@@ -31,6 +135,10 @@ pub struct ParallelConfig {
     pub enable_work_stealing: bool,
     /// Memory buffer size for chunked operations
     pub chunk_size: usize,
+    /// Enable adaptive chunk sizing based on performance history
+    pub adaptive_chunk_sizing: bool,
+    /// Maximum chunk size for adaptive sizing
+    pub max_chunk_size: usize,
 }
 
 impl Default for ParallelConfig {
@@ -40,8 +148,40 @@ impl Default for ParallelConfig {
             min_parallel_size: 1024,
             enable_work_stealing: true,
             chunk_size: 1024,
+            adaptive_chunk_sizing: true,
+            max_chunk_size: 8192,
         }
     }
+}
+
+/// Note: These metrics are not yet collected and will contain default values.
+/// Work-stealing performance metrics
+#[derive(Debug, Clone, Default)]
+pub struct WorkStealingMetrics {
+    /// Number of tasks stolen by threads
+    pub tasks_stolen: u64,
+    /// Number of tasks executed locally
+    pub tasks_local: u64,
+    /// Work-stealing efficiency ratio (0.0 - 1.0)
+    pub stealing_efficiency: f64,
+    /// Load imbalance factor
+    pub load_imbalance: f64,
+}
+
+/// Note: These metrics are not yet collected and will contain default values.
+/// Load balancing metrics for detailed performance analysis
+#[derive(Debug, Clone, Default)]
+pub struct LoadBalancingMetrics {
+    /// Average work per thread
+    pub avg_work_per_thread: f64,
+    /// Standard deviation of work distribution
+    pub work_distribution_std_dev: f64,
+    /// Maximum work assigned to any thread
+    pub max_thread_work: u64,
+    /// Minimum work assigned to any thread
+    pub min_thread_work: u64,
+    /// Load balancing efficiency (0.0 - 1.0)
+    pub balancing_efficiency: f64,
 }
 
 /// Performance metrics for parallel operations
@@ -57,6 +197,10 @@ pub struct ParallelMetrics {
     pub memory_usage: u64,
     /// Parallel efficiency (0.0 - 1.0)
     pub efficiency: f64,
+    /// Work-stealing efficiency metrics
+    pub work_stealing_metrics: WorkStealingMetrics,
+    /// Detailed load balancing metrics
+    pub load_balancing_metrics: LoadBalancingMetrics,
 }
 
 /// Parallel iterator extension trait for functional programming
@@ -98,6 +242,8 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
                 throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
                 memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
                 efficiency: 1.0,
+                work_stealing_metrics: WorkStealingMetrics::default(),
+                load_balancing_metrics: LoadBalancingMetrics::default(),
             };
             return ParallelResult {
                 data: result,
@@ -106,7 +252,20 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
         }
 
         // Parallel processing for large datasets
-        let chunk_size = config.chunk_size.max(1);
+        let base_chunk_size = config.chunk_size.max(1);
+        let chunk_size = if config.adaptive_chunk_sizing {
+            let operation_key = format!("{}:{}", "par_map", std::any::type_name::<T>());
+            calculate_adaptive_chunk_size(
+                &operation_key,
+                data_len,
+                rayon::current_num_threads(),
+                base_chunk_size,
+                config.max_chunk_size,
+            )
+        } else {
+            base_chunk_size
+        };
+
         let result: Vec<U> = data
             .into_par_iter()
             .with_min_len(chunk_size)
@@ -134,7 +293,23 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
             memory_usage: ((data_len * std::mem::size_of::<T>())
                 + (result.len() * std::mem::size_of::<U>())) as u64,
             efficiency,
+            work_stealing_metrics: WorkStealingMetrics::default(),
+            load_balancing_metrics: LoadBalancingMetrics::default(),
         };
+
+        // Record performance for adaptive chunk sizing
+        if config.adaptive_chunk_sizing {
+            let operation_key = format!("{}:{}", "par_map", std::any::type_name::<T>());
+            let entry = PerformanceEntry {
+                chunk_size,
+                data_size: data_len,
+                thread_count,
+                efficiency,
+                throughput,
+                timestamp: Instant::now(),
+            };
+            record_performance(operation_key, entry);
+        }
 
         ParallelResult {
             data: result,
@@ -182,9 +357,12 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
             let metrics = ParallelMetrics {
                 total_time: elapsed,
                 thread_count: 1,
-                throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
+                throughput: (data_len as u64 * 1_000_000)
+                    / (start_time.elapsed().as_micros() as u64).max(1),
                 memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
                 efficiency: 1.0,
+                work_stealing_metrics: WorkStealingMetrics::default(),
+                load_balancing_metrics: LoadBalancingMetrics::default(),
             };
             return ParallelResult {
                 data: result,
@@ -211,6 +389,8 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
             throughput,
             memory_usage: (data_len * std::mem::size_of::<B>()) as u64,
             efficiency,
+            work_stealing_metrics: WorkStealingMetrics::default(),
+            load_balancing_metrics: LoadBalancingMetrics::default(),
         };
 
         ParallelResult {
@@ -252,6 +432,8 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
                     / (start_time.elapsed().as_micros() as u64).max(1),
                 memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
                 efficiency: 1.0,
+                work_stealing_metrics: WorkStealingMetrics::default(),
+                load_balancing_metrics: LoadBalancingMetrics::default(),
             };
             return ParallelResult {
                 data: result,
@@ -282,6 +464,8 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
             throughput,
             memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
             efficiency: (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0),
+            work_stealing_metrics: WorkStealingMetrics::default(),
+            load_balancing_metrics: LoadBalancingMetrics::default(),
         };
 
         ParallelResult {
@@ -290,66 +474,255 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
         }
     }
 
-    /// Group items by a computed key and record parallel execution metrics.
+    /// Reduces the iterator to a single value using parallel reduction.
     ///
-    /// The provided `key_fn` is applied to each item to compute its grouping key; items are moved
-    /// into vectors stored under their respective keys. The relative order of items within each
-    /// group is not guaranteed.
-    ///
-    /// # Parameters
-    ///
-    /// - `key_fn`: Function applied to each item to produce its grouping key.
+    /// Unlike `par_fold`, this method requires the reduction operation to be associative
+    /// and commutative, allowing for more efficient parallel execution. The `reduce`
+    /// closure combines two values of the same type into one.
     ///
     /// # Returns
     ///
-    /// A `ParallelResult` containing a `HashMap` that maps each key to a `Vec` of items grouped
-    /// under that key, along with `ParallelMetrics` describing the operation.
+    /// `ParallelResult<Option<T>>` containing the reduced value (if any) and performance metrics.
+    /// Returns `None` if the iterator is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use crate::functional::parallel_iterators::{ParallelConfig, ParallelIteratorExt};
+    ///
+    /// let config = ParallelConfig::default();
+    /// let sum = (0..100).into_iter().par_reduce(&config, |a, b| a + b);
+    /// assert_eq!(sum.data, Some(4950)); // sum of 0..100 = 4950
+    /// ```
+    fn par_reduce<F>(self, config: &ParallelConfig, reduce: F) -> ParallelResult<Option<T>>
+    where
+        F: Fn(T, T) -> T + Send + Sync,
+        T: Send + Clone,
+        Self: Sized,
+    {
+        let start_time = Instant::now();
+        let data: Vec<T> = self.collect();
+        let data_len = data.len();
+
+        if data_len < config.min_parallel_size {
+            // Sequential reduction for small datasets
+            let result = data.into_iter().reduce(reduce);
+            let elapsed = start_time.elapsed();
+            let throughput = if elapsed.as_micros() > 0 {
+                (data_len as u64 * 1_000_000) / elapsed.as_micros() as u64
+            } else {
+                0
+            };
+            let metrics = ParallelMetrics {
+                total_time: elapsed,
+                thread_count: 1,
+                throughput,
+                memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+                efficiency: 1.0,
+                work_stealing_metrics: WorkStealingMetrics::default(),
+                load_balancing_metrics: LoadBalancingMetrics::default(),
+            };
+            return ParallelResult {
+                data: result,
+                metrics,
+            };
+        }
+
+        // Parallel reduction for large datasets
+        let result = data.into_par_iter().reduce_with(reduce);
+
+        let elapsed = start_time.elapsed();
+        let thread_count = rayon::current_num_threads();
+        let throughput = if elapsed.as_micros() > 0 {
+            (data_len as u64 * 1_000_000) / elapsed.as_micros() as u64
+        } else {
+            0
+        };
+
+        // Estimate parallel efficiency
+        let efficiency = if elapsed.as_secs_f64() > 0.0 && data_len > 0 {
+            (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0)
+        } else {
+            1.0
+        };
+
+        let metrics = ParallelMetrics {
+            total_time: elapsed,
+            thread_count,
+            throughput,
+            memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+            efficiency,
+            work_stealing_metrics: WorkStealingMetrics::default(),
+            load_balancing_metrics: LoadBalancingMetrics::default(),
+        };
+
+        ParallelResult {
+            data: result,
+            metrics,
+        }
+    }
+
+    /// Groups items by a key produced from each element using the provided key function.
+    ///
+    /// Returns a `HashMap` that maps each distinct key to a `Vec<T>` containing the items that produced that key.
     ///
     /// # Examples
     ///
     /// ```
     /// let config = ParallelConfig::default();
-    /// let items = vec![1, 2, 3, 4, 5, 6];
-    /// let result = items.into_iter().par_group_by(&config, |&x| x % 2);
-    /// let groups = result.into_inner();
-    /// let mut evens = groups.get(&0).cloned().unwrap_or_default();
-    /// let mut odds = groups.get(&1).cloned().unwrap_or_default();
-    /// evens.sort();
-    /// odds.sort();
-    /// assert_eq!(evens, vec![2, 4, 6]);
-    /// assert_eq!(odds, vec![1, 3, 5]);
+    /// let data = vec![1, 2, 3, 4, 5, 6];
+    /// let result = data.into_iter().par_group_by(&config, |&x| x % 2);
+    /// assert_eq!(result.data.get(&0).unwrap().len(), 3); // 2, 4, 6
+    /// assert_eq!(result.data.get(&1).unwrap().len(), 3); // 1, 3, 5
     /// ```
-    fn par_group_by<K, F>(
+    fn par_group_by<K, KeyFn>(
         self,
         config: &ParallelConfig,
-        key_fn: F,
+        key_fn: KeyFn,
     ) -> ParallelResult<HashMap<K, Vec<T>>>
     where
-        K: Hash + Eq + Send + Clone + Sync,
-        F: Fn(&T) -> K + Send + Sync,
-        T: Send + Clone,
+        K: std::hash::Hash + Eq + Clone + Send + Sync,
+        KeyFn: Fn(&T) -> K + Send + Sync,
+        T: Clone + Send + Sync,
         Self: Sized,
     {
-        let _start_time = Instant::now();
+        let start_time = Instant::now();
+        let data: Vec<T> = self.collect();
+        let data_len = data.len();
 
-        // First reduce to parallel fold operation
-        let groups = self.par_fold(
-            config,
-            HashMap::new(),
-            |mut groups: HashMap<K, Vec<T>>, item| {
+        if data_len < config.min_parallel_size {
+            // Sequential grouping for small datasets
+            let mut groups = HashMap::new();
+            for item in data {
                 let key = key_fn(&item);
                 groups.entry(key).or_insert_with(Vec::new).push(item);
-                groups
-            },
-            |mut left: HashMap<K, Vec<T>>, mut right: HashMap<K, Vec<T>>| {
-                for (key, mut values) in right.drain() {
-                    left.entry(key).or_insert_with(Vec::new).append(&mut values);
-                }
-                left
-            },
-        );
+            }
+            let elapsed = start_time.elapsed();
+            let metrics = ParallelMetrics {
+                total_time: elapsed,
+                thread_count: 1,
+                throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
+                memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+                efficiency: 1.0,
+                work_stealing_metrics: WorkStealingMetrics::default(),
+                load_balancing_metrics: LoadBalancingMetrics::default(),
+            };
+            return ParallelResult {
+                data: groups,
+                metrics,
+            };
+        }
 
-        groups
+        // Parallel grouping using fold and combine
+        let result = data
+            .into_par_iter()
+            .fold(
+                || HashMap::new(),
+                |mut groups: HashMap<K, Vec<T>>, item| {
+                    let key = key_fn(&item);
+                    groups.entry(key).or_insert_with(Vec::new).push(item);
+                    groups
+                },
+            )
+            .reduce(
+                || HashMap::new(),
+                |mut acc: HashMap<K, Vec<T>>, map: HashMap<K, Vec<T>>| {
+                    for (key, mut values) in map {
+                        acc.entry(key).or_insert_with(Vec::new).append(&mut values);
+                    }
+                    acc
+                },
+            );
+
+        let elapsed = start_time.elapsed();
+        let thread_count = rayon::current_num_threads();
+        let throughput = (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64;
+
+        // Estimate parallel efficiency
+        let efficiency = (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0);
+
+        let metrics = ParallelMetrics {
+            total_time: elapsed,
+            thread_count,
+            throughput,
+            memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+            efficiency,
+            work_stealing_metrics: WorkStealingMetrics::default(),
+            load_balancing_metrics: LoadBalancingMetrics::default(),
+        };
+
+        ParallelResult {
+            data: result,
+            metrics,
+        }
+    }
+
+    /// Sorts the elements of the iterator in parallel.
+    ///
+    /// The elements must implement `Ord` for comparison. This method collects the iterator
+    /// into a vector and sorts it using Rayon's parallel sort when the dataset size exceeds
+    /// the configured threshold.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let config = ParallelConfig::default();
+    /// let data = vec![3, 1, 4, 1, 5];
+    /// let result = data.into_iter().par_sort(&config);
+    /// assert_eq!(result.data, vec![1, 1, 3, 4, 5]);
+    /// ```
+    fn par_sort(self, config: &ParallelConfig) -> ParallelResult<Vec<T>>
+    where
+        T: Ord + Send + Clone,
+        Self: Sized,
+    {
+        let start_time = Instant::now();
+        let mut data: Vec<T> = self.collect();
+        let data_len = data.len();
+
+        if data_len < config.min_parallel_size {
+            // Sequential sort for small datasets
+            data.sort();
+            let elapsed = start_time.elapsed();
+            let metrics = ParallelMetrics {
+                total_time: elapsed,
+                thread_count: 1,
+                throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
+                memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+                efficiency: 1.0,
+                work_stealing_metrics: WorkStealingMetrics::default(),
+                load_balancing_metrics: LoadBalancingMetrics::default(),
+            };
+            return ParallelResult {
+                data,
+                metrics,
+            };
+        }
+
+        // Parallel sort for large datasets
+        data.par_sort();
+
+        let elapsed = start_time.elapsed();
+        let thread_count = rayon::current_num_threads();
+        let throughput = (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64;
+
+        // Estimate parallel efficiency
+        let efficiency = (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0);
+
+        let metrics = ParallelMetrics {
+            total_time: elapsed,
+            thread_count,
+            throughput,
+            memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+            efficiency,
+            work_stealing_metrics: WorkStealingMetrics::default(),
+            load_balancing_metrics: LoadBalancingMetrics::default(),
+        };
+
+        ParallelResult {
+            data,
+            metrics,
+        }
     }
 }
 
@@ -473,6 +846,8 @@ where
                 / (start_time.elapsed().as_micros() as u64).max(1),
             memory_usage: (data_len * std::mem::size_of::<B>()) as u64,
             efficiency: 1.0,
+            work_stealing_metrics: WorkStealingMetrics::default(),
+            load_balancing_metrics: LoadBalancingMetrics::default(),
         };
         return ParallelResult {
             data: result,
@@ -499,6 +874,8 @@ where
         throughput,
         memory_usage: (data_len * std::mem::size_of::<B>()) as u64,
         efficiency,
+        work_stealing_metrics: WorkStealingMetrics::default(),
+        load_balancing_metrics: LoadBalancingMetrics::default(),
     };
 
     ParallelResult {
@@ -519,6 +896,135 @@ where
     F: Fn(&T) -> bool + Send + Sync,
 {
     data.into_iter().par_filter(config, predicate)
+}
+
+/// In-place parallel transformation to reduce memory allocations
+///
+/// This function modifies the input vector in-place, applying the transformation
+/// in parallel without creating intermediate allocations for the result.
+#[allow(dead_code)]
+pub fn parallel_transform_inplace<T, F>(
+    data: &mut [T],
+    config: &ParallelConfig,
+    transform: F,
+) -> ParallelMetrics
+where
+    T: Send + Sync,
+    F: Fn(&mut T) + Send + Sync,
+{
+    let start_time = Instant::now();
+    let data_len = data.len();
+
+    if data_len < config.min_parallel_size {
+        // Sequential transformation
+        data.iter_mut().for_each(transform);
+        let elapsed = start_time.elapsed();
+        return ParallelMetrics {
+            total_time: elapsed,
+            thread_count: 1,
+            throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
+            memory_usage: 0, // In-place, no additional allocation
+            efficiency: 1.0,
+            work_stealing_metrics: WorkStealingMetrics::default(),
+            load_balancing_metrics: LoadBalancingMetrics::default(),
+        };
+    }
+
+    // Parallel in-place transformation
+    data.par_iter_mut().for_each(transform);
+
+    let elapsed = start_time.elapsed();
+    let thread_count = rayon::current_num_threads();
+    let throughput = (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64;
+
+    // Estimate parallel efficiency
+    let efficiency = (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0);
+
+    ParallelMetrics {
+        total_time: elapsed,
+        thread_count,
+        throughput,
+        memory_usage: 0, // In-place, no additional allocation
+        efficiency,
+        work_stealing_metrics: WorkStealingMetrics::default(),
+        load_balancing_metrics: LoadBalancingMetrics::default(),
+    }
+}
+
+/// Memory-efficient parallel chunk processing
+///
+/// Processes data in chunks to minimize memory usage for large datasets
+#[allow(dead_code)]
+pub fn parallel_process_chunks<T, U, F>(
+    data: Vec<T>,
+    chunk_size: usize,
+    config: &ParallelConfig,
+    processor: F,
+) -> ParallelResult<Vec<U>>
+where
+    T: Send + Sync + Clone,
+    U: Send,
+    F: Fn(Vec<T>) -> Vec<U> + Send + Sync,
+{
+    let start_time = Instant::now();
+    let data_len = data.len();
+
+    if data_len < config.min_parallel_size {
+        // Sequential processing
+        let result = processor(data);
+        let elapsed = start_time.elapsed();
+        let metrics = ParallelMetrics {
+            total_time: elapsed,
+            thread_count: 1,
+            throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
+            memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+            efficiency: 1.0,
+            work_stealing_metrics: WorkStealingMetrics::default(),
+            load_balancing_metrics: LoadBalancingMetrics::default(),
+        };
+        return ParallelResult {
+            data: result,
+            metrics,
+        };
+    }
+
+    // Process chunks in parallel without copying
+    let results: Vec<Vec<U>> = (0..data.len())
+        .step_by(chunk_size)
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .map(|start| {
+            let end = (start + chunk_size).min(data.len());
+            let chunk = data[start..end].to_vec();
+            processor(chunk)
+        })
+        .collect();
+
+    // Flatten results
+    let result: Vec<U> = results.into_iter().flatten().collect();
+
+    let elapsed = start_time.elapsed();
+    let thread_count = rayon::current_num_threads();
+    let throughput = (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64;
+
+    // Estimate parallel efficiency
+    let efficiency = (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0);
+
+    let metrics = ParallelMetrics {
+        total_time: elapsed,
+        thread_count,
+        throughput,
+        memory_usage: (data_len * std::mem::size_of::<T>()
+            + result.len() * std::mem::size_of::<U>()) as u64,
+        efficiency,
+        work_stealing_metrics: WorkStealingMetrics::default(),
+        load_balancing_metrics: LoadBalancingMetrics::default(),
+    };
+
+    ParallelResult {
+        data: result,
+        metrics,
+    }
 }
 
 /// Estimates a suggested number of worker threads based on the input dataset size.
@@ -578,7 +1084,99 @@ pub fn optimized_config(data_size: usize) -> ParallelConfig {
         min_parallel_size,
         enable_work_stealing: true,
         chunk_size: (data_size / thread_count.max(1)).max(100),
+        adaptive_chunk_sizing: true,
+        max_chunk_size: (data_size / 4).max(4096).min(16384),
     }
+}
+
+/// Concurrent pipeline for chaining multiple parallel operations
+#[derive(Debug)]
+pub struct ParallelPipeline<T> {
+    data: Vec<T>,
+    config: ParallelConfig,
+}
+
+impl<T: Send + Sync + Clone + 'static> ParallelPipeline<T> {
+    /// Create a new pipeline with initial data
+    pub fn new(data: Vec<T>, config: ParallelConfig) -> Self {
+        Self { data, config }
+    }
+
+    /// Apply a mapping operation in the pipeline
+    pub fn map<U, F>(self, transform: F) -> ParallelPipeline<U>
+    where
+        U: Send + Sync + Clone + 'static,
+        F: Fn(T) -> U + Send + Sync + 'static,
+    {
+        let result = self.data.into_iter().par_map(&self.config, transform);
+        ParallelPipeline {
+            data: result.data,
+            config: self.config,
+        }
+    }
+
+    /// Apply a filtering operation in the pipeline
+    pub fn filter<F>(self, predicate: F) -> ParallelPipeline<T>
+    where
+        F: Fn(&T) -> bool + Send + Sync + 'static,
+    {
+        let result = self.data.into_iter().par_filter(&self.config, predicate);
+        ParallelPipeline {
+            data: result.data,
+            config: self.config,
+        }
+    }
+
+    /// Apply a folding operation to reduce to a single value
+    pub fn fold<B, F, C>(self, init: B, fold: F, combine: C) -> ParallelResult<B>
+    where
+        B: Send + Clone + Sync + 'static,
+        F: Fn(B, T) -> B + Send + Sync + 'static,
+        C: Fn(B, B) -> B + Send + Sync + 'static,
+    {
+        self.data
+            .into_iter()
+            .par_fold(&self.config, init, fold, combine)
+    }
+
+    /// Apply a reduction operation to reduce to a single value
+    pub fn reduce<F>(self, reduce: F) -> ParallelResult<Option<T>>
+    where
+        F: Fn(T, T) -> T + Send + Sync + 'static,
+    {
+        self.data.into_iter().par_reduce(&self.config, reduce)
+    }
+
+    /// Sort the data in the pipeline
+    pub fn sort(self) -> ParallelPipeline<T>
+    where
+        T: Ord,
+    {
+        let result = self.data.into_iter().par_sort(&self.config);
+        ParallelPipeline {
+            data: result.data,
+            config: self.config,
+        }
+    }
+
+    /// Execute the pipeline and return the final result
+    pub fn execute(self) -> Vec<T> {
+        self.data
+    }
+
+    /// Get the current data without consuming the pipeline
+    pub fn get_data(&self) -> &[T] {
+        &self.data
+    }
+}
+
+/// Create a parallel pipeline from an iterator
+pub fn pipeline<T, I>(iter: I, config: ParallelConfig) -> ParallelPipeline<T>
+where
+    T: Send + Sync + Clone + 'static,
+    I: IntoIterator<Item = T>,
+{
+    ParallelPipeline::new(iter.into_iter().collect(), config)
 }
 
 #[cfg(test)]
@@ -668,5 +1266,33 @@ mod tests {
         assert!(result.metrics.throughput > 0);
         assert!(result.metrics.efficiency > 0.0);
         assert!(result.metrics.efficiency <= 1.0);
+    }
+
+    #[test]
+    fn test_par_reduce_empty() {
+        let data: Vec<u32> = vec![];
+        let config = ParallelConfig::default();
+
+        let result = data.into_iter().par_reduce(&config, |a, b| a + b);
+        assert_eq!(result.data, None);
+        assert!(result.metrics.throughput >= 0);
+    }
+
+    #[test]
+    fn test_par_reduce_single_element() {
+        let data = vec![42];
+        let config = ParallelConfig::default();
+
+        let result = data.into_iter().par_reduce(&config, |a, b| a + b);
+        assert_eq!(result.data, Some(42));
+    }
+
+    #[test]
+    fn test_par_reduce_multiple_elements() {
+        let data = vec![1, 2, 3, 4, 5];
+        let config = ParallelConfig::default();
+
+        let result = data.into_iter().par_reduce(&config, |a, b| a + b);
+        assert_eq!(result.data, Some(15));
     }
 }

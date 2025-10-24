@@ -3,13 +3,13 @@
 //! This module provides implementations of TypeSafeQueryBuilder for specific tables,
 //! enabling the functional query composition system to generate real Diesel SQL fragments.
 
+use chrono::NaiveDateTime;
 use diesel::pg::Pg;
 use diesel::prelude::*;
-use diesel::query_builder::QueryFragment;
+use diesel::ExpressionMethods;
 
-use crate::functional::query_builder::{TypeSafeQueryBuilder, Operator};
+use crate::functional::query_builder::{Operator, TypeSafeQueryBuilder};
 use crate::schema::tenants;
-use crate::schema::tenants::dsl::*;
 
 /// Tenant-specific query builder that can generate actual Diesel queries for the tenants table.
 ///
@@ -18,33 +18,29 @@ use crate::schema::tenants::dsl::*;
 pub type TenantQueryBuilder = TypeSafeQueryBuilder<tenants::table, String>;
 
 impl TenantQueryBuilder {
-    /// Builds a Diesel SQL fragment for the tenants table using the accumulated filters and predicates.
+    /// Builds the final Diesel query from the accumulated filters and ordering.
     ///
-    /// This method iterates through all filters and predicates, mapping field names to actual
-    /// Diesel column references and applying the appropriate query operations.
+    /// This method applies all the configured filters, ordering, and pagination
+    /// to create a boxed Diesel query that can be executed against the database.
     ///
     /// # Returns
     ///
-    /// A `Result` containing either a boxed Diesel `QueryFragment<Pg>` representing the complete
-    /// parameterized query, or a `String` error message if query construction fails.
+    /// A `Result` containing the boxed Diesel query on success, or an error message on failure.
     ///
     /// # Examples
     ///
     /// ```no_run
     /// use crate::functional::query_builders::TenantQueryBuilder;
-    /// use crate::functional::query_builder::{equals, contains};
     /// use diesel::prelude::*;
     ///
-    /// // Build a query for tenants with specific criteria
-    /// let query_builder = TenantQueryBuilder::new()
-    ///     .filter(equals(tenants::id, "tenant123".to_string(), "id".to_string()))
-    ///     .filter(contains(tenants::name, "acme".to_string(), "name".to_string()))
-    ///     .limit(50);
+    /// let builder = TenantQueryBuilder::new()
+    ///     .with_filter("name", "John")
+    ///     .order_by("created_at", true);
     ///
-    /// let query = query_builder.build().expect("Failed to build query");
-    /// // query can now be executed against the database
+    /// let query = builder.build_tenant_query().expect("Failed to build query");
+    /// let results: Vec<Tenant> = query.load(&conn).expect("Failed to execute query");
     /// ```
-    pub fn build(self) -> Result<Box<dyn QueryFragment<Pg> + Send>, String> {
+    pub fn build_tenant_query(self) -> Result<tenants::BoxedQuery<'static, Pg>, String> {
         // Start with the tenants table
         let mut query = tenants::table.into_boxed();
 
@@ -68,7 +64,7 @@ impl TenantQueryBuilder {
             query = query.offset(offset_val);
         }
 
-        Ok(Box::new(query))
+        Ok(query)
     }
 
     /// Applies a single predicate to the query by mapping field names to Diesel columns.
@@ -77,60 +73,187 @@ impl TenantQueryBuilder {
         predicate: &crate::functional::query_builder::Predicate<String>,
     ) -> Result<tenants::BoxedQuery<'static, Pg>, String> {
         match predicate.column.column.as_str() {
-            "id" => Self::apply_operator(query, tenants::id, &predicate.operator, &predicate.value),
-            "name" => Self::apply_operator(query, tenants::name, &predicate.operator, &predicate.value),
-            "db_url" => Self::apply_operator(query, tenants::db_url, &predicate.operator, &predicate.value),
-            "created_at" => Self::apply_timestamp_operator(query, tenants::created_at, &predicate.operator, &predicate.value),
-            "updated_at" => Self::apply_timestamp_operator(query, tenants::updated_at, &predicate.operator, &predicate.value),
-            _ => Err(format!("Unknown field '{}' for tenants table", predicate.column.column)),
+            "id" => Self::apply_string_operator(
+                query,
+                "id",
+                &predicate.operator,
+                &predicate.value,
+            ),
+            "name" => Self::apply_string_operator(
+                query,
+                "name",
+                &predicate.operator,
+                &predicate.value,
+            ),
+            "db_url" => Self::apply_string_operator(
+                query,
+                "db_url",
+                &predicate.operator,
+                &predicate.value,
+            ),
+            "created_at" => Self::apply_timestamp_operator(
+                query,
+                "created_at",
+                &predicate.operator,
+                &predicate.value,
+            ),
+            "updated_at" => Self::apply_timestamp_operator(
+                query,
+                "updated_at",
+                &predicate.operator,
+                &predicate.value,
+            ),
+            _ => Err(format!(
+                "Unknown field '{}' for tenants table",
+                predicate.column.column
+            )),
         }
     }
 
-    /// Applies an operator to a string column (id, name, db_url).
-    fn apply_operator(
+    /// Escapes a value for use in LIKE patterns by properly handling SQL wildcards.
+    ///
+    /// This method escapes backslashes first, then percent signs (%) and underscores (_)
+    /// to prevent them from being interpreted as wildcards in LIKE queries.
+    fn escape_like_pattern(value: &str) -> String {
+        value
+            .replace("\\", "\\\\") // Escape backslashes first
+            .replace("%", "\\%")   // Escape percent signs
+            .replace("_", "\\_")   // Escape underscores
+    }
+
+    /// Applies an operator to a string-like column (varchar or text).
+    fn apply_string_operator(
         query: tenants::BoxedQuery<'static, Pg>,
-        column: tenants::columns::Column,
+        column_name: &str,
         operator: &Operator,
         value: &Option<String>,
     ) -> Result<tenants::BoxedQuery<'static, Pg>, String> {
-        let value = value.as_ref().ok_or("Value required for string column predicate")?;
+        use diesel::dsl::sql;
 
         match operator {
-            Operator::Equals => Ok(query.filter(column.eq(value))),
-            Operator::NotEquals => Ok(query.filter(column.ne(value))),
-            Operator::Contains => Ok(query.filter(column.like(format!("%{}%", value)))),
-            Operator::NotContains => Ok(query.filter(column.not_like(format!("%{}%", value)))),
-            Operator::IsNull => Ok(query.filter(column.is_null())),
-            Operator::IsNotNull => Ok(query.filter(column.is_not_null())),
-            _ => Err(format!("Operator {:?} not supported for string columns", operator)),
+            Operator::Equals => {
+                let value = value
+                    .as_ref()
+                    .ok_or("Value required for string column predicate")?;
+                let sql_str = format!("{} = ", column_name);
+                Ok(query.filter(sql::<diesel::sql_types::Bool>(&sql_str).bind::<diesel::sql_types::Text, String>(value.clone())))
+            }
+            Operator::NotEquals => {
+                let value = value
+                    .as_ref()
+                    .ok_or("Value required for string column predicate")?;
+                let sql_str = format!("{} != ", column_name);
+                Ok(query.filter(sql::<diesel::sql_types::Bool>(&sql_str).bind::<diesel::sql_types::Text, String>(value.clone())))
+            }
+            Operator::Contains => {
+                let value = value
+                    .as_ref()
+                    .ok_or("Value required for string column predicate")?;
+                let pattern = format!("%{}%", Self::escape_like_pattern(value));
+                let sql_str = format!("{} LIKE ", column_name);
+                Ok(query.filter(sql::<diesel::sql_types::Bool>(&sql_str).bind::<diesel::sql_types::Text, String>(pattern)))
+            }
+            Operator::NotContains => {
+                let value = value
+                    .as_ref()
+                    .ok_or("Value required for string column predicate")?;
+                let pattern = format!("%{}%", Self::escape_like_pattern(value));
+                let sql_str = format!("{} NOT LIKE ", column_name);
+                Ok(query.filter(sql::<diesel::sql_types::Bool>(&sql_str).bind::<diesel::sql_types::Text, String>(pattern)))
+            }
+            Operator::IsNull => {
+                let sql_str = format!("{} IS NULL", column_name);
+                Ok(query.filter(sql::<diesel::sql_types::Bool>(&sql_str)))
+            }
+            Operator::IsNotNull => {
+                let sql_str = format!("{} IS NOT NULL", column_name);
+                Ok(query.filter(sql::<diesel::sql_types::Bool>(&sql_str)))
+            }
+            _ => Err(format!(
+                "Operator {:?} not supported for string columns",
+                operator
+            )),
         }
     }
 
     /// Applies an operator to a timestamp column (created_at, updated_at).
     fn apply_timestamp_operator(
         query: tenants::BoxedQuery<'static, Pg>,
-        column: tenants::columns::Column,
+        column_name: &str,
         operator: &Operator,
         value: &Option<String>,
     ) -> Result<tenants::BoxedQuery<'static, Pg>, String> {
-        let value = value.as_ref().ok_or("Value required for timestamp predicate")?;
-
-        // Parse the timestamp string
-        let timestamp = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.fZ")
-            .or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%SZ"))
-            .map_err(|_| format!("Invalid timestamp format: {}", value))?;
+        use diesel::dsl::sql;
 
         match operator {
-            Operator::Equals => Ok(query.filter(column.eq(timestamp))),
-            Operator::NotEquals => Ok(query.filter(column.ne(timestamp))),
-            Operator::GreaterThan => Ok(query.filter(column.gt(timestamp))),
-            Operator::LessThan => Ok(query.filter(column.lt(timestamp))),
-            Operator::GreaterThanEqual => Ok(query.filter(column.ge(timestamp))),
-            Operator::LessThanEqual => Ok(query.filter(column.le(timestamp))),
-            Operator::IsNull => Ok(query.filter(column.is_null())),
-            Operator::IsNotNull => Ok(query.filter(column.is_not_null())),
-            _ => Err(format!("Operator {:?} not supported for timestamp columns", operator)),
+            Operator::Equals => {
+                let value = value
+                    .as_ref()
+                    .ok_or("Value required for timestamp predicate")?;
+                let timestamp = Self::parse_timestamp(value)?;
+                let sql_str = format!("{} = ", column_name);
+                Ok(query.filter(sql::<diesel::sql_types::Bool>(&sql_str).bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, Option<NaiveDateTime>>(Some(timestamp))))
+            }
+            Operator::NotEquals => {
+                let value = value
+                    .as_ref()
+                    .ok_or("Value required for timestamp predicate")?;
+                let timestamp = Self::parse_timestamp(value)?;
+                let sql_str = format!("{} != ", column_name);
+                Ok(query.filter(sql::<diesel::sql_types::Bool>(&sql_str).bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, Option<NaiveDateTime>>(Some(timestamp))))
+            }
+            Operator::GreaterThan => {
+                let value = value
+                    .as_ref()
+                    .ok_or("Value required for timestamp predicate")?;
+                let timestamp = Self::parse_timestamp(value)?;
+                let sql_str = format!("{} > ", column_name);
+                Ok(query.filter(sql::<diesel::sql_types::Bool>(&sql_str).bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, Option<NaiveDateTime>>(Some(timestamp))))
+            }
+            Operator::LessThan => {
+                let value = value
+                    .as_ref()
+                    .ok_or("Value required for timestamp predicate")?;
+                let timestamp = Self::parse_timestamp(value)?;
+                let sql_str = format!("{} < ", column_name);
+                Ok(query.filter(sql::<diesel::sql_types::Bool>(&sql_str).bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, Option<NaiveDateTime>>(Some(timestamp))))
+            }
+            Operator::GreaterThanEqual => {
+                let value = value
+                    .as_ref()
+                    .ok_or("Value required for timestamp predicate")?;
+                let timestamp = Self::parse_timestamp(value)?;
+                let sql_str = format!("{} >= ", column_name);
+                Ok(query.filter(sql::<diesel::sql_types::Bool>(&sql_str).bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, Option<NaiveDateTime>>(Some(timestamp))))
+            }
+            Operator::LessThanEqual => {
+                let value = value
+                    .as_ref()
+                    .ok_or("Value required for timestamp predicate")?;
+                let timestamp = Self::parse_timestamp(value)?;
+                let sql_str = format!("{} <= ", column_name);
+                Ok(query.filter(sql::<diesel::sql_types::Bool>(&sql_str).bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, Option<NaiveDateTime>>(Some(timestamp))))
+            }
+            Operator::IsNull => {
+                let sql_str = format!("{} IS NULL", column_name);
+                Ok(query.filter(sql::<diesel::sql_types::Bool>(&sql_str)))
+            }
+            Operator::IsNotNull => {
+                let sql_str = format!("{} IS NOT NULL", column_name);
+                Ok(query.filter(sql::<diesel::sql_types::Bool>(&sql_str)))
+            }
+            _ => Err(format!(
+                "Operator {:?} not supported for timestamp columns",
+                operator
+            )),
         }
+    }
+
+    /// Parses a timestamp string in ISO format
+    fn parse_timestamp(value: &str) -> Result<NaiveDateTime, String> {
+        NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.fZ")
+            .or_else(|_| NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%SZ"))
+            .map_err(|_| format!("Invalid timestamp format: {}", value))
     }
 
     /// Applies ordering to the query.
@@ -138,19 +261,33 @@ impl TenantQueryBuilder {
         query: tenants::BoxedQuery<'static, Pg>,
         order_spec: &crate::functional::query_builder::OrderSpec,
     ) -> Result<tenants::BoxedQuery<'static, Pg>, String> {
-        let column = match order_spec.column.as_str() {
-            "id" => tenants::id,
-            "name" => tenants::name,
-            "db_url" => tenants::db_url,
-            "created_at" => tenants::created_at,
-            "updated_at" => tenants::updated_at,
-            _ => return Err(format!("Unknown ordering column '{}'", order_spec.column)),
-        };
-
-        if order_spec.ascending {
-            Ok(query.then_order_by(column.asc()))
-        } else {
-            Ok(query.then_order_by(column.desc()))
+        match order_spec.column.as_str() {
+            "id" => if order_spec.ascending {
+                Ok(query.order(tenants::id.asc()))
+            } else {
+                Ok(query.order(tenants::id.desc()))
+            },
+            "name" => if order_spec.ascending {
+                Ok(query.order(tenants::name.asc()))
+            } else {
+                Ok(query.order(tenants::name.desc()))
+            },
+            "db_url" => if order_spec.ascending {
+                Ok(query.order(tenants::db_url.asc()))
+            } else {
+                Ok(query.order(tenants::db_url.desc()))
+            },
+            "created_at" => if order_spec.ascending {
+                Ok(query.order(tenants::created_at.asc()))
+            } else {
+                Ok(query.order(tenants::created_at.desc()))
+            },
+            "updated_at" => if order_spec.ascending {
+                Ok(query.order(tenants::updated_at.asc()))
+            } else {
+                Ok(query.order(tenants::updated_at.desc()))
+            },
+            _ => Err(format!("Unknown ordering column '{}'", order_spec.column)),
         }
     }
 }
@@ -169,12 +306,14 @@ mod tests {
 
     #[test]
     fn test_tenant_query_builder_with_filters() {
-        let filter = crate::functional::query_builder::QueryFilter::new()
-            .with_predicate(equals(
-                crate::functional::query_builder::Column::new("tenants".to_string(), "name".to_string()),
-                "test_tenant".to_string(),
+        let filter = crate::functional::query_builder::QueryFilter::new().with_predicate(equals(
+            crate::functional::query_builder::Column::new(
+                "tenants".to_string(),
                 "name".to_string(),
-            ));
+            ),
+            "test_tenant".to_string(),
+            "name".to_string(),
+        ));
 
         let builder = TenantQueryBuilder::new().filter(filter);
         assert_eq!(builder.filters().len(), 1);

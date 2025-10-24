@@ -6,9 +6,12 @@
 
 #![allow(dead_code)]
 
+use chrono;
 use once_cell::sync::Lazy;
 use regex::Regex;
+use rust_decimal;
 use std::collections::HashSet;
+use uuid;
 
 /// Cached regex patterns for validation
 static EMAIL_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[^@\s]+@[^@\s]+\.[^@\s]+$").unwrap());
@@ -229,6 +232,329 @@ impl ValidationRule<i32> for Range {
     }
 }
 
+/// Decimal range validation with optional precision checking
+#[derive(Clone)]
+pub struct DecimalRange {
+    pub min: Option<rust_decimal::Decimal>,
+    pub max: Option<rust_decimal::Decimal>,
+    pub max_scale: Option<u32>, // Maximum decimal places
+}
+
+impl DecimalRange {
+    /// Creates a new DecimalRange validator
+    ///
+    /// # Arguments
+    /// * `min` - Optional minimum value (inclusive)
+    /// * `max` - Optional maximum value (inclusive)
+    /// * `max_scale` - Optional maximum decimal places
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rust_decimal::Decimal;
+    /// let range = DecimalRange::new(
+    ///     Some(Decimal::ZERO),
+    ///     Some(Decimal::from(1000)),
+    ///     Some(2)
+    /// );
+    /// ```
+    pub fn new(
+        min: Option<rust_decimal::Decimal>,
+        max: Option<rust_decimal::Decimal>,
+        max_scale: Option<u32>,
+    ) -> Self {
+        Self {
+            min,
+            max,
+            max_scale,
+        }
+    }
+}
+
+impl ValidationRule<rust_decimal::Decimal> for DecimalRange {
+    fn validate(&self, value: &rust_decimal::Decimal, field_name: &str) -> ValidationResult<()> {
+        if let Some(min) = self.min {
+            if *value < min {
+                return Err(ValidationError::new(
+                    field_name,
+                    "DECIMAL_TOO_SMALL",
+                    &format!("{} must be at least {}", field_name, min),
+                ));
+            }
+        }
+
+        if let Some(max) = self.max {
+            if *value > max {
+                return Err(ValidationError::new(
+                    field_name,
+                    "DECIMAL_TOO_LARGE",
+                    &format!("{} must be at most {}", field_name, max),
+                ));
+            }
+        }
+
+        if let Some(max_scale) = self.max_scale {
+            let scale = value.scale();
+            if scale > max_scale {
+                return Err(ValidationError::new(
+                    field_name,
+                    "DECIMAL_PRECISION_TOO_HIGH",
+                    &format!(
+                        "{} must have at most {} decimal places",
+                        field_name, max_scale
+                    ),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Validates that a decimal is positive (greater than zero)
+pub struct PositiveDecimal;
+
+impl ValidationRule<rust_decimal::Decimal> for PositiveDecimal {
+    fn validate(&self, value: &rust_decimal::Decimal, field_name: &str) -> ValidationResult<()> {
+        if *value <= rust_decimal::Decimal::ZERO {
+            return Err(ValidationError::new(
+                field_name,
+                "DECIMAL_NOT_POSITIVE",
+                &format!("{} must be positive", field_name),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Validates that a decimal is non-negative (greater than or equal to zero)
+pub struct NonNegativeDecimal;
+
+impl ValidationRule<rust_decimal::Decimal> for NonNegativeDecimal {
+    fn validate(&self, value: &rust_decimal::Decimal, field_name: &str) -> ValidationResult<()> {
+        if *value < rust_decimal::Decimal::ZERO {
+            return Err(ValidationError::new(
+                field_name,
+                "DECIMAL_NEGATIVE",
+                &format!("{} must not be negative", field_name),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Validates that a NaiveDateTime is in the past
+pub struct PastDateTime;
+
+impl ValidationRule<chrono::NaiveDateTime> for PastDateTime {
+    fn validate(&self, value: &chrono::NaiveDateTime, field_name: &str) -> ValidationResult<()> {
+        let now = chrono::Utc::now().naive_utc();
+        if *value >= now {
+            return Err(ValidationError::new(
+                field_name,
+                "DATETIME_NOT_PAST",
+                &format!("{} must be in the past", field_name),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Validates that a NaiveDateTime is in the future
+pub struct FutureDateTime;
+
+impl ValidationRule<chrono::NaiveDateTime> for FutureDateTime {
+    fn validate(&self, value: &chrono::NaiveDateTime, field_name: &str) -> ValidationResult<()> {
+        let now = chrono::Utc::now().naive_utc();
+        if *value <= now {
+            return Err(ValidationError::new(
+                field_name,
+                "DATETIME_NOT_FUTURE",
+                &format!("{} must be in the future", field_name),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Validates that a DateTime<Utc> is in the past
+pub struct PastDateTimeUtc;
+
+impl ValidationRule<chrono::DateTime<chrono::Utc>> for PastDateTimeUtc {
+    fn validate(
+        &self,
+        value: &chrono::DateTime<chrono::Utc>,
+        field_name: &str,
+    ) -> ValidationResult<()> {
+        let now = chrono::Utc::now();
+        if *value >= now {
+            return Err(ValidationError::new(
+                field_name,
+                "DATETIME_NOT_PAST",
+                &format!("{} must be in the past", field_name),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Validates that a DateTime<Utc> is in the future
+pub struct FutureDateTimeUtc;
+
+impl ValidationRule<chrono::DateTime<chrono::Utc>> for FutureDateTimeUtc {
+    fn validate(
+        &self,
+        value: &chrono::DateTime<chrono::Utc>,
+        field_name: &str,
+    ) -> ValidationResult<()> {
+        let now = chrono::Utc::now();
+        if *value <= now {
+            return Err(ValidationError::new(
+                field_name,
+                "DATETIME_NOT_FUTURE",
+                &format!("{} must be in the future", field_name),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Validates that a NaiveDateTime falls within a specified range
+#[derive(Clone)]
+pub struct DateTimeRange {
+    pub min: Option<chrono::NaiveDateTime>,
+    pub max: Option<chrono::NaiveDateTime>,
+}
+
+impl DateTimeRange {
+    /// Creates a new DateTimeRange validator
+    ///
+    /// # Arguments
+    /// * `min` - Optional minimum datetime (inclusive)
+    /// * `max` - Optional maximum datetime (inclusive)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::NaiveDate;
+    /// let start = NaiveDate::from_ymd_opt(2023, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+    /// let end = NaiveDate::from_ymd_opt(2023, 12, 31).unwrap().and_hms_opt(23, 59, 59).unwrap();
+    /// let range = DateTimeRange::new(Some(start), Some(end));
+    /// ```
+    pub fn new(min: Option<chrono::NaiveDateTime>, max: Option<chrono::NaiveDateTime>) -> Self {
+        Self { min, max }
+    }
+}
+
+impl ValidationRule<chrono::NaiveDateTime> for DateTimeRange {
+    fn validate(&self, value: &chrono::NaiveDateTime, field_name: &str) -> ValidationResult<()> {
+        if let Some(min) = self.min {
+            if *value < min {
+                return Err(ValidationError::new(
+                    field_name,
+                    "DATETIME_TOO_EARLY",
+                    &format!("{} must be at or after {}", field_name, min),
+                ));
+            }
+        }
+
+        if let Some(max) = self.max {
+            if *value > max {
+                return Err(ValidationError::new(
+                    field_name,
+                    "DATETIME_TOO_LATE",
+                    &format!("{} must be at or before {}", field_name, max),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Validates UUID format (any valid UUID)
+pub struct UuidFormat;
+
+impl ValidationRule<uuid::Uuid> for UuidFormat {
+    fn validate(&self, _value: &uuid::Uuid, _field_name: &str) -> ValidationResult<()> {
+        // uuid::Uuid is guaranteed to be valid by construction, so this always passes
+        Ok(())
+    }
+}
+
+/// Validates UUID version (v1, v3, v4, v5, etc.)
+#[derive(Clone)]
+pub struct UuidVersion {
+    pub required_version: usize,
+}
+
+impl UuidVersion {
+    /// Creates a new UuidVersion validator
+    ///
+    /// # Arguments
+    /// * `version` - Required UUID version (1, 3, 4, 5, etc.)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let v4_validator = UuidVersion::new(4); // Require UUID v4
+    /// ```
+    pub fn new(version: u8) -> Self {
+        Self {
+            required_version: version as usize,
+        }
+    }
+}
+
+impl ValidationRule<uuid::Uuid> for UuidVersion {
+    fn validate(&self, value: &uuid::Uuid, field_name: &str) -> ValidationResult<()> {
+        let actual_version = value.get_version_num() as usize;
+        if actual_version != self.required_version {
+            return Err(ValidationError::new(
+                field_name,
+                "UUID_WRONG_VERSION",
+                &format!(
+                    "{} must be UUID version {}, got version {}",
+                    field_name, self.required_version, actual_version
+                ),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Validates that a UUID is not nil (all zeros)
+pub struct UuidNotNil;
+
+impl ValidationRule<uuid::Uuid> for UuidNotNil {
+    fn validate(&self, value: &uuid::Uuid, field_name: &str) -> ValidationResult<()> {
+        if value.is_nil() {
+            return Err(ValidationError::new(
+                field_name,
+                "UUID_IS_NIL",
+                &format!("{} cannot be a nil UUID", field_name),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Validates UUID string format (when UUID is provided as string)
+pub struct UuidString;
+
+impl ValidationRule<String> for UuidString {
+    fn validate(&self, value: &String, field_name: &str) -> ValidationResult<()> {
+        match uuid::Uuid::parse_str(value) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(ValidationError::new(
+                field_name,
+                "INVALID_UUID_FORMAT",
+                &format!("{} must be a valid UUID format", field_name),
+            )),
+        }
+    }
+}
+
 /// Phone number format validation (basic)
 pub struct Phone;
 
@@ -369,6 +695,9 @@ impl<T: Clone + PartialEq> ValidationRule<T> for OneOf<T> {
     }
 }
 
+#[deprecated(
+    note = "Use the unique() function which returns a UniqueItems validator instead. The Unique struct is deprecated due to its cloning behavior."
+)]
 /// Unique validation within a collection
 pub struct Unique;
 
@@ -376,7 +705,7 @@ impl<T: Clone + Eq + std::hash::Hash> ValidationRule<Vec<T>> for Unique {
     /// Validates that a vector contains no duplicate values.
     ///
     /// On success returns `Ok(())`. If any duplicate is found returns `Err(ValidationError)`
-    /// with code `DUPLICATE_VALUES` and a message indicating which field contains duplicates.
+    /// with code `DUPLICATE_ITEMS` and a message indicating which field contains duplicates.
     ///
     /// # Examples
     ///
@@ -391,7 +720,7 @@ impl<T: Clone + Eq + std::hash::Hash> ValidationRule<Vec<T>> for Unique {
     /// let err = rule.validate(&vec![1, 2, 2], "numbers");
     /// assert!(err.is_err());
     /// let e = err.unwrap_err();
-    /// assert_eq!(e.code, "DUPLICATE_VALUES");
+    /// assert_eq!(e.code, "DUPLICATE_ITEMS");
     /// assert!(e.message.contains("numbers"));
     /// ```
     fn validate(&self, value: &Vec<T>, field_name: &str) -> ValidationResult<()> {
@@ -400,7 +729,7 @@ impl<T: Clone + Eq + std::hash::Hash> ValidationRule<Vec<T>> for Unique {
             if !seen.insert(item.clone()) {
                 return Err(ValidationError::new(
                     field_name,
-                    "DUPLICATE_VALUES",
+                    "DUPLICATE_ITEMS",
                     &format!("{} contains duplicate values", field_name),
                 ));
             }
@@ -734,6 +1063,178 @@ where
         condition,
         rule,
         _phantom: std::marker::PhantomData,
+    }
+}
+
+/// Validates that a collection has a minimum number of items
+#[derive(Clone)]
+pub struct MinItems {
+    pub min: usize,
+}
+
+impl MinItems {
+    pub fn new(min: usize) -> Self {
+        Self { min }
+    }
+}
+
+impl<T> ValidationRule<Vec<T>> for MinItems {
+    fn validate(&self, value: &Vec<T>, field_name: &str) -> ValidationResult<()> {
+        if value.len() < self.min {
+            return Err(ValidationError::new(
+                field_name,
+                "TOO_FEW_ITEMS",
+                &format!("{} must have at least {} items", field_name, self.min),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Validates that a collection has a maximum number of items
+#[derive(Clone)]
+pub struct MaxItems {
+    pub max: usize,
+}
+
+impl MaxItems {
+    pub fn new(max: usize) -> Self {
+        Self { max }
+    }
+}
+
+impl<T> ValidationRule<Vec<T>> for MaxItems {
+    fn validate(&self, value: &Vec<T>, field_name: &str) -> ValidationResult<()> {
+        if value.len() > self.max {
+            return Err(ValidationError::new(
+                field_name,
+                "TOO_MANY_ITEMS",
+                &format!("{} must have at most {} items", field_name, self.max),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Validates that all items in a collection are unique
+pub struct UniqueItems;
+
+impl<T: Eq + std::hash::Hash> ValidationRule<Vec<T>> for UniqueItems {
+    fn validate(&self, value: &Vec<T>, field_name: &str) -> ValidationResult<()> {
+        let mut seen = HashSet::new();
+        for item in value {
+            if !seen.insert(item) {
+                return Err(ValidationError::new(
+                    field_name,
+                    "DUPLICATE_ITEMS",
+                    &format!("{} contains duplicate items", field_name),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Validates that a collection contains only unique items (non-cloning implementation)
+///
+/// This function returns a `UniqueItems` validator, which is preferred over the deprecated
+/// `Unique` struct because it does not require items to implement `Clone`. The older
+/// `Unique` struct is deprecated due to its cloning behavior.
+///
+/// # Examples
+///
+/// ```
+/// let validator = unique();
+/// let ok = validator.validate(&vec![1, 2, 3], "numbers");
+/// assert!(ok.is_ok());
+///
+/// let err = validator.validate(&vec![1, 2, 2], "numbers");
+/// assert!(err.is_err());
+/// ```
+pub fn unique<T: Eq + std::hash::Hash>() -> UniqueItems {
+    UniqueItems
+}
+
+/// Validates that a collection has items within a specified count range
+#[derive(Clone)]
+pub struct ItemsRange {
+    pub min: Option<usize>,
+    pub max: Option<usize>,
+}
+
+impl ItemsRange {
+    pub fn new(min: Option<usize>, max: Option<usize>) -> Self {
+        Self { min, max }
+    }
+}
+
+impl<T> ValidationRule<Vec<T>> for ItemsRange {
+    fn validate(&self, value: &Vec<T>, field_name: &str) -> ValidationResult<()> {
+        let len = value.len();
+
+        if let Some(min) = self.min {
+            if len < min {
+                return Err(ValidationError::new(
+                    field_name,
+                    "TOO_FEW_ITEMS",
+                    &format!("{} must have at least {} items", field_name, min),
+                ));
+            }
+        }
+
+        if let Some(max) = self.max {
+            if len > max {
+                return Err(ValidationError::new(
+                    field_name,
+                    "TOO_MANY_ITEMS",
+                    &format!("{} must have at most {} items", field_name, max),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Validates that each item in a collection passes a given validation rule
+pub struct ItemsValidator<R> {
+    rule: R,
+}
+
+impl<R> ItemsValidator<R> {
+    pub fn new(rule: R) -> Self {
+        Self { rule }
+    }
+}
+
+impl<T, R: ValidationRule<T>> ValidationRule<Vec<T>> for ItemsValidator<R> {
+    fn validate(&self, value: &Vec<T>, field_name: &str) -> ValidationResult<()> {
+        for (index, item) in value.iter().enumerate() {
+            let item_field_name = format!("{}[{}]", field_name, index);
+            self.rule.validate(item, &item_field_name)?;
+        }
+        Ok(())
+    }
+}
+
+/// Creates a validator that applies a rule to each item in a collection
+pub fn items<R>(rule: R) -> ItemsValidator<R> {
+    ItemsValidator::new(rule)
+}
+
+/// Validates that a collection is not empty
+pub struct NotEmpty;
+
+impl<T> ValidationRule<Vec<T>> for NotEmpty {
+    fn validate(&self, value: &Vec<T>, field_name: &str) -> ValidationResult<()> {
+        if value.is_empty() {
+            return Err(ValidationError::new(
+                field_name,
+                "EMPTY_COLLECTION",
+                &format!("{} must not be empty", field_name),
+            ));
+        }
+        Ok(())
     }
 }
 

@@ -1,18 +1,16 @@
-use std::process::Command;
 use std::env;
 use std::path::Path;
+use std::process::Command;
 
 fn main() {
     // Only run diesel print-schema in development builds
     if env::var("PROFILE").unwrap_or_default() == "debug" {
         println!("cargo:rerun-if-changed=migrations/");
-        
+
         // Check if diesel CLI is available
         if Command::new("diesel").arg("--version").output().is_ok() {
-            let output = Command::new("diesel")
-                .args(&["print-schema"])
-                .output();
-                
+            let output = Command::new("diesel").args(&["print-schema"]).output();
+
             match output {
                 Ok(output) if output.status.success() => {
                     // Write schema to src/schema.rs
@@ -22,11 +20,13 @@ fn main() {
                             println!("cargo:warning=Schema generated successfully");
                         }
                     }
-                },
+                }
                 Ok(output) => {
-                    eprintln!("diesel print-schema failed: {}", 
-                        String::from_utf8_lossy(&output.stderr));
-                },
+                    eprintln!(
+                        "diesel print-schema failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
                 Err(e) => {
                     eprintln!("Failed to execute diesel CLI: {}", e);
                 }

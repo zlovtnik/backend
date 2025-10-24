@@ -63,12 +63,12 @@ impl Pagination {
         }
     }
 
-    /// Calculates the total number of pages for a known total count.
-    pub fn total_pages(&self, total_count: usize) -> usize {
-        if total_count == 0 {
-            0
+    /// Computes the cursor for the previous page if there is one.
+    pub fn previous_cursor(&self) -> Option<usize> {
+        if self.cursor > 0 {
+            Some(self.cursor - 1)
         } else {
-            total_count.saturating_add(self.page_size.saturating_sub(1)) / self.page_size
+            None
         }
     }
 }
@@ -80,6 +80,7 @@ pub struct PaginationSummary {
     pub page_size: usize,
     pub total_elements: Option<usize>,
     pub next_cursor: Option<usize>,
+    pub previous_cursor: Option<usize>,
     pub has_more: bool,
 }
 
@@ -90,6 +91,7 @@ impl PaginationSummary {
             page_size: pagination.page_size(),
             total_elements: total,
             next_cursor: pagination.next_cursor(has_more),
+            previous_cursor: pagination.previous_cursor(),
             has_more,
         }
     }
@@ -241,6 +243,7 @@ mod tests {
         assert_eq!(pagination.cursor(), 2);
         assert_eq!(pagination.next_cursor(true), Some(3));
         assert_eq!(pagination.next_cursor(false), None);
+        assert_eq!(pagination.previous_cursor(), Some(1));
     }
 
     #[test]
@@ -254,6 +257,7 @@ mod tests {
         assert_eq!(page.items.last(), Some(&59));
         assert_eq!(page.summary.current_cursor, 3);
         assert_eq!(page.summary.next_cursor, Some(4));
+        assert_eq!(page.summary.previous_cursor, Some(2));
         assert!(page.summary.has_more);
     }
 
@@ -266,6 +270,7 @@ mod tests {
         assert_eq!(page.items, vec![8, 9]);
         assert_eq!(page.summary.has_more, false);
         assert_eq!(page.summary.next_cursor, None);
+        assert_eq!(page.summary.previous_cursor, Some(0));
     }
 
     #[test]
@@ -280,8 +285,8 @@ mod tests {
     #[test]
     fn helper_functions_cover_total_pages_and_map_items() {
         let pagination = Pagination::new(0, 5);
-        assert_eq!(pagination.total_pages(23), 5);
-        assert_eq!(pagination.total_pages(23), 5);
+        assert_eq!(super::total_pages(23, 5), 5);
+        assert_eq!(super::total_pages(23, 5), 5);
         assert_eq!(super::total_pages(23, 5), 5);
 
         let page = paginate_into_iter(0..5, pagination);
@@ -289,5 +294,6 @@ mod tests {
 
         assert_eq!(mapped.items, vec![0, 2, 4, 6, 8]);
         assert_eq!(mapped.summary.has_more, false);
+        assert_eq!(mapped.summary.previous_cursor, None);
     }
 }

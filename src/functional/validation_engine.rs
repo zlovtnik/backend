@@ -532,6 +532,161 @@ where
     )
 }
 
+/// Enhanced cross-field validation that validates field dependencies.
+/// Requires that if field A is present, then field B must also be present.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// // If "password" is present, then "password_confirm" must also be present
+/// let rule = require_field_if_present("password", "password_confirm");
+/// ```
+pub fn require_field_if_present<T>(
+    conditional_field: &str,
+    required_field: &str,
+) -> impl ValidationRule<HashMap<String, T>> {
+    let conditional_field = conditional_field.to_string();
+    let required_field = required_field.to_string();
+    let conditional_field_clone = conditional_field.clone();
+    let required_field_clone = required_field.clone();
+
+    crate::functional::validation_rules::Custom::new(
+        move |field_map: &HashMap<String, T>| {
+            // If conditional field is present, required field must also be present
+            if field_map.contains_key(&conditional_field)
+                && !field_map.contains_key(&required_field)
+            {
+                return false;
+            }
+            true
+        },
+        "MISSING_DEPENDENT_FIELD",
+        &format!(
+            "If {} is present, {} must also be present",
+            conditional_field_clone, required_field_clone
+        ),
+    )
+}
+
+/// Validates that fields are mutually exclusive - at most one of the specified fields can be present.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// // Either "email" or "phone" can be present, but not both
+/// let rule = mutually_exclusive_fields(vec!["email", "phone"]);
+/// ```
+pub fn mutually_exclusive_fields<T>(fields: Vec<&str>) -> impl ValidationRule<HashMap<String, T>> {
+    let fields: Vec<String> = fields.into_iter().map(|s| s.to_string()).collect();
+
+    crate::functional::validation_rules::Custom::new(
+        move |field_map: &HashMap<String, T>| {
+            let present_fields: Vec<_> = fields
+                .iter()
+                .filter(|field| field_map.contains_key(*field))
+                .collect();
+
+            // At most one field should be present
+            present_fields.len() <= 1
+        },
+        "MUTUALLY_EXCLUSIVE_FIELDS",
+        "Multiple mutually exclusive fields are present",
+    )
+}
+
+/// Validates that exactly one of the specified fields must be present.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// // Either "email" or "phone" must be present (but not both)
+/// let rule = require_exactly_one_of(vec!["email", "phone"]);
+/// ```
+pub fn require_exactly_one_of<T>(fields: Vec<&str>) -> impl ValidationRule<HashMap<String, T>> {
+    let fields: Vec<String> = fields.into_iter().map(|s| s.to_string()).collect();
+
+    crate::functional::validation_rules::Custom::new(
+        move |field_map: &HashMap<String, T>| {
+            let present_count = fields
+                .iter()
+                .filter(|field| field_map.contains_key(*field))
+                .count();
+
+            present_count == 1
+        },
+        "EXACTLY_ONE_FIELD_REQUIRED",
+        "Exactly one of the specified fields must be present",
+    )
+}
+
+/// Validates that if any field from a group is present, then all fields from that group must be present.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// // If any address field is present, all address fields must be present
+/// let rule = require_all_or_none(vec!["street", "city", "zip_code"]);
+/// ```
+pub fn require_all_or_none<T>(fields: Vec<&str>) -> impl ValidationRule<HashMap<String, T>> {
+    let fields: Vec<String> = fields.into_iter().map(|s| s.to_string()).collect();
+
+    crate::functional::validation_rules::Custom::new(
+        move |field_map: &HashMap<String, T>| {
+            let present_count = fields
+                .iter()
+                .filter(|field| field_map.contains_key(*field))
+                .count();
+
+            // Either all fields are present, or none are present
+            present_count == 0 || present_count == fields.len()
+        },
+        "ALL_OR_NONE_FIELDS",
+        "Either all fields in the group must be present, or none",
+    )
+}
+
+/// Validates field value relationships using a custom comparison function.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// // Ensure start_date <= end_date
+/// let rule = compare_fields("start_date", "end_date", |start: &i64, end: &i64| start <= end);
+/// ```
+pub fn compare_fields<T, F>(
+    field1: &str,
+    field2: &str,
+    comparator: F,
+) -> impl ValidationRule<HashMap<String, T>>
+where
+    F: Fn(&T, &T) -> bool,
+{
+    let field1 = field1.to_string();
+    let field2 = field2.to_string();
+    let error_message = format!(
+        "Field {} does not satisfy comparison with {}",
+        field1, field2
+    );
+
+    crate::functional::validation_rules::Custom::new(
+        move |field_map: &HashMap<String, T>| {
+            if let (Some(val1), Some(val2)) = (field_map.get(&field1), field_map.get(&field2)) {
+                comparator(val1, val2)
+            } else {
+                // If either field is missing, comparison can't fail
+                true
+            }
+        },
+        "FIELD_COMPARISON_FAILED",
+        &error_message,
+    )
+}
+
 /// Iterator-based validation pipeline for processing streams of data
 pub struct ValidationPipeline<T, I>
 where
@@ -1007,6 +1162,7 @@ where
 mod tests {
     use super::*;
     use crate::functional::validation_rules::{Email, Required};
+    use std::collections::HashMap;
 
     // Tests using concrete types for validation rules
 
@@ -1101,5 +1257,320 @@ mod tests {
         assert!(results[0].is_valid);
         assert!(!results[1].is_valid);
         assert!(results[2].is_valid);
+    }
+
+    // Cross-field validation tests
+
+    #[test]
+    fn test_require_field_if_present_valid() {
+        let rule = require_field_if_present("password", "password_confirm");
+        let mut data = HashMap::new();
+        data.insert("password".to_string(), "secret123".to_string());
+        data.insert("password_confirm".to_string(), "secret123".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_require_field_if_present_invalid_missing_required() {
+        let rule = require_field_if_present("password", "password_confirm");
+        let mut data = HashMap::new();
+        data.insert("password".to_string(), "secret123".to_string());
+        // password_confirm is missing
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.code, "MISSING_DEPENDENT_FIELD");
+        assert!(error.message.contains("If password is present, password_confirm must also be present"));
+    }
+
+    #[test]
+    fn test_require_field_if_present_valid_conditional_missing() {
+        let rule = require_field_if_present("password", "password_confirm");
+        let mut data = HashMap::new();
+        // password is missing, so password_confirm doesn't need to be present
+        data.insert("username".to_string(), "user".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_mutually_exclusive_fields_valid_none_present() {
+        let rule = mutually_exclusive_fields(vec!["email", "phone"]);
+        let mut data = HashMap::new();
+        data.insert("username".to_string(), "user".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_mutually_exclusive_fields_valid_one_present() {
+        let rule = mutually_exclusive_fields(vec!["email", "phone"]);
+        let mut data = HashMap::new();
+        data.insert("email".to_string(), "user@example.com".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_mutually_exclusive_fields_invalid_both_present() {
+        let rule = mutually_exclusive_fields(vec!["email", "phone"]);
+        let mut data = HashMap::new();
+        data.insert("email".to_string(), "user@example.com".to_string());
+        data.insert("phone".to_string(), "123-456-7890".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.code, "MUTUALLY_EXCLUSIVE_FIELDS");
+        assert!(error.message.contains("Multiple mutually exclusive fields are present"));
+    }
+
+    #[test]
+    fn test_mutually_exclusive_fields_invalid_three_fields_both_present() {
+        let rule = mutually_exclusive_fields(vec!["email", "phone", "sms"]);
+        let mut data = HashMap::new();
+        data.insert("email".to_string(), "user@example.com".to_string());
+        data.insert("phone".to_string(), "123-456-7890".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mutually_exclusive_fields_valid_empty_fields_list() {
+        let rule = mutually_exclusive_fields(vec![]);
+        let mut data = HashMap::new();
+        data.insert("any_field".to_string(), "value".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_require_exactly_one_of_valid() {
+        let rule = require_exactly_one_of(vec!["email", "phone"]);
+        let mut data = HashMap::new();
+        data.insert("email".to_string(), "user@example.com".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_require_exactly_one_of_invalid_none_present() {
+        let rule = require_exactly_one_of(vec!["email", "phone"]);
+        let mut data = HashMap::new();
+        data.insert("username".to_string(), "user".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.code, "EXACTLY_ONE_FIELD_REQUIRED");
+        assert!(error.message.contains("Exactly one of the specified fields must be present"));
+    }
+
+    #[test]
+    fn test_require_exactly_one_of_invalid_both_present() {
+        let rule = require_exactly_one_of(vec!["email", "phone"]);
+        let mut data = HashMap::new();
+        data.insert("email".to_string(), "user@example.com".to_string());
+        data.insert("phone".to_string(), "123-456-7890".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.code, "EXACTLY_ONE_FIELD_REQUIRED");
+    }
+
+    #[test]
+    fn test_require_exactly_one_of_valid_three_fields() {
+        let rule = require_exactly_one_of(vec!["email", "phone", "sms"]);
+        let mut data = HashMap::new();
+        data.insert("phone".to_string(), "123-456-7890".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_require_all_or_none_valid_all_present() {
+        let rule = require_all_or_none(vec!["street", "city", "zip_code"]);
+        let mut data = HashMap::new();
+        data.insert("street".to_string(), "123 Main St".to_string());
+        data.insert("city".to_string(), "Anytown".to_string());
+        data.insert("zip_code".to_string(), "12345".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_require_all_or_none_valid_none_present() {
+        let rule = require_all_or_none(vec!["street", "city", "zip_code"]);
+        let mut data = HashMap::new();
+        data.insert("country".to_string(), "USA".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_require_all_or_none_invalid_partial_present() {
+        let rule = require_all_or_none(vec!["street", "city", "zip_code"]);
+        let mut data = HashMap::new();
+        data.insert("street".to_string(), "123 Main St".to_string());
+        data.insert("city".to_string(), "Anytown".to_string());
+        // zip_code is missing
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.code, "ALL_OR_NONE_FIELDS");
+        assert!(error.message.contains("Either all fields in the group must be present, or none"));
+    }
+
+    #[test]
+    fn test_require_all_or_none_invalid_partial_present_two_fields() {
+        let rule = require_all_or_none(vec!["street", "city", "zip_code"]);
+        let mut data = HashMap::new();
+        data.insert("street".to_string(), "123 Main St".to_string());
+        // city and zip_code are missing
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_require_all_or_none_valid_empty_fields_list() {
+        let rule = require_all_or_none(vec![]);
+        let mut data = HashMap::new();
+        data.insert("any_field".to_string(), "value".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_compare_fields_valid_string_equality() {
+        let rule = compare_fields("password", "password_confirm", |a: &String, b: &String| a == b);
+        let mut data = HashMap::new();
+        data.insert("password".to_string(), "secret123".to_string());
+        data.insert("password_confirm".to_string(), "secret123".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_compare_fields_invalid_string_inequality() {
+        let rule = compare_fields("password", "password_confirm", |a: &String, b: &String| a == b);
+        let mut data = HashMap::new();
+        data.insert("password".to_string(), "secret123".to_string());
+        data.insert("password_confirm".to_string(), "different".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.code, "FIELD_COMPARISON_FAILED");
+        assert!(error.message.contains("Field password does not satisfy comparison with password_confirm"));
+    }
+
+    #[test]
+    fn test_compare_fields_valid_numeric_comparison() {
+        let rule = compare_fields("start_date", "end_date", |start: &i64, end: &i64| start <= end);
+        let mut data = HashMap::new();
+        data.insert("start_date".to_string(), 1000i64);
+        data.insert("end_date".to_string(), 2000i64);
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_compare_fields_invalid_numeric_comparison() {
+        let rule = compare_fields("start_date", "end_date", |start: &i64, end: &i64| start <= end);
+        let mut data = HashMap::new();
+        data.insert("start_date".to_string(), 2000i64);
+        data.insert("end_date".to_string(), 1000i64);
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_compare_fields_valid_missing_fields() {
+        let rule = compare_fields("optional1", "optional2", |a: &String, b: &String| a == b);
+        let mut data = HashMap::new();
+        data.insert("other_field".to_string(), "value".to_string());
+        // Both optional1 and optional2 are missing
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_ok()); // Missing fields should not cause comparison failure
+    }
+
+    #[test]
+    fn test_compare_fields_valid_one_field_missing() {
+        let rule = compare_fields("field1", "field2", |a: &String, b: &String| a == b);
+        let mut data = HashMap::new();
+        data.insert("field1".to_string(), "value".to_string());
+        // field2 is missing
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_ok()); // Missing field should not cause comparison failure
+    }
+
+    #[test]
+    fn test_compare_fields_edge_case_empty_strings() {
+        let rule = compare_fields("field1", "field2", |a: &String, b: &String| a.len() == b.len());
+        let mut data = HashMap::new();
+        data.insert("field1".to_string(), "".to_string());
+        data.insert("field2".to_string(), "".to_string());
+
+        let result = rule.validate(&data, "cross_field");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cross_field_validation_composition() {
+        // Test combining multiple cross-field rules
+        let rule1 = require_field_if_present("has_address", "street");
+        let rule2 = require_all_or_none(vec!["street", "city", "zip_code"]);
+
+        let mut data = HashMap::new();
+        data.insert("has_address".to_string(), "true".to_string());
+        data.insert("street".to_string(), "123 Main St".to_string());
+        data.insert("city".to_string(), "Anytown".to_string());
+        data.insert("zip_code".to_string(), "12345".to_string());
+
+        // Both rules should pass
+        let result1 = rule1.validate(&data, "cross_field");
+        assert!(result1.is_ok());
+
+        let result2 = rule2.validate(&data, "cross_field");
+        assert!(result2.is_ok());
+    }
+
+    #[test]
+    fn test_cross_field_validation_composition_failure() {
+        // Test combining multiple cross-field rules with failure
+        let rule1 = require_field_if_present("has_address", "street");
+        let rule2 = require_all_or_none(vec!["street", "city", "zip_code"]);
+
+        let mut data = HashMap::new();
+        data.insert("has_address".to_string(), "true".to_string());
+        data.insert("street".to_string(), "123 Main St".to_string());
+        // city and zip_code are missing, violating rule2
+
+        let result1 = rule1.validate(&data, "cross_field");
+        assert!(result1.is_ok()); // rule1 passes because street is present
+
+        let result2 = rule2.validate(&data, "cross_field");
+        assert!(result2.is_err()); // rule2 fails because not all address fields are present
     }
 }

@@ -3,7 +3,7 @@
 //! This module provides common mathematical operations that can be registered
 //! in the Pure Function Registry for functional composition.
 
-use super::function_traits::{FunctionCategory, FunctionWrapper, PureFunction};
+use super::function_traits::{FunctionCategory, FunctionWrapper};
 use super::pure_function_registry::{PureFunctionRegistry, RegistryError};
 
 /// Creates a set of common mathematical functions and registers them
@@ -123,7 +123,7 @@ pub fn register_string_functions(registry: &PureFunctionRegistry) -> Result<(), 
 /// with the provided registry.
 #[cfg(feature = "chrono")]
 pub fn register_datetime_functions(registry: &PureFunctionRegistry) -> Result<(), RegistryError> {
-    use chrono::{DateTime, Utc, Duration};
+    use chrono::{DateTime, Duration, Utc};
 
     // Current timestamp
     registry.register(FunctionWrapper::new(
