@@ -46,9 +46,11 @@ rand = "0.8"
 argon2 = "0.5"
 rust_decimal = { version = "1.38", features = ["serde", "db-diesel-postgres"] }
 bigdecimal = { version = "0.4.8", features = ["serde"] }
+async-trait = "0.1.89"
+aes-gcm = "0.10"
 
 [dependencies.diesel]
-version = "2.1.0"
+version = "2.2.0"
 features = ["postgres", "r2d2", "chrono"]
 
 [dependencies.chrono]
