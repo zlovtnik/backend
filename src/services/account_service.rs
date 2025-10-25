@@ -13,9 +13,9 @@
 //! - **Lazy evaluation**: Database queries defer execution until results are needed
 
 use actix_web::http::header::HeaderValue;
-use once_cell::sync::Lazy;
-use regex::Regex;
+use jsonwebtoken::TokenData;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::{
     config::db::Pool,
@@ -27,15 +27,13 @@ use crate::{
         user::{LoginDTO, LoginInfoDTO, UserDTO, UserResponseDTO, UserUpdateDTO},
         user_token::UserToken,
     },
-    services::functional_patterns::{validation_rules, Either, Validator},
+    services::functional_patterns::{
+        run_query, validation_rules, Either, Pipeline, QueryReader, Retry, Validator,
+    },
     services::functional_service_base::{FunctionalErrorHandling, FunctionalQueryService},
     utils::token_utils,
 };
 use diesel::result::{DatabaseErrorKind, Error as DieselError};
-
-// Email validation regex - pragmatic pattern for production use
-static EMAIL_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^[^@\s]+@[^@\s]+\.[^@\s]+$").expect("Invalid email regex"));
 
 /// Iterator-based validation using functional combinator pattern for UserDTO
 fn create_user_validator() -> Validator<UserDTO> {
@@ -87,6 +85,50 @@ fn create_login_validator() -> Validator<LoginDTO> {
         .rule(|dto: &LoginDTO| validation_rules::max_length("password", 128)(&dto.password))
 }
 
+fn build_user_signup_pipeline() -> Pipeline<UserDTO> {
+    Pipeline::<UserDTO>::new()
+        .then(|mut dto| {
+            dto.username = dto.username.trim().to_string();
+            dto.email = dto.email.trim().to_lowercase();
+            dto.password = dto.password.trim().to_string();
+            Ok(dto)
+        })
+        .then(|dto| {
+            validate_user_dto(&dto)?;
+            Ok(dto)
+        })
+}
+
+fn build_login_pipeline() -> Pipeline<LoginDTO> {
+    Pipeline::<LoginDTO>::new()
+        .then(|mut dto| {
+            dto.username_or_email = dto.username_or_email.trim().to_string();
+            dto.password = dto.password.trim().to_string();
+            dto.tenant_id = dto.tenant_id.trim().to_string();
+            Ok(dto)
+        })
+        .then(|dto| {
+            validate_login_dto(&dto)?;
+            Ok(dto)
+        })
+}
+
+fn verify_token_with_retry(
+    token_data: TokenData<UserToken>,
+    pool: &Pool,
+) -> Result<String, ServiceError> {
+    let shared_data = Arc::new(token_data);
+    let pool = pool.clone();
+
+    Retry::new(move || {
+        token_utils::verify_token(shared_data.as_ref(), &pool)
+            .map_err(|err| ServiceError::unauthorized(err))
+    })
+    .max_attempts(3)
+    .delay(150)
+    .execute()
+}
+
 /// Legacy validation for backward compatibility - uses new functional validator
 fn validate_user_dto(dto: &UserDTO) -> Result<(), ServiceError> {
     create_user_validator().validate(dto)
@@ -132,31 +174,19 @@ pub struct RefreshTokenRequest {
 /// // `result` will be Ok(...) on success or Err(...) on failure.
 /// ```
 pub fn signup(user: UserDTO, pool: &Pool) -> Result<String, ServiceError> {
-    // Use iterator-based validation pipeline
-    validate_user_dto(&user)?;
+    let sanitized_user = build_user_signup_pipeline().execute(user)?;
 
-    // Use functional pipeline with validated data
-    crate::services::functional_service_base::ServicePipeline::new(pool.clone())
-        .with_data(user)
-        .execute(|user, conn| user_ops::signup_user(user, conn))
-        .log_error("signup operation")
+    let signup_flow =
+        QueryReader::new(move |conn| user_ops::signup_user(sanitized_user.clone(), conn));
+
+    run_query(signup_flow, pool).log_error("signup operation")
 }
 
 /// Creates a new user account using Either types for functional composition
 pub fn signup_either(user: UserDTO, pool: &Pool) -> Either<ServiceError, String> {
-    // Convert validation result to Either
-    match validate_user_dto(&user) {
-        Ok(()) => {
-            // Use functional pipeline with validated data
-            match crate::services::functional_service_base::ServicePipeline::new(pool.clone())
-                .with_data(user)
-                .execute(|user, conn| user_ops::signup_user(user, conn))
-            {
-                Ok(message) => Either::Right(message),
-                Err(e) => Either::Left(e),
-            }
-        }
-        Err(e) => Either::Left(e),
+    match signup(user, pool) {
+        Ok(message) => Either::Right(message),
+        Err(error) => Either::Left(error),
     }
 }
 
@@ -182,88 +212,45 @@ pub fn signup_either(user: UserDTO, pool: &Pool) -> Either<ServiceError, String>
 /// assert_eq!(token_body.token_type, "bearer");
 /// ```
 pub fn login(login: LoginDTO, pool: &Pool) -> Result<TokenBodyResponse, ServiceError> {
-    let query_service = FunctionalQueryService::new(pool.clone());
+    let sanitized_login = build_login_pipeline().execute(login)?;
 
-    query_service
-        .query(|conn| {
-            user_ops::login_user(login, conn).ok_or_else(|| {
-                ServiceError::unauthorized(constants::MESSAGE_LOGIN_FAILED.to_string())
-            })
-        })
-        .and_then(|logged_user| {
-            // Since login_user now returns None for all authentication failures,
-            // we no longer need to check for empty login_session
-            // Get user by username and create refresh token
-            query_service
-                .query(|conn| {
-                    user_ops::find_user_by_username(&logged_user.username, conn)
-                        .map_err(|_| {
-                            ServiceError::internal_server_error("Failed to find user".to_string())
-                        })
-                        .and_then(|user| {
-                            let access_token = UserToken::generate_token(&logged_user);
-                            RefreshToken::create(user.id, conn)
-                                .map_err(|e| {
-                                    ServiceError::internal_server_error(format!(
-                                        "Failed to create refresh token: {}",
-                                        e
-                                    ))
-                                })
-                                .map(|refresh_token| (access_token, refresh_token))
-                        })
+    let login_flow = QueryReader::new(move |conn| {
+        user_ops::login_user(sanitized_login.clone(), conn)
+            .ok_or_else(|| ServiceError::unauthorized(constants::MESSAGE_LOGIN_FAILED.to_string()))
+    })
+    .and_then(move |login_info| {
+        QueryReader::new(move |conn| {
+            let user =
+                user_ops::find_user_by_username(&login_info.username, conn).map_err(|_| {
+                    ServiceError::internal_server_error("Failed to find user".to_string())
+                })?;
+
+            let access_token = UserToken::generate_token(&login_info);
+
+            RefreshToken::create(user.id, conn)
+                .map_err(|e| {
+                    ServiceError::internal_server_error(format!(
+                        "Failed to create refresh token: {}",
+                        e
+                    ))
                 })
-                .map(|(access_token, refresh_token)| TokenBodyResponse {
+                .map(|refresh_token| TokenBodyResponse {
                     access_token,
                     refresh_token,
                     token_type: "bearer".to_string(),
                 })
         })
-        .log_error("login operation")
+    });
+
+    run_query(login_flow, pool).log_error("login operation")
 }
 
 /// Authenticate login credentials using Either types for functional composition
-pub fn login_either(login: LoginDTO, pool: &Pool) -> Either<ServiceError, TokenBodyResponse> {
-    let query_service = FunctionalQueryService::new(pool.clone());
-
-    query_service
-        .query(|conn| {
-            user_ops::login_user(login, conn).ok_or_else(|| {
-                ServiceError::unauthorized(constants::MESSAGE_LOGIN_FAILED.to_string())
-            })
-        })
-        .map(|logged_user| {
-            // Since login_user now returns None for all authentication failures,
-            // we no longer need to check for empty login_session
-            // Get user by username and create refresh token
-            query_service
-                .query(|conn| {
-                    user_ops::find_user_by_username(&logged_user.username, conn)
-                        .map_err(|_| {
-                            ServiceError::internal_server_error("Failed to find user".to_string())
-                        })
-                        .and_then(|user| {
-                            let access_token = UserToken::generate_token(&logged_user);
-                            RefreshToken::create(user.id, conn)
-                                .map_err(|e| {
-                                    ServiceError::internal_server_error(format!(
-                                        "Failed to create refresh token: {}",
-                                        e
-                                    ))
-                                })
-                                .map(|refresh_token| (access_token, refresh_token))
-                        })
-                })
-                .map(|(access_token, refresh_token)| TokenBodyResponse {
-                    access_token,
-                    refresh_token,
-                    token_type: "bearer".to_string(),
-                })
-        })
-        .map(|result| match result {
-            Ok(response) => Either::Right(response),
-            Err(e) => Either::Left(e),
-        })
-        .unwrap_or_else(|e| Either::Left(e))
+pub fn login_either(credentials: LoginDTO, pool: &Pool) -> Either<ServiceError, TokenBodyResponse> {
+    match login(credentials, pool) {
+        Ok(response) => Either::Right(response),
+        Err(error) => Either::Left(error),
+    }
 }
 
 /// Invalidate the user's session represented by a bearer Authorization header.
@@ -311,7 +298,11 @@ pub fn logout(authen_header: &HeaderValue, pool: &Pool) -> Result<(), ServiceErr
             })
         })
         .and_then(|token_data| {
-            token_utils::verify_token(&token_data, pool).map_err(|_| {
+            verify_token_with_retry(token_data, pool).map_err(|err| {
+                log::warn!(
+                    "Token verification failed after retries during logout: {}",
+                    err
+                );
                 ServiceError::unauthorized(constants::MESSAGE_PROCESS_TOKEN_ERROR.to_string())
             })
         })
@@ -341,56 +332,9 @@ pub fn logout(authen_header: &HeaderValue, pool: &Pool) -> Result<(), ServiceErr
 
 /// Invalidate the user's session using Either types for functional composition
 pub fn logout_either(authen_header: &HeaderValue, pool: &Pool) -> Either<ServiceError, ()> {
-    let query_service = FunctionalQueryService::new(pool.clone());
-
-    let result = authen_header
-        .to_str()
-        .map_err(|_| ServiceError::unauthorized(constants::MESSAGE_PROCESS_TOKEN_ERROR.to_string()))
-        .and_then(|authen_str| {
-            if !token_utils::is_auth_header_valid(authen_header) {
-                Err(ServiceError::unauthorized(
-                    constants::MESSAGE_PROCESS_TOKEN_ERROR.to_string(),
-                ))
-            } else {
-                let token = authen_str[6..authen_str.len()].trim().to_string();
-                Ok(token)
-            }
-        })
-        .and_then(|token| {
-            token_utils::decode_token(token).map_err(|_| {
-                ServiceError::unauthorized(constants::MESSAGE_PROCESS_TOKEN_ERROR.to_string())
-            })
-        })
-        .and_then(|token_data| {
-            token_utils::verify_token(&token_data, pool).map_err(|_| {
-                ServiceError::unauthorized(constants::MESSAGE_PROCESS_TOKEN_ERROR.to_string())
-            })
-        })
-        .and_then(|username| {
-            query_service
-                .query(|conn| {
-                    user_ops::find_user_by_username(&username, conn).map_err(|_| {
-                        ServiceError::internal_server_error("Database error".to_string())
-                    })
-                })
-                .map(|user| (user, username))
-        })
-        .and_then(|(user, _)| {
-            query_service.query(|conn| {
-                user_ops::logout_user(user.id, conn).map_err(|e| {
-                    log::error!(
-                        "Failed to clear login session for user {}: {}",
-                        user.username,
-                        e
-                    );
-                    ServiceError::internal_server_error("Failed to clear login session".to_string())
-                })
-            })
-        });
-
-    match result {
+    match logout(authen_header, pool) {
         Ok(()) => Either::Right(()),
-        Err(e) => Either::Left(e),
+        Err(error) => Either::Left(error),
     }
 }
 
@@ -429,6 +373,17 @@ pub fn refresh(
             token_utils::decode_token(token).map_err(|_| {
                 ServiceError::unauthorized(constants::MESSAGE_TOKEN_MISSING.to_string())
             })
+        })
+        .and_then(|token_data| {
+            verify_token_with_retry(token_data.clone(), pool)
+                .map(|_| token_data)
+                .map_err(|err| {
+                    log::warn!(
+                        "Token verification failed after retries during refresh: {}",
+                        err
+                    );
+                    ServiceError::unauthorized(constants::MESSAGE_TOKEN_MISSING.to_string())
+                })
         })
         .and_then(|token_data| {
             query_service.query(|conn| {
@@ -576,6 +531,17 @@ pub fn me(authen_header: &HeaderValue, pool: &Pool) -> Result<LoginInfoDTO, Serv
             token_utils::decode_token(token).map_err(|_| {
                 ServiceError::unauthorized(constants::MESSAGE_PROCESS_TOKEN_ERROR.to_string())
             })
+        })
+        .and_then(|token_data| {
+            verify_token_with_retry(token_data.clone(), pool)
+                .map(|_| token_data)
+                .map_err(|err| {
+                    log::warn!(
+                        "Token verification failed after retries during me(): {}",
+                        err
+                    );
+                    ServiceError::unauthorized(constants::MESSAGE_PROCESS_TOKEN_ERROR.to_string())
+                })
         })
         .and_then(|token_data| {
             query_service.query(|conn| {

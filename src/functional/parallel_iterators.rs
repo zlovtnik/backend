@@ -66,9 +66,7 @@ fn record_performance(operation_key: String, entry: PerformanceEntry) {
 
     // Remove entries older than 1 hour - use checked_sub to prevent panic
     let now = Instant::now();
-    let one_hour_ago = now
-        .checked_sub(Duration::from_secs(3600))
-        .unwrap_or(now);
+    let one_hour_ago = now.checked_sub(Duration::from_secs(3600)).unwrap_or(now);
     entries.retain(|entry| entry.timestamp > one_hour_ago);
 }
 
@@ -566,14 +564,41 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
     ///
     /// Returns a `HashMap` that maps each distinct key to a `Vec<T>` containing the items that produced that key.
     ///
+    /// # Ordering Guarantees
+    ///
+    /// **Sequential path** (when `data.len() < config.min_parallel_size`):
+    /// - Preserves the insertion order of items within each group.
+    /// - Groups are populated in the order elements are processed.
+    ///
+    /// **Parallel path** (when `data.len() >= config.min_parallel_size`):
+    /// - Does NOT guarantee any ordering of elements inside groups.
+    /// - Order is non-deterministic due to concurrent folding/reduction across threads.
+    /// - Each thread accumulates items independently, then results are merged, causing elements
+    ///   within a group to appear in arbitrary order.
+    ///
+    /// # If Stable Ordering is Required
+    ///
+    /// Callers who require stable ordering within groups have these options:
+    /// 1. **Sort after grouping**: Call `.sort()` on each `Vec<T>` after grouping completes.
+    /// 2. **Use sequential path**: Increase `config.min_parallel_size` to force sequential processing
+    ///    for the data size you're working with, or pass a `ParallelConfig` with a very large threshold.
+    /// 3. **Implement stable alternative**: Provide a custom grouping function that maintains order
+    ///    (potentially using a different data structure like `Vec<(K, Vec<T>)>` instead of `HashMap`).
+    ///
     /// # Examples
     ///
     /// ```
     /// let config = ParallelConfig::default();
     /// let data = vec![1, 2, 3, 4, 5, 6];
     /// let result = data.into_iter().par_group_by(&config, |&x| x % 2);
-    /// assert_eq!(result.data.get(&0).unwrap().len(), 3); // 2, 4, 6
-    /// assert_eq!(result.data.get(&1).unwrap().len(), 3); // 1, 3, 5
+    /// assert_eq!(result.data.get(&0).unwrap().len(), 3); // 2, 4, 6 (order not guaranteed in parallel)
+    /// assert_eq!(result.data.get(&1).unwrap().len(), 3); // 1, 3, 5 (order not guaranteed in parallel)
+    ///
+    /// // If order matters, sort each group:
+    /// let mut sorted_result = result.data;
+    /// for vec in sorted_result.values_mut() {
+    ///     vec.sort();
+    /// }
     /// ```
     fn par_group_by<K, KeyFn>(
         self,
@@ -693,10 +718,7 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
                 work_stealing_metrics: WorkStealingMetrics::default(),
                 load_balancing_metrics: LoadBalancingMetrics::default(),
             };
-            return ParallelResult {
-                data,
-                metrics,
-            };
+            return ParallelResult { data, metrics };
         }
 
         // Parallel sort for large datasets
@@ -719,10 +741,7 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
             load_balancing_metrics: LoadBalancingMetrics::default(),
         };
 
-        ParallelResult {
-            data,
-            metrics,
-        }
+        ParallelResult { data, metrics }
     }
 }
 
@@ -1090,40 +1109,61 @@ pub fn optimized_config(data_size: usize) -> ParallelConfig {
 }
 
 /// Concurrent pipeline for chaining multiple parallel operations
+///
+/// Accumulates `ParallelMetrics` from each operation (map/filter/sort) in `metrics_history`.
+/// This allows tracking performance characteristics across the entire pipeline chain.
 #[derive(Debug)]
 pub struct ParallelPipeline<T> {
     data: Vec<T>,
     config: ParallelConfig,
+    /// Accumulated metrics from all pipeline operations
+    metrics_history: Vec<ParallelMetrics>,
 }
 
 impl<T: Send + Sync + Clone + 'static> ParallelPipeline<T> {
     /// Create a new pipeline with initial data
+    ///
+    /// Initializes metrics history as empty; metrics are accumulated as operations are applied.
     pub fn new(data: Vec<T>, config: ParallelConfig) -> Self {
-        Self { data, config }
+        Self {
+            data,
+            config,
+            metrics_history: Vec::new(),
+        }
     }
 
     /// Apply a mapping operation in the pipeline
+    ///
+    /// Appends the operation's metrics to the metrics history before returning the next pipeline.
     pub fn map<U, F>(self, transform: F) -> ParallelPipeline<U>
     where
         U: Send + Sync + Clone + 'static,
         F: Fn(T) -> U + Send + Sync + 'static,
     {
         let result = self.data.into_iter().par_map(&self.config, transform);
+        let mut metrics_history = self.metrics_history;
+        metrics_history.push(result.metrics.clone());
         ParallelPipeline {
             data: result.data,
             config: self.config,
+            metrics_history,
         }
     }
 
     /// Apply a filtering operation in the pipeline
+    ///
+    /// Appends the operation's metrics to the metrics history before returning the next pipeline.
     pub fn filter<F>(self, predicate: F) -> ParallelPipeline<T>
     where
         F: Fn(&T) -> bool + Send + Sync + 'static,
     {
         let result = self.data.into_iter().par_filter(&self.config, predicate);
+        let mut metrics_history = self.metrics_history;
+        metrics_history.push(result.metrics.clone());
         ParallelPipeline {
             data: result.data,
             config: self.config,
+            metrics_history,
         }
     }
 
@@ -1148,14 +1188,19 @@ impl<T: Send + Sync + Clone + 'static> ParallelPipeline<T> {
     }
 
     /// Sort the data in the pipeline
+    ///
+    /// Appends the operation's metrics to the metrics history before returning the sorted pipeline.
     pub fn sort(self) -> ParallelPipeline<T>
     where
         T: Ord,
     {
         let result = self.data.into_iter().par_sort(&self.config);
+        let mut metrics_history = self.metrics_history;
+        metrics_history.push(result.metrics.clone());
         ParallelPipeline {
             data: result.data,
             config: self.config,
+            metrics_history,
         }
     }
 
@@ -1167,6 +1212,165 @@ impl<T: Send + Sync + Clone + 'static> ParallelPipeline<T> {
     /// Get the current data without consuming the pipeline
     pub fn get_data(&self) -> &[T] {
         &self.data
+    }
+
+    /// Get accumulated metrics from all pipeline operations without consuming the pipeline
+    ///
+    /// Returns a reference to the metrics history vector containing metrics from each
+    /// operation (map, filter, sort) applied in order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let pipeline = ParallelPipeline::new(vec![1, 2, 3, 4, 5], ParallelConfig::default());
+    /// let metrics = pipeline.with_metrics();
+    /// // metrics is empty at this point (no operations applied yet)
+    /// ```
+    pub fn with_metrics(&self) -> &[ParallelMetrics] {
+        &self.metrics_history
+    }
+
+    /// Get accumulated metrics from all pipeline operations without consuming the pipeline
+    ///
+    /// Alias for `with_metrics()` for convenience.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let pipeline = ParallelPipeline::new(vec![1, 2, 3, 4, 5], ParallelConfig::default());
+    /// let metrics = pipeline.metrics();
+    /// ```
+    pub fn metrics(&self) -> &[ParallelMetrics] {
+        self.with_metrics()
+    }
+
+    /// Consume the pipeline and return the accumulated metrics history
+    ///
+    /// Returns a `Vec<ParallelMetrics>` containing metrics from each operation in the order applied.
+    /// Use this method when you want to extract metrics alongside the pipeline's data via other means.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let pipeline = ParallelPipeline::new(vec![1, 2, 3, 4, 5], ParallelConfig::default())
+    ///     .map(|x| x * 2);
+    /// let metrics = pipeline.into_metrics();
+    /// // metrics contains exactly one entry from the map operation
+    /// ```
+    pub fn into_metrics(self) -> Vec<ParallelMetrics> {
+        self.metrics_history
+    }
+
+    /// Get an aggregate summary of all accumulated metrics
+    ///
+    /// Combines all metrics from the pipeline operations into a single summary metric
+    /// that represents the total performance characteristics:
+    /// - `total_time`: Sum of all operation times
+    /// - `thread_count`: Maximum threads used across any operation
+    /// - `throughput`: Average throughput across operations (or 0 if no operations)
+    /// - `memory_usage`: Sum of memory usage across all operations
+    /// - `efficiency`: Average efficiency across operations (or 1.0 if no operations)
+    /// - Work-stealing and load balancing metrics are summed from all operations
+    ///
+    /// Returns a default `ParallelMetrics` if metrics history is empty.
+    pub fn metrics_summary(&self) -> ParallelMetrics {
+        if self.metrics_history.is_empty() {
+            return ParallelMetrics::default();
+        }
+
+        let total_time = self.metrics_history.iter().map(|m| m.total_time).sum();
+        let thread_count = self
+            .metrics_history
+            .iter()
+            .map(|m| m.thread_count)
+            .max()
+            .unwrap();
+        let total_throughput: u64 = self.metrics_history.iter().map(|m| m.throughput).sum();
+        let throughput = total_throughput / (self.metrics_history.len() as u64).max(1);
+        let memory_usage = self.metrics_history.iter().map(|m| m.memory_usage).sum();
+        let avg_efficiency = self
+            .metrics_history
+            .iter()
+            .map(|m| m.efficiency)
+            .sum::<f64>()
+            / self.metrics_history.len() as f64;
+
+        // Aggregate work-stealing metrics
+        let tasks_stolen = self
+            .metrics_history
+            .iter()
+            .map(|m| m.work_stealing_metrics.tasks_stolen)
+            .sum();
+        let tasks_local = self
+            .metrics_history
+            .iter()
+            .map(|m| m.work_stealing_metrics.tasks_local)
+            .sum();
+        let total_tasks = tasks_stolen + tasks_local;
+        let stealing_efficiency = if total_tasks > 0 {
+            tasks_stolen as f64 / total_tasks as f64
+        } else {
+            0.0
+        };
+        let avg_load_imbalance = self
+            .metrics_history
+            .iter()
+            .map(|m| m.work_stealing_metrics.load_imbalance)
+            .sum::<f64>()
+            / self.metrics_history.len() as f64;
+
+        // Aggregate load balancing metrics
+        let avg_work_per_thread = self
+            .metrics_history
+            .iter()
+            .map(|m| m.load_balancing_metrics.avg_work_per_thread)
+            .sum::<f64>()
+            / self.metrics_history.len() as f64;
+        let work_distribution_std_dev = self
+            .metrics_history
+            .iter()
+            .map(|m| m.load_balancing_metrics.work_distribution_std_dev)
+            .sum::<f64>()
+            / self.metrics_history.len() as f64;
+        let max_thread_work = self
+            .metrics_history
+            .iter()
+            .map(|m| m.load_balancing_metrics.max_thread_work)
+            .max()
+            .unwrap();
+        let min_thread_work = self
+            .metrics_history
+            .iter()
+            .map(|m| m.load_balancing_metrics.min_thread_work)
+            .min()
+            .unwrap();
+        let avg_balancing_efficiency = self
+            .metrics_history
+            .iter()
+            .map(|m| m.load_balancing_metrics.balancing_efficiency)
+            .sum::<f64>()
+            / self.metrics_history.len() as f64;
+
+        ParallelMetrics {
+            total_time,
+            thread_count,
+            throughput,
+            memory_usage,
+            efficiency: avg_efficiency,
+            work_stealing_metrics: WorkStealingMetrics {
+                tasks_stolen,
+                tasks_local,
+                stealing_efficiency,
+                load_imbalance: avg_load_imbalance,
+            },
+            load_balancing_metrics: LoadBalancingMetrics {
+                avg_work_per_thread,
+                work_distribution_std_dev,
+                max_thread_work,
+                min_thread_work,
+                balancing_efficiency: avg_balancing_efficiency,
+            },
+        }
     }
 }
 
@@ -1294,5 +1498,233 @@ mod tests {
 
         let result = data.into_iter().par_reduce(&config, |a, b| a + b);
         assert_eq!(result.data, Some(15));
+    }
+
+    // Tests for ParallelPipeline metrics accumulation
+
+    #[test]
+    fn test_pipeline_new_empty_metrics() {
+        let data = vec![1, 2, 3, 4, 5];
+        let config = ParallelConfig::default();
+        let pipeline = ParallelPipeline::new(data, config);
+
+        let metrics = pipeline.with_metrics();
+        assert_eq!(metrics.len(), 0);
+    }
+
+    #[test]
+    fn test_pipeline_metrics_accessor() {
+        let data = vec![1, 2, 3, 4, 5];
+        let config = ParallelConfig::default();
+        let pipeline = ParallelPipeline::new(data, config.clone());
+
+        // Both accessors should return the same thing
+        let metrics_with = pipeline.with_metrics();
+        let pipeline2 = ParallelPipeline::new(vec![1, 2, 3, 4, 5], config);
+        let metrics_ref = pipeline2.metrics();
+
+        assert_eq!(metrics_with.len(), metrics_ref.len());
+    }
+
+    #[test]
+    fn test_pipeline_single_map_accumulates_metrics() {
+        let data = vec![1, 2, 3, 4, 5];
+        let config = ParallelConfig::default();
+        let pipeline = ParallelPipeline::new(data, config);
+
+        let pipeline_after_map = pipeline.map(|x| x * 2);
+        let metrics = pipeline_after_map.with_metrics();
+
+        // Should have exactly one metric entry from the map operation
+        assert_eq!(metrics.len(), 1);
+        assert!(metrics[0].total_time.as_millis() >= 0);
+        assert!(metrics[0].throughput >= 0);
+    }
+
+    #[test]
+    fn test_pipeline_chained_operations_accumulate_metrics() {
+        let data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let mut config = ParallelConfig::default();
+        config.min_parallel_size = 1; // Force parallel for small data
+
+        let pipeline = ParallelPipeline::new(data, config.clone());
+        let pipeline = pipeline.map(|x| x * 2); // First operation
+        let pipeline = pipeline.filter(|x| x % 4 == 0); // Second operation
+        let pipeline = pipeline.map(|x| x + 1); // Third operation
+
+        let metrics = pipeline.with_metrics();
+
+        // Should have exactly 3 metric entries
+        assert_eq!(metrics.len(), 3);
+
+        // All metrics should have some measurement
+        for metric in metrics {
+            assert!(metric.total_time.as_micros() > 0);
+        }
+    }
+
+    #[test]
+    fn test_pipeline_into_metrics_consumes_pipeline() {
+        let data = vec![1, 2, 3, 4, 5];
+        let config = ParallelConfig::default();
+        let pipeline = ParallelPipeline::new(data, config);
+        let pipeline = pipeline.map(|x| x * 2);
+
+        let metrics = pipeline.into_metrics();
+
+        // into_metrics consumes the pipeline and returns the metrics
+        assert_eq!(metrics.len(), 1);
+    }
+
+    #[test]
+    fn test_pipeline_sort_accumulates_metrics() {
+        let data = vec![5, 2, 8, 1, 9, 3];
+        let mut config = ParallelConfig::default();
+        config.min_parallel_size = 1;
+
+        let pipeline = ParallelPipeline::new(data, config);
+        let pipeline = pipeline.sort();
+
+        let metrics = pipeline.with_metrics();
+
+        // Should have exactly 1 metric entry from sort
+        assert_eq!(metrics.len(), 1);
+        assert_eq!(pipeline.execute(), vec![1, 2, 3, 5, 8, 9]);
+    }
+
+    #[test]
+    fn test_pipeline_metrics_summary_empty() {
+        let data = vec![1, 2, 3];
+        let config = ParallelConfig::default();
+        let pipeline = ParallelPipeline::new(data, config);
+
+        let summary = pipeline.metrics_summary();
+
+        // Empty pipeline should have default metrics
+        assert_eq!(summary.total_time.as_micros(), 0);
+        assert_eq!(summary.thread_count, 0);
+        assert_eq!(summary.throughput, 0);
+        assert_eq!(summary.memory_usage, 0);
+        assert_eq!(summary.efficiency, 0.0);
+    }
+
+    #[test]
+    fn test_pipeline_metrics_summary_aggregates() {
+        let data = vec![1, 2, 3, 4, 5];
+        let mut config = ParallelConfig::default();
+        config.min_parallel_size = 1;
+
+        let pipeline = ParallelPipeline::new(data, config);
+        let pipeline = pipeline.map(|x| x * 2);
+        let pipeline = pipeline.map(|x| x + 1);
+
+        let summary = pipeline.metrics_summary();
+
+        // Summary should aggregate metrics from both operations
+        assert!(summary.total_time.as_micros() > 0);
+        assert!(summary.throughput >= 0);
+        assert!(summary.efficiency > 0.0);
+        assert!(summary.memory_usage > 0);
+    }
+
+    #[test]
+    fn test_pipeline_metrics_summary_thread_count() {
+        let data = vec![1, 2, 3, 4, 5];
+        let mut config = ParallelConfig::default();
+        config.min_parallel_size = 1;
+
+        let pipeline = ParallelPipeline::new(data, config);
+        let pipeline = pipeline.map(|x| x * 2);
+        let pipeline = pipeline.filter(|x| x > &4);
+
+        let summary = pipeline.metrics_summary();
+
+        // Thread count should be the max from all operations
+        assert!(summary.thread_count >= 1);
+    }
+
+    #[test]
+    fn test_pipeline_complex_chain_preserves_data_and_metrics() {
+        let data: Vec<i32> = (1..=20).collect();
+        let mut config = ParallelConfig::default();
+        config.min_parallel_size = 1;
+
+        let pipeline = ParallelPipeline::new(data.clone(), config);
+        let pipeline = pipeline
+            .map(|x| x * 2)
+            .filter(|&x| x % 4 == 0)
+            .map(|x| x / 2);
+
+        let metrics_len = pipeline.with_metrics().len();
+        let final_data = pipeline.execute();
+
+        // Should have 3 operation metrics
+        assert_eq!(metrics_len, 3);
+
+        // Data should be correctly transformed
+        let expected: Vec<i32> = data
+            .iter()
+            .map(|&x| x * 2)
+            .filter(|&x| x % 4 == 0)
+            .map(|x| x / 2)
+            .collect();
+        assert_eq!(final_data, expected);
+    }
+
+    #[test]
+    fn test_pipeline_metrics_with_sort_and_filter() {
+        let data = vec![5, 2, 8, 1, 9, 3, 7, 4, 6];
+        let mut config = ParallelConfig::default();
+        config.min_parallel_size = 1;
+
+        let pipeline = ParallelPipeline::new(data, config);
+        let pipeline = pipeline.sort().filter(|&x| x > 3).map(|x| x * 10);
+
+        let metrics_len = pipeline.with_metrics().len();
+        let result = pipeline.execute();
+
+        // Should have 3 operations recorded
+        assert_eq!(metrics_len, 3);
+
+        // Result should be sorted and filtered
+        assert_eq!(result, vec![40, 50, 60, 70, 80, 90]);
+    }
+
+    #[test]
+    fn test_pipeline_metrics_summary_with_multiple_operations() {
+        let data = (1..=50).collect::<Vec<i32>>();
+        let mut config = ParallelConfig::default();
+        config.min_parallel_size = 1;
+
+        let pipeline = ParallelPipeline::new(data, config);
+        let pipeline = pipeline.map(|x| x * 2).map(|x| x + 1).map(|x| x / 2);
+
+        let summary = pipeline.metrics_summary();
+
+        // Summary should show aggregated values
+        assert!(summary.total_time.as_micros() > 0);
+        assert!(summary.throughput > 0 || summary.efficiency >= 0.0);
+    }
+
+    #[test]
+    fn test_pipeline_get_data_before_metrics() {
+        let data = vec![1, 2, 3, 4, 5];
+        let config = ParallelConfig::default();
+        let pipeline = ParallelPipeline::new(data.clone(), config);
+
+        // get_data should return the original data before any transformations
+        let current_data = pipeline.get_data();
+        assert_eq!(current_data, &data[..]);
+    }
+
+    #[test]
+    fn test_pipeline_get_data_after_map() {
+        let data = vec![1, 2, 3, 4, 5];
+        let config = ParallelConfig::default();
+        let pipeline = ParallelPipeline::new(data, config);
+        let pipeline = pipeline.map(|x| x * 2);
+
+        let current_data = pipeline.get_data();
+        assert_eq!(current_data, &[2, 4, 6, 8, 10]);
     }
 }

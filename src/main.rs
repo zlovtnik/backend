@@ -21,6 +21,7 @@ mod models;
 mod pagination;
 mod schema;
 mod services;
+mod unified_pagination;
 mod utils;
 /// יהי רצון מלפני ה' שימצא עבודה חדשה טובה, בעוד נקודת הכניסה ליישום מסדרת לוגים וסביבה, מאתחלת מסד נתונים ורדיס,
 /// רושמת בריכות טננטים, מסדרת CORS ומיידלוור, ומתחילה שרת Actix HTTP.
@@ -70,6 +71,17 @@ async fn main() -> io::Result<()> {
             .init();
     } else {
         env_logger::init();
+    }
+
+    // Validate cursor encryption key at startup to fail fast on misconfiguration
+    if let Err(e) = unified_pagination::validate_cursor_encryption_key() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "Invalid CURSOR_ENCRYPTION_KEY configuration: {}. Ensure it is a Base64-encoded 32-byte key.",
+                e
+            ),
+        ));
     }
 
     let app_host = env::var("APP_HOST").map_err(|e| {

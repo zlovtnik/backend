@@ -1,8 +1,13 @@
 //! # Functional Programming Performance Benchmarks
 //!
-//! This module provides comprehensive performance benchmarks for functional programming
-//! operations, comparing functional vs imperative approaches and measuring performance
-//! improvements in data processing speed, memory efficiency, and throughput.
+//! Comprehensive performance benchmarks for functional patterns used in the RCS service layer.
+//! Compares functional vs imperative approaches to measure:
+//! - Validation performance (old loops vs functional composition)
+//! - QueryReader overhead (expected: zero-cost abstraction)
+//! - Memoization cache efficiency and hit rates
+//! - Iterator-based vs imperative data processing
+//! - Error handling patterns
+//! - Parallel processing capabilities
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use itertools::Itertools;
@@ -442,6 +447,385 @@ pub fn benchmark_error_handling(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark: Validation performance - Functional composition vs imperative loops
+///
+/// This benchmark compares the performance of:
+/// - Functional validator pattern: Composable validation rules
+/// - Imperative loops: Traditional nested validation loops
+pub fn benchmark_validation_performance(c: &mut Criterion) {
+    let mut group = c.benchmark_group("validation");
+    group.measurement_time(Duration::from_secs(5));
+
+    // Test DTO structure for validation
+    #[derive(Clone)]
+    struct PersonDTO {
+        name: String,
+        email: String,
+        age: u32,
+    }
+
+    let test_cases = vec![
+        PersonDTO {
+            name: "John Doe".to_string(),
+            email: "john@example.com".to_string(),
+            age: 30,
+        },
+        PersonDTO {
+            name: "Jane Smith".to_string(),
+            email: "jane@example.com".to_string(),
+            age: 25,
+        },
+        PersonDTO {
+            name: "Bob Johnson".to_string(),
+            email: "bob@example.com".to_string(),
+            age: 35,
+        },
+    ];
+
+    for size in [10, 100, 1000].iter() {
+        let test_data: Vec<PersonDTO> = (0..*size)
+            .map(|i| test_cases[i % test_cases.len()].clone())
+            .collect();
+
+        // Functional approach: Validator combinator pattern
+        group.bench_with_input(
+            BenchmarkId::new("functional_validator", size),
+            &test_data,
+            |b, data| {
+                b.iter(|| {
+                    let validated_count = data
+                        .iter()
+                        .filter(|dto| {
+                            // Functional validation rules chained
+                            !dto.name.trim().is_empty()
+                                && dto.name.len() <= 100
+                                && !dto.email.is_empty()
+                                && dto.email.contains('@')
+                                && dto.email.len() <= 255
+                                && dto.age >= 18
+                                && dto.age <= 120
+                        })
+                        .count();
+                    black_box(validated_count)
+                })
+            },
+        );
+
+        // Imperative approach: Nested validation loops
+        group.bench_with_input(
+            BenchmarkId::new("imperative_loops", size),
+            &test_data,
+            |b, data| {
+                b.iter(|| {
+                    let mut validated_count = 0;
+
+                    for dto in data.iter() {
+                        // Name validation
+                        if dto.name.trim().is_empty() || dto.name.len() > 100 {
+                            continue;
+                        }
+
+                        // Email validation
+                        if dto.email.is_empty() || !dto.email.contains('@') || dto.email.len() > 255
+                        {
+                            continue;
+                        }
+
+                        // Age validation
+                        if dto.age < 18 || dto.age > 120 {
+                            continue;
+                        }
+
+                        validated_count += 1;
+                    }
+
+                    black_box(validated_count)
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmark: QueryReader monad overhead - Testing zero-cost abstraction claim
+///
+/// This benchmark measures the overhead of the QueryReader pattern by comparing:
+/// - Direct function calls
+/// - QueryReader wrapped calls (should be zero-cost due to inlining)
+pub fn benchmark_query_reader_overhead(c: &mut Criterion) {
+    let mut group = c.benchmark_group("query_reader_overhead");
+
+    // Simulate a simple query operation
+    fn simulate_query(id: u32) -> u32 {
+        id * 2 + 10
+    }
+
+    for size in [1000, 10000, 100000].iter() {
+        // Direct function calls - baseline
+        group.bench_with_input(BenchmarkId::new("direct_calls", size), size, |b, &size| {
+            b.iter(|| {
+                let results: Vec<u32> = (0..size).map(simulate_query).collect();
+                black_box(results)
+            })
+        });
+
+        // Simulated QueryReader pattern with closure wrapping
+        group.bench_with_input(
+            BenchmarkId::new("query_reader_wrapped", size),
+            size,
+            |b, &size| {
+                b.iter(|| {
+                    // Simulate QueryReader-like behavior
+                    let query = Box::new(|id: u32| simulate_query(id));
+                    let results: Vec<u32> = (0..size).map(|i| query(i)).collect();
+                    black_box(results)
+                })
+            },
+        );
+
+        // Chained QueryReader operations
+        group.bench_with_input(
+            BenchmarkId::new("query_reader_chained", size),
+            size,
+            |b, &size| {
+                b.iter(|| {
+                    let results: Vec<u32> = (0..size)
+                        .map(|id| {
+                            // Simulating: QueryReader::new(|conn| query(id))
+                            //     .map(|result| result * 2)
+                            //     .run(conn)
+                            let step1 = simulate_query(id);
+                            let step2 = step1 * 2;
+                            step2
+                        })
+                        .collect();
+                    black_box(results)
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmark: Memoization cache efficiency
+///
+/// This benchmark tests the performance benefits of memoization by measuring:
+/// - Expensive computation without cache
+/// - With memoization (high hit rate)
+/// - Cache lookup overhead
+pub fn benchmark_memoization_efficiency(c: &mut Criterion) {
+    let mut group = c.benchmark_group("memoization");
+    group.measurement_time(Duration::from_secs(5));
+
+    // Simulate an expensive computation
+    fn expensive_computation(n: u32) -> u64 {
+        let mut result: u64 = 1;
+        for i in 1..=n as u64 {
+            result = result.wrapping_mul(i);
+        }
+        result
+    }
+
+    for cache_hit_rate in [0.0, 0.5, 0.9].iter() {
+        // Generate test sequence with specified hit rate
+        let test_size = 1000;
+        let cache_size = ((test_size as f64) * cache_hit_rate) as usize;
+        let mut sequence: Vec<u32> = Vec::new();
+
+        // Fill with repeated values to create cache hits
+        for i in 0..cache_size {
+            sequence.push((i % 20) as u32 + 1);
+        }
+        // Fill remaining with new values
+        for i in cache_size..test_size {
+            sequence.push(((i - cache_size) as u32) + 20);
+        }
+
+        // Without memoization - pure computation
+        group.bench_with_input(
+            BenchmarkId::new("no_cache", format!("{:.0}%_hits", cache_hit_rate * 100.0)),
+            &sequence,
+            |b, sequence| {
+                b.iter(|| {
+                    let results: Vec<u64> =
+                        sequence.iter().map(|&n| expensive_computation(n)).collect();
+                    black_box(results)
+                })
+            },
+        );
+
+        // With memoization using simple HashMap
+        group.bench_with_input(
+            BenchmarkId::new("with_cache", format!("{:.0}%_hits", cache_hit_rate * 100.0)),
+            &sequence,
+            |b, sequence| {
+                b.iter(|| {
+                    use std::collections::HashMap;
+
+                    let mut cache: HashMap<u32, u64> = HashMap::new();
+                    let results: Vec<u64> = sequence
+                        .iter()
+                        .map(|&n| *cache.entry(n).or_insert_with(|| expensive_computation(n)))
+                        .collect();
+                    black_box(results)
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmark: Validation rule count impact
+///
+/// Tests how validation performance scales with the number of rules
+pub fn benchmark_validation_rule_scaling(c: &mut Criterion) {
+    let mut group = c.benchmark_group("validation_rule_scaling");
+
+    #[derive(Clone)]
+    struct TestData {
+        field1: String,
+        field2: String,
+        field3: u32,
+        field4: String,
+        field5: String,
+        field6: u32,
+    }
+
+    let test_data = TestData {
+        field1: "test".to_string(),
+        field2: "test@example.com".to_string(),
+        field3: 25,
+        field4: "valid".to_string(),
+        field5: "data".to_string(),
+        field6: 100,
+    };
+
+    for rule_count in [1, 3, 5, 10].iter() {
+        let data_vec = vec![test_data.clone(); 100];
+
+        // Functional: Direct predicate evaluation
+        group.bench_with_input(
+            BenchmarkId::new("functional_rules", rule_count),
+            &data_vec,
+            |b, data| {
+                b.iter(|| {
+                    let validated = data
+                        .iter()
+                        .filter(|d| {
+                            // Simulate rule_count validation rules
+                            let mut valid = true;
+                            for _ in 0..*rule_count {
+                                valid = valid && !d.field1.is_empty() && d.field3 > 0;
+                            }
+                            valid
+                        })
+                        .count();
+                    black_box(validated)
+                })
+            },
+        );
+
+        // Imperative: Explicit loop with multiple checks
+        group.bench_with_input(
+            BenchmarkId::new("imperative_rules", rule_count),
+            &data_vec,
+            |b, data| {
+                b.iter(|| {
+                    let mut validated = 0;
+                    for d in data.iter() {
+                        let mut valid = true;
+                        for _ in 0..*rule_count {
+                            if d.field1.is_empty() || d.field3 == 0 {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        if valid {
+                            validated += 1;
+                        }
+                    }
+                    black_box(validated)
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmark: Error propagation performance
+///
+/// Compares error handling patterns through functional chains vs imperative error checks
+pub fn benchmark_error_propagation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("error_propagation");
+
+    for size in [1000, 5000, 10000].iter() {
+        let data: Vec<i32> = (0..*size).collect();
+
+        // Functional: Result chaining with ?
+        group.bench_with_input(
+            BenchmarkId::new("functional_result_chain", size),
+            &data,
+            |b, data| {
+                b.iter(|| {
+                    let result: Result<Vec<i32>, &str> = (|| {
+                        let step1: Vec<i32> = data.iter().map(|x| x * 2).collect();
+                        let step2: Vec<i32> = step1.iter().filter(|&&x| x > 100).copied().collect();
+                        let step3: Vec<i32> = step2.iter().map(|x| x + 50).collect();
+
+                        if step3.is_empty() {
+                            Err("Empty result set")
+                        } else {
+                            Ok(step3)
+                        }
+                    })();
+                    black_box(result)
+                })
+            },
+        );
+
+        // Imperative: Explicit error checks
+        group.bench_with_input(
+            BenchmarkId::new("imperative_error_checks", size),
+            &data,
+            |b, data| {
+                b.iter(|| {
+                    let result: Result<Vec<i32>, &str> = {
+                        let mut step1 = Vec::new();
+                        for x in data {
+                            step1.push(x * 2);
+                        }
+
+                        let mut step2 = Vec::new();
+                        for x in &step1 {
+                            if *x > 100 {
+                                step2.push(*x);
+                            }
+                        }
+
+                        let mut step3 = Vec::new();
+                        for x in &step2 {
+                            step3.push(x + 50);
+                        }
+
+                        if step3.is_empty() {
+                            Err("Empty result set")
+                        } else {
+                            Ok(step3)
+                        }
+                    };
+                    black_box(result)
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_data_filtering,
@@ -451,7 +835,12 @@ criterion_group!(
     benchmark_memory_efficiency,
     benchmark_iterator_composition,
     benchmark_grouping_aggregation,
-    benchmark_error_handling
+    benchmark_error_handling,
+    benchmark_validation_performance,
+    benchmark_query_reader_overhead,
+    benchmark_memoization_efficiency,
+    benchmark_validation_rule_scaling,
+    benchmark_error_propagation
 );
 
 criterion_main!(benches);

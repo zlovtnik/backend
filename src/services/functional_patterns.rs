@@ -74,11 +74,10 @@ impl<T> QueryReader<T> {
     {
         QueryReader::new(move |conn| {
             conn.transaction::<T, diesel::result::Error, _>(|conn| {
-                self.run(conn)
-                    .map_err(|e| {
-                        log::error!("Transaction operation failed, rolling back: {}", e);
-                        diesel::result::Error::RollbackTransaction
-                    })
+                self.run(conn).map_err(|e| {
+                    log::error!("Transaction operation failed, rolling back: {}", e);
+                    diesel::result::Error::RollbackTransaction
+                })
             })
             .map_err(|e| ServiceError::internal_server_error(format!("Transaction failed: {}", e)))
         })

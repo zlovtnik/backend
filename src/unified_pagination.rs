@@ -2,32 +2,64 @@
 //!
 //! This module provides a unified interface for cursor-based pagination that works
 //! across different data sources (database, in-memory, streaming) and cursor types.
+//!
+//! # CURSOR_ENCRYPTION_KEY Configuration
+//!
+//! The cursor encryption key must be set via the `CURSOR_ENCRYPTION_KEY` environment variable.
+//!
+//! ## Key Requirements
+//! - Format: Base64-encoded 32-byte (256-bit) key
+//! - Example: Generate with `openssl rand -base64 32`
+//! - The key is used for AES-256-GCM authenticated encryption of cursor values
+//!
+//! ## Security Practices
+//! - Store the key securely (e.g., in a secrets manager, not in version control)
+//! - Rotate keys periodically by:
+//!   1. Issuing new cursors with the new key
+//!   2. Maintaining old keys temporarily for backward compatibility
+//!   3. Gradually transitioning clients to new cursors
+//! - Use different keys per environment (dev, staging, production)
+//! - Never log or expose the key in error messages or logs
+//!
+//! ## Startup Validation
+//! This key is validated during application startup via `validate_cursor_encryption_key()`,
+//! which is called in `main()` to fail fast on misconfiguration. This prevents runtime
+//! panics when cursors are first used.
 
-use std::fmt;
-use aes_gcm::{Aes256Gcm, Key, Nonce};
 use aes_gcm::aead::{Aead, KeyInit};
-use rand::RngCore;
-use once_cell::sync::Lazy;
+use aes_gcm::{Aes256Gcm, Key, Nonce};
 use base64::Engine;
+use once_cell::sync::Lazy;
+use rand::RngCore;
+use std::fmt;
 
-static CURSOR_KEY: Lazy<Result<Key<Aes256Gcm>, CursorError>> = Lazy::new(|| {
-    match std::env::var("CURSOR_ENCRYPTION_KEY") {
+static CURSOR_KEY: Lazy<Result<Key<Aes256Gcm>, CursorError>> =
+    Lazy::new(|| match std::env::var("CURSOR_ENCRYPTION_KEY") {
         Ok(key_b64) => {
-            let key_bytes = base64::engine::general_purpose::STANDARD.decode(&key_b64)
+            let key_bytes = base64::engine::general_purpose::STANDARD
+                .decode(&key_b64)
                 .map_err(|e| CursorError::KeyLoad(format!("Base64 decode failed: {}", e)))?;
             if key_bytes.len() != 32 {
                 return Err(CursorError::KeyLoad("Key must be 32 bytes".to_string()));
             }
             Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes))
         }
-        Err(_) => Err(CursorError::KeyLoad("CURSOR_ENCRYPTION_KEY not set".to_string())),
-    }
-});
+        Err(_) => Err(CursorError::KeyLoad(
+            "CURSOR_ENCRYPTION_KEY not set".to_string(),
+        )),
+    });
 
 /// Represents a cursor that can be serialized and deserialized
 pub trait Cursor: Clone + fmt::Debug + Send + Sync {
-    /// Encode the cursor into a string representation
-    fn encode(&self) -> String;
+    /// Encode the cursor into an opaque, authenticated string representation.
+    ///
+    /// Returns an error instead of panicking on misconfiguration or crypto failures.
+    ///
+    /// Error cases include (but are not limited to):
+    /// - `CursorError::KeyLoad` when the `CURSOR_ENCRYPTION_KEY` env var is missing,
+    ///   not valid Base64, or not 32 bytes after decoding.
+    /// - `CursorError::Encryption` for failures during AES-GCM encryption.
+    fn encode(&self) -> Result<String, CursorError>;
 
     /// Decode a cursor from its string representation
     fn decode(encoded: &str) -> Result<Self, CursorError>;
@@ -92,7 +124,8 @@ pub mod cursor_encoding {
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         // Encrypt the data
-        let ciphertext = cipher.encrypt(nonce, data.as_bytes())
+        let ciphertext = cipher
+            .encrypt(nonce, data.as_bytes())
             .map_err(|e| CursorError::Encryption(format!("Encryption failed: {:?}", e)))?;
 
         // Combine nonce + ciphertext (which includes tag)
@@ -112,10 +145,12 @@ pub mod cursor_encoding {
         let cipher = Aes256Gcm::new(key);
 
         // Base64 decode
-        let combined = general_purpose::URL_SAFE_NO_PAD.decode(encoded)
+        let combined = general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded)
             .map_err(CursorError::Base64Decode)?;
 
-        if combined.len() < 12 + 16 { // nonce + min tag
+        if combined.len() < 12 + 16 {
+            // nonce + min tag
             return Err(CursorError::InvalidFormat("Cursor too short".to_string()));
         }
 
@@ -126,17 +161,73 @@ pub mod cursor_encoding {
         let nonce = Nonce::from_slice(nonce_bytes);
 
         // Decrypt
-        let plaintext = cipher.decrypt(nonce, ciphertext)
-            .map_err(|_| CursorError::Decryption("Authentication or decryption failed".to_string()))?;
+        let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|_| {
+            CursorError::Decryption("Authentication or decryption failed".to_string())
+        })?;
 
         String::from_utf8(plaintext)
             .map_err(|_| CursorError::InvalidFormat("Invalid UTF-8 in decrypted data".to_string()))
     }
 
-    /// Validate that a cursor string is properly formatted (basic check)
+    /// Validate that a cursor string is properly formatted (lightweight format-only check)
+    ///
+    /// This function performs a lightweight format validation without performing
+    /// authenticated decryption. It checks:
+    /// - Base64 (URL-safe) decodability
+    /// - Minimum decoded length (nonce 12 bytes + ciphertext/tag at least 16 bytes)
+    ///
+    /// **Note:** This function does NOT verify authenticity. It only checks that the
+    /// cursor string appears to be a valid encrypted format. For full validation
+    /// (including authentication verification), use `decode_opaque()`.
+    ///
+    /// # Cost
+    /// - Low: Base64 decode only, no AES-GCM decryption
+    /// - Safe from DoS: No expensive cryptographic operations
+    ///
+    /// # Returns
+    /// `true` if the cursor passes format checks; `false` otherwise.
     pub fn validate_cursor_format(cursor: &str) -> bool {
-        // Decode and check if it decrypts successfully
-        decode_opaque(cursor).is_ok()
+        // Lightweight base64 decode and length check
+        let combined = match general_purpose::URL_SAFE_NO_PAD.decode(cursor) {
+            Ok(decoded) => decoded,
+            Err(_) => return false, // Invalid base64
+        };
+
+        // Check minimum length: nonce (12) + authenticated tag (16) + at least empty ciphertext
+        if combined.len() < 12 + 16 {
+            return false;
+        }
+
+        true
+    }
+
+    /// Validate and decrypt a cursor string, verifying both format and authenticity
+    ///
+    /// This function performs full authenticated decryption using AES-256-GCM.
+    /// It should be used when you need to ensure the cursor is authentic and not tampered with.
+    ///
+    /// **Cost:** High - performs authenticated decryption (AES-GCM)
+    /// **DoS Risk:** Moderate - callers should apply rate limiting if this is called
+    /// on untrusted input
+    ///
+    /// # Returns
+    /// The decrypted cursor data if successful; otherwise an error describing the failure.
+    pub fn validate_and_decrypt_cursor(encoded: &str) -> Result<String, CursorError> {
+        decode_opaque(encoded)
+    }
+}
+
+/// Performs a startup-time validation that the cursor encryption key is correctly configured.
+///
+/// This should be invoked during application startup to fail fast if
+/// `CURSOR_ENCRYPTION_KEY` is missing or invalid, avoiding panics later.
+///
+/// Returns `Ok(())` when the key is present and valid; otherwise returns the
+/// corresponding `CursorError::KeyLoad` describing the problem.
+pub fn validate_cursor_encryption_key() -> Result<(), CursorError> {
+    match CURSOR_KEY.as_ref() {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e.clone()),
     }
 }
 
@@ -145,13 +236,22 @@ pub mod cursor_validation {
     use super::*;
 
     /// Validates a cursor and returns detailed validation result
+    ///
+    /// This function first performs a lightweight format check before attempting
+    /// to decode and decrypt the cursor. This reduces DoS surface by avoiding
+    /// expensive decryption on obviously malformed input.
+    ///
+    /// Steps:
+    /// 1. Format check: Base64 validity and length (low cost)
+    /// 2. Full decryption: Authenticate and decrypt the cursor (high cost)
+    /// 3. Type validation: Ensure the cursor type matches `C`
     pub fn validate_cursor<C: Cursor>(encoded_cursor: &str) -> CursorValidationResult<C> {
-        // First check basic format
+        // First check basic format (lightweight, no decryption)
         if !cursor_encoding::validate_cursor_format(encoded_cursor) {
             return CursorValidationResult::InvalidFormat;
         }
 
-        // Try to decode the cursor
+        // Try to decode the cursor (full decryption happens here)
         match C::decode(encoded_cursor) {
             Ok(cursor) => {
                 // Check for additional validation rules
@@ -220,9 +320,9 @@ impl<T: Into<i64> + TryFrom<i64> + Clone + fmt::Debug + Send + Sync> IdCursor<T>
 impl<T: Into<i64> + TryFrom<i64> + Clone + fmt::Debug + fmt::Display + Send + Sync> Cursor
     for IdCursor<T>
 {
-    fn encode(&self) -> String {
+    fn encode(&self) -> Result<String, CursorError> {
         let data = format!("id:{}", self.id().into());
-        cursor_encoding::encode_opaque(&data).unwrap()
+        cursor_encoding::encode_opaque(&data)
     }
 
     fn decode(encoded: &str) -> Result<Self, CursorError> {
@@ -273,9 +373,9 @@ impl PageCursor {
 }
 
 impl Cursor for PageCursor {
-    fn encode(&self) -> String {
+    fn encode(&self) -> Result<String, CursorError> {
         let data = format!("page:{}", self.page());
-        cursor_encoding::encode_opaque(&data).unwrap()
+        cursor_encoding::encode_opaque(&data)
     }
 
     fn decode(encoded: &str) -> Result<Self, CursorError> {
@@ -413,7 +513,14 @@ mod tests {
     fn init_test_key() {
         INIT.call_once(|| {
             if env::var("CURSOR_ENCRYPTION_KEY").is_err() {
-                env::set_var("CURSOR_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+                // WARNING: Test-only key - DO NOT USE IN PRODUCTION
+                // This key is for unit tests only. Production deployments must use a securely generated
+                // 32-byte key stored in a secrets manager (e.g., CURSOR_ENCRYPTION_KEY=<random base64>).
+                // Using this test key in production is a serious security vulnerability.
+                env::set_var(
+                    "CURSOR_ENCRYPTION_KEY",
+                    "dGVzdC1rZXktZG8tbm90LXVzZS1pbi1wcm9kdWN0aW9u",
+                );
             }
         });
     }
@@ -422,7 +529,7 @@ mod tests {
     fn test_id_cursor_encoding() {
         init_test_key();
         let cursor = IdCursor::new(42i32);
-        let encoded = cursor.encode();
+        let encoded = cursor.encode().unwrap();
 
         // Encoded cursor should be opaque (not contain readable "42")
         assert!(!encoded.contains("42"));
@@ -436,7 +543,7 @@ mod tests {
     fn test_page_cursor_encoding() {
         init_test_key();
         let cursor = PageCursor::new(10);
-        let encoded = cursor.encode();
+        let encoded = cursor.encode().unwrap();
 
         // Encoded cursor should be opaque
         assert!(!encoded.contains("10"));
@@ -468,7 +575,7 @@ mod tests {
         assert!(IdCursor::<i32>::decode("aW52YWxpZA").is_err()); // "invalid" encoded
 
         // Test wrong cursor type
-        let page_encoded = PageCursor::new(1).encode();
+        let page_encoded = PageCursor::new(1).encode().unwrap();
         assert!(IdCursor::<i32>::decode(&page_encoded).is_err());
     }
 
@@ -476,7 +583,7 @@ mod tests {
     fn test_cursor_validation() {
         init_test_key();
         let cursor = PageCursor::new(5);
-        let encoded = cursor.encode();
+        let encoded = cursor.encode().unwrap();
 
         // Test valid cursor
         let validation_result = cursor_validation::validate_cursor::<PageCursor>(&encoded);
@@ -488,7 +595,7 @@ mod tests {
         assert!(!invalid_result.is_valid());
 
         // Test wrong cursor type
-        let page_encoded = PageCursor::new(1).encode();
+        let page_encoded = PageCursor::new(1).encode().unwrap();
         let id_validation = cursor_validation::validate_cursor::<IdCursor<i64>>(&page_encoded);
         assert!(!id_validation.is_valid());
     }
@@ -496,10 +603,26 @@ mod tests {
     #[test]
     fn test_cursor_format_validation() {
         init_test_key();
-        let valid_cursor = PageCursor::new(1).encode();
+        let valid_cursor = PageCursor::new(1).encode().unwrap();
         assert!(cursor_encoding::validate_cursor_format(&valid_cursor));
 
         assert!(!cursor_encoding::validate_cursor_format("invalid"));
         assert!(!cursor_encoding::validate_cursor_format(""));
+    }
+
+    #[test]
+    fn test_id_cursor_with_start_value_round_trip() {
+        init_test_key();
+
+        let cursor = IdCursor::with_start_value(42i32, 1);
+        let encoded = cursor.encode().unwrap();
+        let decoded = IdCursor::<i32>::decode(&encoded).unwrap();
+
+        assert_eq!(decoded.id(), 42);
+        assert_eq!(decoded.start_value(), 1);
+        assert!(!decoded.is_start());
+
+        let start_cursor = IdCursor::with_start_value(1i32, 1);
+        assert!(start_cursor.is_start());
     }
 }

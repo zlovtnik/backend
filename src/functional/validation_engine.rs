@@ -1283,7 +1283,9 @@ mod tests {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert_eq!(error.code, "MISSING_DEPENDENT_FIELD");
-        assert!(error.message.contains("If password is present, password_confirm must also be present"));
+        assert!(error
+            .message
+            .contains("If password is present, password_confirm must also be present"));
     }
 
     #[test]
@@ -1328,7 +1330,9 @@ mod tests {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert_eq!(error.code, "MUTUALLY_EXCLUSIVE_FIELDS");
-        assert!(error.message.contains("Multiple mutually exclusive fields are present"));
+        assert!(error
+            .message
+            .contains("Multiple mutually exclusive fields are present"));
     }
 
     #[test]
@@ -1372,7 +1376,9 @@ mod tests {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert_eq!(error.code, "EXACTLY_ONE_FIELD_REQUIRED");
-        assert!(error.message.contains("Exactly one of the specified fields must be present"));
+        assert!(error
+            .message
+            .contains("Exactly one of the specified fields must be present"));
     }
 
     #[test]
@@ -1432,7 +1438,9 @@ mod tests {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert_eq!(error.code, "ALL_OR_NONE_FIELDS");
-        assert!(error.message.contains("Either all fields in the group must be present, or none"));
+        assert!(error
+            .message
+            .contains("Either all fields in the group must be present, or none"));
     }
 
     #[test]
@@ -1458,7 +1466,9 @@ mod tests {
 
     #[test]
     fn test_compare_fields_valid_string_equality() {
-        let rule = compare_fields("password", "password_confirm", |a: &String, b: &String| a == b);
+        let rule = compare_fields("password", "password_confirm", |a: &String, b: &String| {
+            a == b
+        });
         let mut data = HashMap::new();
         data.insert("password".to_string(), "secret123".to_string());
         data.insert("password_confirm".to_string(), "secret123".to_string());
@@ -1469,7 +1479,9 @@ mod tests {
 
     #[test]
     fn test_compare_fields_invalid_string_inequality() {
-        let rule = compare_fields("password", "password_confirm", |a: &String, b: &String| a == b);
+        let rule = compare_fields("password", "password_confirm", |a: &String, b: &String| {
+            a == b
+        });
         let mut data = HashMap::new();
         data.insert("password".to_string(), "secret123".to_string());
         data.insert("password_confirm".to_string(), "different".to_string());
@@ -1478,12 +1490,16 @@ mod tests {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert_eq!(error.code, "FIELD_COMPARISON_FAILED");
-        assert!(error.message.contains("Field password does not satisfy comparison with password_confirm"));
+        assert!(error
+            .message
+            .contains("Field password does not satisfy comparison with password_confirm"));
     }
 
     #[test]
     fn test_compare_fields_valid_numeric_comparison() {
-        let rule = compare_fields("start_date", "end_date", |start: &i64, end: &i64| start <= end);
+        let rule = compare_fields("start_date", "end_date", |start: &i64, end: &i64| {
+            start <= end
+        });
         let mut data = HashMap::new();
         data.insert("start_date".to_string(), 1000i64);
         data.insert("end_date".to_string(), 2000i64);
@@ -1494,7 +1510,9 @@ mod tests {
 
     #[test]
     fn test_compare_fields_invalid_numeric_comparison() {
-        let rule = compare_fields("start_date", "end_date", |start: &i64, end: &i64| start <= end);
+        let rule = compare_fields("start_date", "end_date", |start: &i64, end: &i64| {
+            start <= end
+        });
         let mut data = HashMap::new();
         data.insert("start_date".to_string(), 2000i64);
         data.insert("end_date".to_string(), 1000i64);
@@ -1527,7 +1545,9 @@ mod tests {
 
     #[test]
     fn test_compare_fields_edge_case_empty_strings() {
-        let rule = compare_fields("field1", "field2", |a: &String, b: &String| a.len() == b.len());
+        let rule = compare_fields("field1", "field2", |a: &String, b: &String| {
+            a.len() == b.len()
+        });
         let mut data = HashMap::new();
         data.insert("field1".to_string(), "".to_string());
         data.insert("field2".to_string(), "".to_string());

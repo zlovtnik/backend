@@ -122,9 +122,17 @@ impl<T: Clone> ImmutableRef<T> {
 ///
 /// This implements a persistent vector data structure that shares
 /// unchanged elements between versions.
-#[derive(Clone, Debug)]
-pub struct PersistentVector<T: Clone> {
+#[derive(Clone)]
+pub struct PersistentVector<T> {
     root: Option<Arc<im::Vector<T>>>,
+}
+
+impl<T: std::fmt::Debug + Clone> std::fmt::Debug for PersistentVector<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PersistentVector")
+            .field("root", &self.root)
+            .finish()
+    }
 }
 
 impl<T: Clone> PersistentVector<T> {
@@ -305,12 +313,8 @@ impl<T: Clone> PersistentVector<T> {
     /// let sum: i32 = pv.iter().sum();
     /// assert_eq!(sum, 6);
     /// ```
-    pub fn iter(&self) -> Box<dyn Iterator<Item = &T> + '_> {
-        if let Some(vec) = self.root.as_ref() {
-            Box::new(vec.iter())
-        } else {
-            Box::new(std::iter::empty::<&T>())
-        }
+    pub fn iter(&self) -> impl Iterator<Item = &T> + '_ {
+        self.root.as_ref().into_iter().flat_map(|vec| vec.iter())
     }
 }
 
@@ -332,9 +336,27 @@ impl<T: Clone> Default for PersistentVector<T> {
 ///
 /// This implements a persistent hash map that shares unchanged entries
 /// between versions while maintaining immutability.
-#[derive(Clone, Debug)]
-pub struct PersistentHashMap<K: std::hash::Hash + std::cmp::Eq, V> {
+#[derive(Clone)]
+pub struct PersistentHashMap<K, V> {
     root: Option<Arc<im::HashMap<K, V>>>,
+}
+
+struct PersistentHashMapEntriesDebug<'a, K, V> {
+    entries: &'a Option<Arc<im::HashMap<K, V>>>,
+}
+
+impl<'a, K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug
+    for PersistentHashMapEntriesDebug<'a, K, V>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut map = f.debug_map();
+        if let Some(root) = self.entries.as_ref() {
+            for (key, value) in root.iter() {
+                map.entry(key, value);
+            }
+        }
+        map.finish()
+    }
 }
 
 impl<K: std::hash::Hash + std::cmp::Eq, V> PersistentHashMap<K, V>
@@ -518,9 +540,22 @@ where
     }
 }
 
-impl<K: std::hash::Hash + std::cmp::Eq, V> Default for PersistentHashMap<K, V>
+impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for PersistentHashMap<K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PersistentHashMap")
+            .field(
+                "root",
+                &PersistentHashMapEntriesDebug {
+                    entries: &self.root,
+                },
+            )
+            .finish()
+    }
+}
+
+impl<K, V> Default for PersistentHashMap<K, V>
 where
-    K: Clone + Eq + std::hash::Hash,
+    K: Clone + std::hash::Hash + Eq,
     V: Clone,
 {
     /// Constructs a default empty `PersistentHashMap`.
@@ -532,7 +567,7 @@ where
     /// assert!(map.is_empty());
     /// ```
     fn default() -> Self {
-        Self::new()
+        Self { root: None }
     }
 }
 
@@ -640,7 +675,6 @@ impl SnapshotHistory {
 
         // Remove oldest automatic snapshots if over limit
         if !is_named && auto_count > self.max_auto_snapshots {
-            let to_remove = auto_count - self.max_auto_snapshots;
             self.snapshots.retain(|s| {
                 s.name.is_some() || {
                     // Keep the newest automatic snapshots

@@ -1026,7 +1026,7 @@ where
         let pool = self.pool.as_ref().ok_or("No database pool configured")?;
 
         // Get a connection from the pool
-        let conn = pool
+        let _conn = pool
             .get()
             .map_err(|e| format!("Failed to get database connection: {}", e))?;
 
