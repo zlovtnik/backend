@@ -144,4 +144,3 @@ fn mask_redis_url_functional(input: &str) -> String {
         .map(mask_url)
         .unwrap_or_else(|| input.to_string())
 }
-

@@ -23,6 +23,7 @@ pub struct Page<T> {
     pub page_size: i64,
     pub total_elements: Option<i64>, // Made optional for performance - counts may be omitted
     pub next_cursor: Option<i32>,
+    pub previous_cursor: Option<i32>,
 }
 impl<T> Page<T> {
     /// Create a `Page<T>` carrying a message, items, cursor, and pagination metadata.
@@ -30,13 +31,14 @@ impl<T> Page<T> {
     /// # Examples
     ///
     /// ```
-    /// let page = Page::new("ok", vec![1, 2, 3], 0, 10, Some(3_i64), Some(1));
+    /// let page = Page::new("ok", vec![1, 2, 3], 0, 10, Some(3_i64), Some(1), None);
     /// assert_eq!(page.message, "ok");
     /// assert_eq!(page.data, vec![1, 2, 3]);
     /// assert_eq!(page.current_cursor, 0);
     /// assert_eq!(page.page_size, 10);
     /// assert_eq!(page.total_elements, Some(3_i64));
     /// assert_eq!(page.next_cursor, Some(1));
+    /// assert_eq!(page.previous_cursor, None);
     /// ```
     pub fn new(
         message: &str,
@@ -45,6 +47,7 @@ impl<T> Page<T> {
         page_size: i64,
         total_elements: Option<i64>, // Now optional
         next_cursor: Option<i32>,
+        previous_cursor: Option<i32>,
     ) -> Page<T> {
         Page {
             message: message.to_string(),
@@ -53,6 +56,7 @@ impl<T> Page<T> {
             page_size,
             total_elements,
             next_cursor,
+            previous_cursor,
         }
     }
 }

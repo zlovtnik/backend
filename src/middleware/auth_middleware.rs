@@ -292,13 +292,11 @@ mod functional_auth {
             let registry = self.registry.clone();
 
             if Self::should_skip_authentication(&req) {
-                if Method::OPTIONS == *req.method() {
-                    let (request, _pl) = req.into_parts();
-                    let response = HttpResponse::Ok().finish().map_into_right_body();
-                    return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
-                }
-
-                info!("Skipping authentication for route: {}", req.path());
+                info!(
+                    "Skipping authentication for route: {} (method: {})",
+                    req.path(),
+                    req.method()
+                );
                 let fut = self.service.call(req);
                 return Box::pin(async move { fut.await.map(ServiceResponse::map_into_left_body) });
             }
@@ -520,6 +518,37 @@ mod tests {
         let resp = test::call_service(&app, req).await;
         // OPTIONS should pass through without auth
         assert!(resp.status().is_success() || resp.status() == StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[actix_rt::test]
+    async fn functional_auth_options_request_reaches_inner_service() {
+        let app = test::init_service(
+            App::new().wrap(FunctionalAuthentication::new()).service(
+                web::resource("/preflight").route(
+                    web::route()
+                        .method(actix_web::http::Method::OPTIONS)
+                        .to(|| async {
+                            HttpResponse::Ok()
+                                .insert_header(("X-Preflight", "handled"))
+                                .finish()
+                        }),
+                ),
+            ),
+        )
+        .await;
+
+        let req = test::TestRequest::with_uri("/preflight")
+            .method(actix_web::http::Method::OPTIONS)
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let header = resp
+            .headers()
+            .get("X-Preflight")
+            .and_then(|value| value.to_str().ok());
+        assert_eq!(header, Some("handled"));
     }
 
     #[actix_rt::test]

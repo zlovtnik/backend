@@ -61,8 +61,8 @@ pub struct NewNfeProduct {
     pub ativo: Option<bool>,
 }
 
-#[diesel(treat_none_as_null = false)]
 #[derive(AsChangeset, Serialize, Deserialize, Debug)]
+#[diesel(treat_none_as_null = false)]
 #[diesel(table_name = nfe_products)]
 pub struct UpdateNfeProduct {
     pub ean: Option<String>,

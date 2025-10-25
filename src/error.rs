@@ -297,7 +297,8 @@ pub trait ServiceResultExt<T> {
 
     fn tap_error(self, tap: impl Fn(&ServiceError)) -> ServiceResult<T>;
 
-    fn attach_context(self, updater: impl FnOnce(ErrorContext) -> ErrorContext) -> ServiceResult<T>;
+    fn attach_context(self, updater: impl FnOnce(ErrorContext) -> ErrorContext)
+        -> ServiceResult<T>;
 
     fn ensure<F>(self, predicate: F, error_fn: impl FnOnce() -> ServiceError) -> ServiceResult<T>
     where
@@ -323,7 +324,10 @@ impl<T> ServiceResultExt<T> for Result<T, ServiceError> {
         self
     }
 
-    fn attach_context(self, updater: impl FnOnce(ErrorContext) -> ErrorContext) -> ServiceResult<T> {
+    fn attach_context(
+        self,
+        updater: impl FnOnce(ErrorContext) -> ErrorContext,
+    ) -> ServiceResult<T> {
         self.map_err(|err| err.with_context(updater))
     }
 
@@ -435,9 +439,7 @@ pub mod error_pipeline {
 
         /// Execute the pipeline with an initial result
         pub fn execute(self, initial: ServiceResult<T>) -> ServiceResult<T> {
-            self.steps
-                .into_iter()
-                .fold(initial, |acc, step| step(acc))
+            self.steps.into_iter().fold(initial, |acc, step| step(acc))
         }
     }
 
@@ -624,24 +626,33 @@ mod tests {
     #[test]
     fn monadic_flatten_option_success() {
         let result: Result<Option<i32>, String> = Ok(Some(42));
-        let flattened =
-            monadic::flatten_option(result, |e: String| format!("Error: {}", e), || "none".to_string());
+        let flattened = monadic::flatten_option(
+            result,
+            |e: String| format!("Error: {}", e),
+            || "none".to_string(),
+        );
         assert_eq!(flattened, Ok(42));
     }
 
     #[test]
     fn monadic_flatten_option_none() {
         let result: Result<Option<i32>, String> = Ok(None);
-        let flattened =
-            monadic::flatten_option(result, |e: String| format!("Error: {}", e), || "none".to_string());
+        let flattened = monadic::flatten_option(
+            result,
+            |e: String| format!("Error: {}", e),
+            || "none".to_string(),
+        );
         assert_eq!(flattened, Err("none".to_string()));
     }
 
     #[test]
     fn monadic_flatten_option_error() {
         let result: Result<Option<i32>, String> = Err("oops".to_string());
-        let flattened =
-            monadic::flatten_option(result, |e: String| format!("wrapped {}", e), || "none".to_string());
+        let flattened = monadic::flatten_option(
+            result,
+            |e: String| format!("wrapped {}", e),
+            || "none".to_string(),
+        );
         assert_eq!(flattened, Err("wrapped oops".to_string()));
     }
 

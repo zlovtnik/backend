@@ -8,7 +8,7 @@ use crate::schema::users;
 // Include pure functional operations for User
 pub mod operations;
 
-#[derive(Identifiable, Queryable, Selectable, Serialize, Deserialize)]
+#[derive(Identifiable, Queryable, Selectable, Serialize, Deserialize, Clone)]
 #[diesel(table_name = users)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct User {
@@ -20,7 +20,7 @@ pub struct User {
     pub active: bool,
 }
 
-#[derive(Insertable, Serialize, Deserialize)]
+#[derive(Insertable, Serialize, Deserialize, Clone)]
 #[diesel(table_name = users)]
 pub struct UserDTO {
     pub username: String,
@@ -29,14 +29,14 @@ pub struct UserDTO {
     pub active: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct UserUpdateDTO {
     pub username: String,
     pub email: String,
     pub active: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct UserResponseDTO {
     pub id: i32,
     pub username: String,
@@ -44,7 +44,7 @@ pub struct UserResponseDTO {
     pub active: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct SignupDTO {
     pub username: String,
     pub email: String,
@@ -52,14 +52,14 @@ pub struct SignupDTO {
     pub tenant_id: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct LoginDTO {
     pub username_or_email: String,
     pub password: String,
     pub tenant_id: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct LoginInfoDTO {
     pub username: String,
     pub login_session: String,

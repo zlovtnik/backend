@@ -19,7 +19,7 @@ use crate::models::ValidationError;
 
 const MAX_PAGE_SIZE: i64 = 10_000;
 
-#[derive(Clone, Identifiable, Queryable, Serialize, Deserialize)]
+#[derive(Clone, Debug, Identifiable, Queryable, Serialize, Deserialize)]
 #[diesel(table_name = tenants)]
 pub struct Tenant {
     pub id: String,
@@ -585,6 +585,10 @@ impl Tenant {
                 .total_elements
                 .map(|total| total.min(i64::MAX as usize) as i64),
             paginated.summary.next_cursor.map(|cursor| to_i32(cursor)),
+            paginated
+                .summary
+                .previous_cursor
+                .map(|cursor| to_i32(cursor)),
         );
 
         Ok(page)

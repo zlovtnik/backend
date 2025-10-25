@@ -23,7 +23,7 @@ pub static SECRET_KEY: Lazy<Vec<u8>> = Lazy::new(|| {
 });
 static ONE_WEEK: i64 = 60 * 60 * 24 * 7; // in seconds
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct UserToken {
     // issued at
     pub iat: i64,

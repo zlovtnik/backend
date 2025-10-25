@@ -554,27 +554,34 @@ where
     /// Split the iterator into two based on a predicate, returning two new IteratorChains
     ///
     /// The first chain contains items that satisfy the predicate, the second contains those that don't.
-    pub fn split_by<F>(self, mut predicate: F) -> (IteratorChain<T, impl Iterator<Item = T>>, IteratorChain<T, impl Iterator<Item = T>>)
+    pub fn split_by<F>(
+        self,
+        mut predicate: F,
+    ) -> (
+        IteratorChain<T, impl Iterator<Item = T>>,
+        IteratorChain<T, impl Iterator<Item = T>>,
+    )
     where
         F: FnMut(&T) -> bool,
         T: Clone,
     {
-        let (satisfying, not_satisfying): (Vec<T>, Vec<T>) = self.iterator.partition(|item| predicate(item));
+        let (satisfying, not_satisfying): (Vec<T>, Vec<T>) =
+            self.iterator.partition(|item| predicate(item));
         let operations_true = self.operations.clone();
         let operations_false = self.operations;
-        
+
         let chain_true = IteratorChain {
             iterator: satisfying.into_iter(),
             config: self.config.clone(),
             operations: operations_true,
         };
-        
+
         let chain_false = IteratorChain {
             iterator: not_satisfying.into_iter(),
             config: self.config,
             operations: operations_false,
         };
-        
+
         (chain_true, chain_false)
     }
 
@@ -628,24 +635,27 @@ where
     /// // Groups items by their remainder when divided by 2
     /// ```
     #[cfg(feature = "functional")]
-    pub fn group_by<K, F>(self, key_fn: F) -> IteratorChain<(K, Vec<T>), impl Iterator<Item = (K, Vec<T>)>>
+    pub fn group_by<K, F>(
+        self,
+        key_fn: F,
+    ) -> IteratorChain<(K, Vec<T>), impl Iterator<Item = (K, Vec<T>)>>
     where
         K: Eq + std::hash::Hash,
         F: Fn(&T) -> K,
     {
         let mut operations = self.operations;
         operations.push("group_by".to_string());
-        
+
         use std::collections::HashMap;
         let mut map: HashMap<K, Vec<T>> = HashMap::new();
-        
+
         for item in self.iterator {
             let key = key_fn(&item);
             map.entry(key).or_insert_with(Vec::new).push(item);
         }
-        
+
         let grouped = map.into_iter().collect::<Vec<_>>();
-        
+
         IteratorChain {
             iterator: grouped.into_iter(),
             config: self.config,
@@ -822,7 +832,6 @@ where
             Some(sum / values.len() as f64)
         }
     }
-
 }
 
 impl<T, I> fmt::Debug for IteratorChain<T, I>

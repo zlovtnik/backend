@@ -750,6 +750,32 @@ where
     Predicate::new(column, operator, Some(value), field_name)
 }
 
+/// Creates a predicate that matches rows where the specified column does not contain the given substring.
+///
+/// The returned `Predicate<String>` represents a substring/NOT LIKE match for the column and carries
+/// the provided human-readable `field_name`.
+///
+/// # Examples
+///
+/// ```
+/// let pred = not_contains(
+///     "users".to_string(),
+///     "email".to_string(),
+///     "example.com".to_string(),
+///     "email".to_string(),
+/// );
+/// let _ = pred; // use `pred` with the query builder
+/// ```
+pub fn not_contains(
+    table: String,
+    column_name: String,
+    value: String,
+    field_name: String,
+) -> Predicate<String> {
+    let column = Column::new(table, column_name);
+    Predicate::new(column, Operator::NotContains, Some(value), field_name)
+}
+
 /// Create a NULL-check predicate for a column.
 ///
 /// `is_null` set to `true` produces an `IS NULL` predicate; `false` produces an `IS NOT NULL`.

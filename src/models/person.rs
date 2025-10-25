@@ -350,6 +350,7 @@ impl Person {
             page_size,
             records.total_elements,
             records.next_cursor,
+            records.previous_cursor,
         ))
     }
 

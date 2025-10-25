@@ -267,11 +267,12 @@ Now that services use functional patterns, controllers should be updated to:
   - All existing tests passing (247 passed)
   - Legacy validation functions maintained and working
   - `test_startup_ok` and `test_startup_without_auth_middleware_ok` confirm compatibility
-- [ ] Performance benchmarks comparing old vs new approaches
-  - **TODO**: Add dedicated benchmark suite
-  - **TODO**: Compare validation performance (old loops vs functional composition)
-  - **TODO**: Measure QueryReader overhead (expected: zero-cost abstraction)
-  - **TODO**: Profile memoization cache hit rates
+### Performance benchmarks comparing old vs new approaches
+- [x] **Add dedicated benchmark suite** ✅ (Implemented in `benches/functional_benchmarks.rs`)
+  - [x] **Compare validation performance** ✅ (Functional validator combinator vs imperative loops)
+  - [x] **Measure QueryReader overhead** ✅ (Zero-cost abstraction verification)
+  - [x] **Profile memoization cache hit rates** ✅ (Cache efficiency analysis)
+- See [`docs/PERFORMANCE_BENCHMARKS.md`](./PERFORMANCE_BENCHMARKS.md) for detailed benchmark specifications and running instructions
 
 ### Middleware Tests Status
 - [x] Functional middleware compilation ✅ (All 31 compilation errors fixed)
@@ -286,10 +287,11 @@ Now that services use functional patterns, controllers should be updated to:
   - OPTIONS requests, health endpoints, protected routes
 - [x] Validator signature tests ✅ (3/3 passing)
   - TokenExtractor, TokenValidator, AuthSkipChecker signatures
-- [ ] Auth middleware integration tests (2 failing)
-  - **FAILING**: `functional_auth_should_skip_options_request` - needs investigation
-  - **FAILING**: `functional_auth_should_skip_api_doc` - needs investigation
-  - **Note**: Core middleware functionality works, edge cases need fixes
+- [x] Auth middleware integration tests ✅
+  - [x] `functional_auth_should_skip_options_request` ✅ - Middleware forwards OPTIONS to inner service so CORS headers are preserved
+  - [x] `functional_auth_should_skip_api_doc` ✅ - Documentation endpoint bypasses auth via shared skip logic
+  - Added regression coverage to ensure preflight requests reach downstream handlers without auth
+  - See [`docs/AUTH_MIDDLEWARE_TESTS_FIXED.md`](./AUTH_MIDDLEWARE_TESTS_FIXED.md) for remediation details
 
 ### Known Test Failures (Pre-existing, unrelated to FP-013)
 - `functional::iterator_engine::tests::functional_more_tests::test_kmerge_lazy_evaluation`

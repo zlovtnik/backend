@@ -817,9 +817,9 @@ pub mod functional_middleware_impl {
 #[cfg(all(test, feature = "functional"))]
 mod tests {
     use super::functional_middleware_impl::{
-        AuthSkipChecker, FunctionalAuthentication, MiddlewareComponent, MiddlewareContext,
-        MiddlewareError, MiddlewarePipelineBuilder, MiddlewareReader, MiddlewareResult,
-        TokenExtractor, TokenValidator, run_middleware_reader,
+        run_middleware_reader, AuthSkipChecker, FunctionalAuthentication, MiddlewareComponent,
+        MiddlewareContext, MiddlewareError, MiddlewarePipelineBuilder, MiddlewareReader,
+        MiddlewareResult, TokenExtractor, TokenValidator,
     };
     use crate::constants;
     use crate::functional::function_traits::{FunctionCategory, PureFunction};
@@ -1308,7 +1308,7 @@ mod tests {
     fn middleware_reader_map() {
         let reader = MiddlewareReader::new(|ctx: &MiddlewareContext| {
             if ctx.is_authenticated {
-            Ok("authenticated".to_string())
+                Ok("authenticated".to_string())
             } else {
                 Ok("unauthenticated".to_string())
             }
@@ -1337,13 +1337,7 @@ mod tests {
         });
 
         let chained_reader = reader.and_then(|s| {
-            MiddlewareReader::new(move |_ctx| {
-                if s == "authenticated" {
-                    Ok(1)
-                } else {
-                    Ok(0)
-                }
-            })
+            MiddlewareReader::new(move |_ctx| if s == "authenticated" { Ok(1) } else { Ok(0) })
         });
 
         let ctx = MiddlewareContext {

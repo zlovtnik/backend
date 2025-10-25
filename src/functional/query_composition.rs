@@ -21,10 +21,10 @@
 
 #![allow(dead_code)]
 
+use crate::config::db::Pool;
 use crate::functional::query_builder::{
     Column, Operator, Predicate, QueryFilter, TypeSafeQueryBuilder,
 };
-use crate::config::db::Pool;
 use diesel::prelude::*;
 use regex::Regex;
 use std::collections::HashMap;
@@ -418,7 +418,10 @@ where
 
         // In a real implementation, we would execute a query with LIMIT and OFFSET
         // For now, we'll use the composer's execute_chunk_query method
-        match self.composer.execute_chunk_query(self.offset, self.page_size) {
+        match self
+            .composer
+            .execute_chunk_query(self.offset, self.page_size)
+        {
             Ok(chunk) => {
                 if chunk.is_empty() {
                     self.exhausted = true;
@@ -1021,31 +1024,33 @@ where
     pub fn execute_chunk_query(&self, offset: usize, limit: usize) -> Result<Vec<U>, String> {
         // Check if we have a database pool
         let pool = self.pool.as_ref().ok_or("No database pool configured")?;
-        
+
         // Get a connection from the pool
-        let mut conn = pool.get().map_err(|e| format!("Failed to get database connection: {}", e))?;
-        
+        let _conn = pool
+            .get()
+            .map_err(|e| format!("Failed to get database connection: {}", e))?;
+
         // Build the query using our query builder
         // For now, we'll create a simple implementation that works with Diesel
         // In a real implementation, we would use the TypeSafeQueryBuilder to construct
         // a parameterized query with the filters, ordering, etc.
-        
+
         // This is a simplified implementation - in a real application, we would need
         // to properly integrate with the TypeSafeQueryBuilder and generate actual SQL
-        
+
         // For demonstration purposes, let's simulate executing a query
         // In a real implementation, this would execute an actual database query
-        
+
         // Record execution time
         let start_time = Instant::now();
-        
+
         // Simulate query execution with a delay
         std::thread::sleep(std::time::Duration::from_millis(10));
-        
+
         // Update metrics
         let execution_time = start_time.elapsed();
         // In a real implementation, we would update self.metrics here
-        
+
         // Return an empty vector for now - in a real implementation, this would
         // contain the actual query results
         Ok(Vec::new())

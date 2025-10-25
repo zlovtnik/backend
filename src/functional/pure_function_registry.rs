@@ -327,19 +327,9 @@ impl PureFunctionRegistry {
             });
         }
 
-        // Clone necessary information before dropping the read lock
-        let first_sig_owned = first_sig.to_string();
-        let second_sig_owned = second_sig.to_string();
-        let category_owned = category;
-        
-        // Clone self for use in the composed function
-        let self_clone = self.clone();
-        
-        // Drop the read lock before acquiring a write lock
+        // Drop read lock and return unimplemented composition error
         drop(functions);
 
-        // For now, we'll return an error indicating this is not yet fully implemented
-        // A complete implementation would require complex type checking and runtime composition
         Err(RegistryError::IncompatibleComposition {
             first_sig: first_sig.to_string(),
             second_sig: second_sig.to_string(),
@@ -558,7 +548,6 @@ impl PureFunctionRegistry {
         Ok(())
     }
 }
-
 
 /// Errors that can occur during registry operations.
 #[derive(Debug, thiserror::Error)]

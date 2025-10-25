@@ -13,6 +13,7 @@ pub mod models;
 pub mod pagination;
 pub mod schema;
 pub mod services;
+pub mod unified_pagination;
 pub mod utils;
 
 #[cfg(test)]

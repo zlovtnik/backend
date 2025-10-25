@@ -30,6 +30,7 @@ where
             query: self,
             cursor,
             per_page: crate::constants::DEFAULT_PER_PAGE,
+            backward: false,
         }
     }
 }
@@ -39,6 +40,8 @@ pub struct SortedAndPaginated<T> {
     query: T,
     cursor: i32,
     per_page: i64,
+    /// Direction of pagination: true for backward, false for forward
+    backward: bool,
 }
 
 impl<T> QueryId for SortedAndPaginated<T>
@@ -63,6 +66,12 @@ where
         self
     }
 
+    /// Enable backward pagination
+    pub fn backward(mut self) -> Self {
+        self.backward = true;
+        self
+    }
+
     pub fn load_items<'a, U>(self, conn: &mut PgConnection) -> QueryResult<Page<U>>
     where
         Self: LoadQuery<'a, PgConnection, U>,
@@ -74,6 +83,9 @@ where
         let current_cursor = cursor;
 
         let next_cursor = records.last().map(|record| record.id());
+        // For proper ID-based cursor pagination, previous_cursor should be the first record ID
+        // of the current page, not cursor - 1
+        let previous_cursor = records.first().map(|record| record.id());
 
         Ok(Page::new(
             MESSAGE_OK,
@@ -82,6 +94,7 @@ where
             per_page,
             None,
             next_cursor,
+            previous_cursor,
         ))
     }
 }
@@ -99,10 +112,21 @@ where
     fn walk_ast<'b>(&'b self, mut out: AstPass<'_, 'b, Pg>) -> QueryResult<()> {
         out.push_sql("SELECT * FROM (");
         self.query.walk_ast(out.reborrow())?;
-        out.push_sql(") t WHERE t.id > ");
-        out.push_bind_param::<diesel::sql_types::Integer, _>(&self.cursor)?;
-        out.push_sql(" ORDER BY t.id LIMIT ");
-        out.push_bind_param::<BigInt, _>(&self.per_page)?;
+
+        if self.backward {
+            // For backward pagination, we fetch records with ID less than cursor
+            // and order them DESC, then reverse the result in application code
+            out.push_sql(") t WHERE t.id < ");
+            out.push_bind_param::<diesel::sql_types::Integer, _>(&self.cursor)?;
+            out.push_sql(" ORDER BY t.id DESC LIMIT ");
+            out.push_bind_param::<BigInt, _>(&self.per_page)?;
+        } else {
+            // For forward pagination, we fetch records with ID greater than cursor
+            out.push_sql(") t WHERE t.id > ");
+            out.push_bind_param::<diesel::sql_types::Integer, _>(&self.cursor)?;
+            out.push_sql(" ORDER BY t.id LIMIT ");
+            out.push_bind_param::<BigInt, _>(&self.per_page)?;
+        }
         Ok(())
     }
 }

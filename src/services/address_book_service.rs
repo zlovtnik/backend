@@ -20,7 +20,7 @@ use crate::{
         person::{Person, PersonDTO},
         response::Page,
     },
-    services::functional_patterns::{Either, Validator, validation_rules},
+    services::functional_patterns::{validation_rules, Either, Validator},
     services::functional_service_base::{FunctionalErrorHandling, FunctionalQueryService},
 };
 
@@ -64,15 +64,11 @@ pub fn find_all(pool: &Pool) -> Result<Vec<Person>, ServiceError> {
 pub fn find_all_either(pool: &Pool) -> Either<ServiceError, Vec<Person>> {
     let query_service = FunctionalQueryService::new(pool.clone());
 
-    match query_service
-        .query(|conn| {
-            Person::find_all(conn).map_err(|_| {
-                ServiceError::internal_server_error(
-                    constants::MESSAGE_CAN_NOT_FETCH_DATA.to_string(),
-                )
-            })
+    match query_service.query(|conn| {
+        Person::find_all(conn).map_err(|_| {
+            ServiceError::internal_server_error(constants::MESSAGE_CAN_NOT_FETCH_DATA.to_string())
         })
-    {
+    }) {
         Ok(people) => Either::Right(people),
         Err(e) => Either::Left(e),
     }
@@ -187,8 +183,7 @@ pub fn insert_either(new_person: PersonDTO, pool: &Pool) -> Either<ServiceError,
                             )
                         })
                         .map(|_| ())
-                })
-            {
+                }) {
                 Ok(()) => Either::Right(()),
                 Err(e) => Either::Left(e),
             }
@@ -243,8 +238,7 @@ pub fn update_either(id: i32, updated_person: PersonDTO, pool: &Pool) -> Either<
                             )
                         })
                         .map(|_| ())
-                })
-            {
+                }) {
                 Ok(()) => Either::Right(()),
                 Err(e) => Either::Left(e),
             }
@@ -300,8 +294,7 @@ pub fn delete_either(id: i32, pool: &Pool) -> Either<ServiceError, ()> {
                     })
                     .map(|_| ())
             })
-        })
-    {
+        }) {
         Ok(()) => Either::Right(()),
         Err(e) => Either::Left(e),
     }

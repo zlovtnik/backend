@@ -3,9 +3,11 @@
 //! This module re-exports commonly used types and functions from the functional
 //! programming infrastructure to make them easily accessible.
 
-pub use crate::functional::pure_function_registry::{PureFunctionRegistry, RegistryError, SharedRegistry};
-pub use crate::functional::function_traits::{PureFunction, FunctionWrapper, FunctionCategory};
+pub use crate::functional::function_traits::{FunctionCategory, FunctionWrapper};
 pub use crate::functional::math_functions::{register_math_functions, register_string_functions};
+pub use crate::functional::pure_function_registry::{
+    PureFunctionRegistry, RegistryError, SharedRegistry,
+};
 
 /// Creates a shared PureFunctionRegistry populated with common pure functions
 /// including mathematical, string, and transformation functions.
@@ -31,7 +33,7 @@ pub use crate::functional::math_functions::{register_math_functions, register_st
 /// ```
 pub fn create_enhanced_registry() -> Result<SharedRegistry, RegistryError> {
     let registry = PureFunctionRegistry::shared();
-    
+
     // Register common transformation functions
     registry.register(FunctionWrapper::new(
         |x: i32| x,
@@ -50,10 +52,10 @@ pub fn create_enhanced_registry() -> Result<SharedRegistry, RegistryError> {
         "string_length",
         FunctionCategory::StringProcessing,
     ))?;
-    
+
     // Register mathematical functions
     register_math_functions(&registry)?;
-    
+
     // Register string functions
     register_string_functions(&registry)?;
 
