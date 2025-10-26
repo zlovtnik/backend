@@ -50,7 +50,7 @@ struct PaginatedTenantResponse {
 
 /// Collects system-wide metrics and per-tenant connection status.
 ///
-/// Gathers totals for tenants and users and reports each tenant's connection state, returning an HTTP 200 response containing the serialized `SystemStats`.
+/// Gathers totals for tenants and users, reports each tenant's connection state, and keeps the `_manager` parameter for API compatibility while delegating logic to `tenant_service`.
 ///
 /// # Examples
 ///
@@ -61,7 +61,7 @@ struct PaginatedTenantResponse {
 /// ```
 pub async fn get_system_stats(
     pool: web::Data<DatabasePool>,
-    manager: web::Data<TenantPoolManager>,
+    _manager: web::Data<TenantPoolManager>,
 ) -> Result<HttpResponse, ServiceError> {
     info!("Fetching tenant statistics");
 

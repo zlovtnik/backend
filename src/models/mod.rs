@@ -34,7 +34,7 @@ pub mod user_token;
 pub use crate::functional::{
     query_builder::Column,
     validation_engine::{ValidationConfig, ValidationEngine},
-    validation_rules::{Custom, Email, Length, Phone, Range, ValidationError},
+    validation_rules::{Custom, ValidationError},
 };
 
 // Re-export commonly used functional traits

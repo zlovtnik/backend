@@ -65,6 +65,7 @@ features = ["v4"]
 default = ["functional", "performance_monitoring"]  # Enable functional features by default to support refactoring
 functional = ["dep:rayon"]
 performance_monitoring = []
+datetime = []
 
 [dev-dependencies]
 testcontainers = "0.14.0"

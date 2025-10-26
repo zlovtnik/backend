@@ -518,10 +518,11 @@ impl ConcurrentProcessor {
     pub fn flat_map<I, T, U, F, It>(&self, data: I, transform: F) -> ParallelResult<Vec<U>>
     where
         I: IntoIterator<Item = T>,
-        T: Send + Sync,
-        U: Send,
-        F: Fn(T) -> It + Send + Sync,
-        It: IntoIterator<Item = U>,
+        T: Send + Sync + 'static,
+        U: Send + 'static,
+        F: Fn(T) -> It + Send + Sync + 'static,
+        It: IntoIterator<Item = U> + Send + 'static,
+        It::IntoIter: Send,
     {
         let config = self.config.clone();
         let items: Vec<T> = data.into_iter().collect();
@@ -546,8 +547,8 @@ impl ConcurrentProcessor {
     pub fn partition<I, T, F>(&self, data: I, predicate: F) -> ParallelResult<(Vec<T>, Vec<T>)>
     where
         I: IntoIterator<Item = T>,
-        T: Clone + Send + Sync,
-        F: Fn(&T) -> bool + Send + Sync,
+        T: Clone + Send + Sync + 'static,
+        F: Fn(&T) -> bool + Send + Sync + 'static,
     {
         let config = self.config.clone();
         let items: Vec<T> = data.into_iter().collect();
@@ -571,8 +572,8 @@ impl ConcurrentProcessor {
     pub fn find<I, T, F>(&self, data: I, predicate: F) -> ParallelResult<Option<T>>
     where
         I: IntoIterator<Item = T>,
-        T: Clone + Send + Sync,
-        F: Fn(&T) -> bool + Send + Sync,
+        T: Clone + Send + Sync + 'static,
+        F: Fn(&T) -> bool + Send + Sync + 'static,
     {
         let config = self.config.clone();
         let items: Vec<T> = data.into_iter().collect();

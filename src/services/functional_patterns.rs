@@ -382,7 +382,7 @@ impl<T> Default for Validator<T> {
 pub mod validation_rules {
     use super::{ServiceError, ServiceResult};
     use regex::Regex;
-    use std::sync::OnceLock;
+    
 
     /// Validate that a string is not empty
     pub fn required(field_name: &'static str) -> impl Fn(&String) -> ServiceResult<()> {
