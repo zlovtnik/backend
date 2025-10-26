@@ -51,21 +51,22 @@ aes-gcm = "0.10"
 
 [dependencies.diesel]
 version = "2.2.0"
-features = ["postgres", "r2d2", "chrono"]
+features = ["postgres", "r2d2"]
 
 [dependencies.chrono]
 version = "0.4.26"
 features = ["serde"]
+optional = true
 
 [dependencies.uuid]
 version = "1.3.3"
 features = ["v4"]
 
 [features]
-default = ["functional", "performance_monitoring"]  # Enable functional features by default to support refactoring
+default = ["functional", "performance_monitoring", "datetime"]  # Enable functional features by default to support refactoring
 functional = ["dep:rayon"]
 performance_monitoring = []
-datetime = []
+datetime = ["dep:chrono", "diesel/chrono"]
 
 [dev-dependencies]
 testcontainers = "0.14.0"

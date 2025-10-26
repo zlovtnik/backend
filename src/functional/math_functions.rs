@@ -127,7 +127,7 @@ pub fn register_datetime_functions(registry: &PureFunctionRegistry) -> Result<()
 
     // Current timestamp
     registry.register(FunctionWrapper::new(
-        || Utc::now(),
+        |_: ()| Utc::now(),
         "current_timestamp",
         FunctionCategory::DateTimeProcessing,
     ))?;

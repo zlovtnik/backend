@@ -52,14 +52,11 @@ pub struct NewNfeDocument {
 	pub nfe_id: String,
 	pub serie: String,
 	pub numero: String,
-	pub modelo: Option<String>,
-	pub versao: Option<String>,
-	pub status: Option<String>,
-	pub tipo_operacao: Option<String>,
-	pub tipo_emissao: Option<String>,
-	pub finalidade: Option<String>,
-	pub indicador_presencial: Option<String>,
-	pub data_emissao: Option<DateTime<Utc>>,
+	// Note: modelo, versao, status, tipo_operacao, tipo_emissao, finalidade,
+	// indicador_presencial, and data_emissao are NOT NULL DEFAULT in the database,
+	// so they are omitted here and Diesel will allow DB defaults to apply.
+	// If you need to override defaults, construct this struct with all fields explicitly
+	// or use UpdateNfeDocument for partial updates.
 	pub data_saida_entrada: Option<DateTime<Utc>>,
 	pub data_autorizacao: Option<DateTime<Utc>>,
 	pub data_cancelamento: Option<DateTime<Utc>>,
@@ -82,6 +79,14 @@ pub struct NewNfeDocument {
 #[derive(AsChangeset, Serialize, Deserialize, Debug, Clone)]
 #[diesel(table_name = nfe_documents)]
 #[diesel(treat_none_as_null = false)]
+/// Update DTO for NFE documents.
+///
+/// **Important**: `treat_none_as_null = false` means that `None` values do NOT set database columns to NULL.
+/// Instead, `None` values are omitted from the UPDATE statement, leaving columns unchanged.
+///
+/// This is intentional to support partial updates where only provided fields are updated.
+/// If you need to explicitly set a column to NULL, you must use a separate API path or wrapper types
+/// (e.g., explicit "clear" or "unset" flags) to distinguish between "not provided" and "set to NULL".
 pub struct UpdateNfeDocument {
 	pub modelo: Option<String>,
 	pub versao: Option<String>,

@@ -61,7 +61,7 @@ struct PaginatedTenantResponse {
 /// ```
 pub async fn get_system_stats(
     pool: web::Data<DatabasePool>,
-    _manager: web::Data<TenantPoolManager>,
+    _manager: web::Data<TenantPoolManager>, // TODO: Consider using this for advanced tenant pool metrics/diagnostics
 ) -> Result<HttpResponse, ServiceError> {
     info!("Fetching tenant statistics");
 
