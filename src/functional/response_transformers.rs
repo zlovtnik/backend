@@ -61,6 +61,12 @@ pub enum ResponseFormat {
     JsonPretty,
     /// Plain text (`text/plain`).
     Text,
+    /// XML format (`application/xml`).
+    Xml,
+    /// CSV format (`text/csv`).
+    Csv,
+    /// MessagePack binary format (`application/msgpack`).
+    MessagePack,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -562,6 +568,38 @@ where
             builder.insert_header(header::ContentType::plaintext());
             Ok(builder.body(payload))
         }
+        ResponseFormat::Xml => {
+            // Simple XML rendering - convert JSON to XML-like format
+            // For production, consider using quick-xml or serde-xml-rs
+            let json_str = serde_json::to_string_pretty(&envelope)?;
+            let xml_payload = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<response>\n  <message>{}</message>\n  <data>{}</data>\n</response>",
+                envelope.message,
+                json_str.replace('"', "&quot;")
+            );
+            builder.insert_header((header::CONTENT_TYPE, "application/xml"));
+            Ok(builder.body(xml_payload))
+        }
+        ResponseFormat::Csv => {
+            // Simple CSV rendering - for structured data
+            // For production, consider using csv crate for proper escaping
+            let json_str = serde_json::to_string(&envelope)?;
+            let csv_payload = format!(
+                "message,data\n\"{}\",\"{}\"",
+                envelope.message.replace('"', "\"\""),
+                json_str.replace('"', "\"\"")
+            );
+            builder.insert_header((header::CONTENT_TYPE, "text/csv"));
+            Ok(builder.body(csv_payload))
+        }
+        ResponseFormat::MessagePack => {
+            // MessagePack binary format - compact and efficient
+            // For production, use rmp-serde crate for proper MessagePack serialization
+            // For now, fall back to JSON with appropriate content type
+            let payload = serde_json::to_vec(&envelope)?;
+            builder.insert_header((header::CONTENT_TYPE, "application/msgpack"));
+            Ok(builder.body(payload))
+        }
     }
 }
 
@@ -573,27 +611,57 @@ fn serialization_error(err: serde_json::Error) -> HttpResponse {
     HttpResponse::InternalServerError().json(body)
 }
 
+/// Represents a parsed Accept header entry with quality value
+#[derive(Debug, Clone)]
+struct AcceptEntry {
+    media_type: String,
+    quality: f32,
+    format: Option<ResponseFormat>,
+}
+
 fn negotiated_format(req: &HttpRequest, allowed: &[ResponseFormat]) -> Option<ResponseFormat> {
-    let accepts = req
+    let mut entries: Vec<AcceptEntry> = req
         .headers()
         .get_all(header::ACCEPT)
         .into_iter()
         .filter_map(|value| value.to_str().ok())
         .flat_map(|line| line.split(','))
-        .map(|token| token.trim())
-        .collect::<Vec<_>>();
+        .filter_map(|token| parse_accept_entry(token.trim()))
+        .collect();
 
-    for token in accepts {
-        let format = parse_accept_token(token);
-        if let Some(format) = format {
+    // Sort by quality value (descending)
+    entries.sort_by(|a, b| {
+        b.quality
+            .partial_cmp(&a.quality)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Find first matching format
+    for entry in entries {
+        if let Some(format) = entry.format {
             if allowed.contains(&format) {
                 return Some(format);
             }
-        } else if token == "*/*" {
-            return allowed.first().copied();
-        } else if token == "application/*" {
-            if allowed.contains(&ResponseFormat::Json) {
-                return Some(ResponseFormat::Json);
+        } else {
+            // Handle wildcards
+            if entry.media_type == "*/*" {
+                return allowed.first().copied();
+            } else if entry.media_type == "application/*" {
+                // Prefer JSON for application/* wildcard
+                if allowed.contains(&ResponseFormat::Json) {
+                    return Some(ResponseFormat::Json);
+                } else if allowed.contains(&ResponseFormat::MessagePack) {
+                    return Some(ResponseFormat::MessagePack);
+                } else if allowed.contains(&ResponseFormat::Xml) {
+                    return Some(ResponseFormat::Xml);
+                }
+            } else if entry.media_type == "text/*" {
+                // Prefer plain text for text/* wildcard
+                if allowed.contains(&ResponseFormat::Text) {
+                    return Some(ResponseFormat::Text);
+                } else if allowed.contains(&ResponseFormat::Csv) {
+                    return Some(ResponseFormat::Csv);
+                }
             }
         }
     }
@@ -601,18 +669,45 @@ fn negotiated_format(req: &HttpRequest, allowed: &[ResponseFormat]) -> Option<Re
     None
 }
 
-fn parse_accept_token(token: &str) -> Option<ResponseFormat> {
-    let token = token.to_ascii_lowercase();
-    if token.contains("json") {
-        if token.contains("pretty") {
-            Some(ResponseFormat::JsonPretty)
-        } else {
-            Some(ResponseFormat::Json)
-        }
-    } else if token.contains("text/plain") {
-        Some(ResponseFormat::Text)
-    } else {
-        None
+fn parse_accept_entry(token: &str) -> Option<AcceptEntry> {
+    // Split media type and parameters (e.g., "application/json;q=0.8")
+    let parts: Vec<&str> = token.split(';').collect();
+    let media_type = parts[0].trim().to_ascii_lowercase();
+
+    // Parse quality value (default is 1.0)
+    let quality = parts
+        .iter()
+        .skip(1)
+        .find_map(|param| {
+            let param = param.trim();
+            if param.starts_with("q=") {
+                param[2..].parse::<f32>().ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0);
+
+    let format = parse_media_type(&media_type);
+
+    Some(AcceptEntry {
+        media_type,
+        quality,
+        format,
+    })
+}
+
+fn parse_media_type(media_type: &str) -> Option<ResponseFormat> {
+    match media_type {
+        "application/json" => Some(ResponseFormat::Json),
+        "application/json+pretty" | "application/json; pretty" => Some(ResponseFormat::JsonPretty),
+        "text/plain" => Some(ResponseFormat::Text),
+        "application/xml" | "text/xml" => Some(ResponseFormat::Xml),
+        "text/csv" | "application/csv" => Some(ResponseFormat::Csv),
+        "application/msgpack" | "application/x-msgpack" => Some(ResponseFormat::MessagePack),
+        _ if media_type.contains("json") => Some(ResponseFormat::Json),
+        _ => None,
     }
 }
 
@@ -1093,5 +1188,129 @@ mod tests {
         assert_eq!(payload["data"], json!([20, 40]));
         assert_eq!(payload["message"], "numbers - processed");
         assert_eq!(payload["metadata"]["filtered"], true);
+    }
+
+    #[actix_rt::test]
+    async fn negotiate_format_with_quality_values() {
+        let request = TestRequest::default()
+            .insert_header((ACCEPT, "application/json;q=0.8, text/plain;q=0.9"));
+
+        let response = ResponseTransformer::new("data")
+            .allow_format(ResponseFormat::Text)
+            .respond_to(&request.to_http_request());
+
+        let content_type = response.headers().get(CONTENT_TYPE).unwrap();
+        // Should prefer text/plain due to higher quality value (0.9 > 0.8)
+        assert!(content_type.to_str().unwrap().contains("text/plain"));
+    }
+
+    #[actix_rt::test]
+    async fn negotiate_xml_format() {
+        let request = TestRequest::default().insert_header((ACCEPT, "application/xml"));
+
+        let response = ResponseTransformer::new(json!({"value": 42}))
+            .allow_format(ResponseFormat::Xml)
+            .respond_to(&request.to_http_request());
+
+        let content_type = response.headers().get(CONTENT_TYPE).unwrap();
+        assert!(content_type.to_str().unwrap().contains("xml"));
+
+        let body = body::to_bytes(response.into_body()).await.unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body_str.contains("<?xml"));
+        assert!(body_str.contains("<response>"));
+    }
+
+    #[actix_rt::test]
+    async fn negotiate_csv_format() {
+        let request = TestRequest::default().insert_header((ACCEPT, "text/csv"));
+
+        let response = ResponseTransformer::new("test data")
+            .allow_format(ResponseFormat::Csv)
+            .with_message("export")
+            .respond_to(&request.to_http_request());
+
+        let content_type = response.headers().get(CONTENT_TYPE).unwrap();
+        assert!(content_type.to_str().unwrap().contains("csv"));
+
+        let body = body::to_bytes(response.into_body()).await.unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body_str.contains("message,data"));
+    }
+
+    #[actix_rt::test]
+    async fn negotiate_msgpack_format() {
+        let request = TestRequest::default().insert_header((ACCEPT, "application/msgpack"));
+
+        let response = ResponseTransformer::new(vec![1, 2, 3])
+            .allow_format(ResponseFormat::MessagePack)
+            .respond_to(&request.to_http_request());
+
+        let content_type = response.headers().get(CONTENT_TYPE).unwrap();
+        assert!(content_type.to_str().unwrap().contains("msgpack"));
+    }
+
+    #[actix_rt::test]
+    async fn wildcard_text_prefers_plain_text() {
+        let request = TestRequest::default().insert_header((ACCEPT, "text/*"));
+
+        let response = ResponseTransformer::new("data")
+            .allow_format(ResponseFormat::Text)
+            .allow_format(ResponseFormat::Csv)
+            .respond_to(&request.to_http_request());
+
+        let content_type = response.headers().get(CONTENT_TYPE).unwrap();
+        // Should prefer text/plain over text/csv for text/* wildcard
+        assert!(content_type.to_str().unwrap().contains("text/plain"));
+    }
+
+    #[actix_rt::test]
+    async fn multiple_formats_with_quality_ordering() {
+        let request = TestRequest::default().insert_header((
+            ACCEPT,
+            "application/xml;q=0.5, application/json;q=0.9, text/plain;q=0.3",
+        ));
+
+        let response = ResponseTransformer::new("data").respond_to(&request.to_http_request());
+
+        let content_type = response.headers().get(CONTENT_TYPE).unwrap();
+        // Should prefer JSON with highest quality value (0.9)
+        assert!(content_type.to_str().unwrap().contains("json"));
+    }
+
+    #[test]
+    fn parse_accept_entry_with_quality() {
+        let entry = parse_accept_entry("application/json;q=0.8").unwrap();
+        assert_eq!(entry.media_type, "application/json");
+        assert_eq!(entry.quality, 0.8);
+        assert_eq!(entry.format, Some(ResponseFormat::Json));
+    }
+
+    #[test]
+    fn parse_accept_entry_default_quality() {
+        let entry = parse_accept_entry("text/plain").unwrap();
+        assert_eq!(entry.quality, 1.0);
+    }
+
+    #[test]
+    fn parse_media_type_variations() {
+        assert_eq!(
+            parse_media_type("application/json"),
+            Some(ResponseFormat::Json)
+        );
+        assert_eq!(
+            parse_media_type("application/xml"),
+            Some(ResponseFormat::Xml)
+        );
+        assert_eq!(parse_media_type("text/xml"), Some(ResponseFormat::Xml));
+        assert_eq!(parse_media_type("text/csv"), Some(ResponseFormat::Csv));
+        assert_eq!(
+            parse_media_type("application/msgpack"),
+            Some(ResponseFormat::MessagePack)
+        );
+        assert_eq!(
+            parse_media_type("application/x-msgpack"),
+            Some(ResponseFormat::MessagePack)
+        );
     }
 }

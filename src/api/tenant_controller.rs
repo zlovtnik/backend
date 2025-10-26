@@ -11,7 +11,7 @@ use crate::{
     models::filters::TenantFilter,
     models::response::ResponseBody,
     models::tenant::{Tenant, TenantDTO, UpdateTenant},
-    models::user::operations as user_ops,
+    services::{functional_service_base::FunctionalErrorHandling, tenant_service},
 };
 
 #[derive(Serialize)]
@@ -65,88 +65,10 @@ pub async fn get_system_stats(
 ) -> Result<HttpResponse, ServiceError> {
     info!("Fetching tenant statistics");
 
-    let mut conn = pool.get().map_err(|e| {
-        ServiceError::internal_server_error(format!("Failed to get db connection: {}", e))
-            .with_tag("tenant")
-            .with_metadata("operation", "get_system_stats")
-    })?;
-
-    // Get total tenant count first without loading all tenants
-    let total_tenants = Tenant::count_all(&mut conn).map_err(|e| {
-        ServiceError::internal_server_error(format!("Failed to count tenants: {}", e))
-            .with_tag("tenant")
-            .with_metadata("operation", "get_system_stats")
-    })?;
-
-    // Get total users and logged in count (global, since no tenant_id in users)
-    let total_users = user_ops::count_all_users(&mut conn).map_err(|e| {
-        ServiceError::internal_server_error(format!("Failed to count users: {}", e))
-            .with_tag("tenant")
-            .with_metadata("operation", "get_system_stats")
-    })?;
-    let logged_in_users = user_ops::count_logged_in_users(&mut conn).map_err(|e| {
-        ServiceError::internal_server_error(format!("Failed to count logged in users: {}", e))
-            .with_tag("tenant")
-            .with_metadata("operation", "get_system_stats")
-    })?;
-
-    let mut tenant_stats = Vec::new();
-    let mut active_count = 0;
-    let page_size = 1000i64; // Process tenants in chunks of 1000
-    let mut offset = 0i64;
-
-    // Process tenants in paginated chunks to avoid memory issues
-    loop {
-        let (tenants, _) = Tenant::list_paginated(offset, page_size, &mut conn).map_err(|e| {
-            ServiceError::internal_server_error(format!("Failed to fetch tenant page: {}", e))
-                .with_tag("tenant")
-                .with_metadata("operation", "get_system_stats")
-        })?;
-
-        if tenants.is_empty() {
-            break; // No more tenants to process
-        }
-
-        for tenant in &tenants {
-            // Check tenant health (database connection)
-            let status = match manager.get_tenant_pool(&tenant.id) {
-                Some(pool) => match pool.get() {
-                    Ok(_) => {
-                        active_count += 1;
-                        true
-                    }
-                    Err(_) => false,
-                },
-                None => false,
-            };
-
-            // For per-tenant, since users don't have tenant_id, using global for simplicity
-            tenant_stats.push(TenantStats {
-                tenant_id: tenant.id.clone(),
-                name: tenant.name.clone(),
-                status: if status {
-                    "active".to_string()
-                } else {
-                    "inactive".to_string()
-                },
-            });
-        }
-
-        offset += page_size;
-
-        // Safety check to prevent infinite loops
-        if offset >= total_tenants {
-            break;
-        }
-    }
-
-    let stats = SystemStats {
-        total_tenants,
-        active_tenants: active_count,
-        total_users,
-        logged_in_users,
-        tenant_stats,
-    };
+    // Use functional QueryReader pattern
+    let stats_reader = tenant_service::system_stats_reader();
+    let stats = tenant_service::run_query(stats_reader, pool.get_ref())
+        .log_error("tenant_controller::get_system_stats")?;
 
     Ok(HttpResponse::Ok().json(stats))
 }

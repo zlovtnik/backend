@@ -6,14 +6,9 @@ use crate::{
     models::pagination::SortingAndPaging, schema::people,
 };
 
-use super::{
-    filters::PersonFilter, functional_utils, pagination::HasId, response::Page, Custom, Email,
-    Length, Phone, Range,
-};
+use super::{filters::PersonFilter, pagination::HasId, response::Page};
 
-use crate::functional::{validation_engine::ValidationOutcome, validation_rules::ValidationRule};
-
-// Re-export functional utilities for person operations
+pub mod validators;
 
 #[derive(Clone, Queryable, Serialize, Deserialize)]
 pub struct Person {
@@ -26,7 +21,7 @@ pub struct Person {
     pub email: String,
 }
 
-#[derive(Insertable, AsChangeset, Serialize, Deserialize)]
+#[derive(Insertable, AsChangeset, Serialize, Deserialize, Clone)]
 #[diesel(table_name = people)]
 pub struct PersonDTO {
     pub name: String,
@@ -54,145 +49,12 @@ impl PersonDTO {
         !value.trim().is_empty()
     }
 
-    /// Validate the DTO's fields and collect any validation error messages.
+    /// Validate the DTO using the functional validator combinators.
     ///
-    /// Performs the following checks:
-    /// - name: required (non-blank) and maximum length 100.
-    /// - email: required, valid email format, and maximum length 255.
-    /// - phone: required, length between 10 and 20, and valid phone format.
-    /// - address: required and maximum length 500.
-    /// - age: must be between 0 and 150.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` if all validations pass, `Err(Vec<String>)` containing one or more human-readable error messages otherwise.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let dto = PersonDTO {
-    ///     name: "".into(),
-    ///     gender: true,
-    ///     age: 25,
-    ///     address: "123 Main".into(),
-    ///     phone: "1234567890".into(),
-    ///     email: "test@example.com".into(),
-    /// };
-    ///
-    /// let res = dto.validate();
-    /// assert!(res.is_err());
-    /// let errors = res.unwrap_err();
-    /// assert!(errors.iter().any(|e| e.contains("name")));
-    /// ```
-    pub fn validate(&self) -> Result<(), Vec<String>> {
-        let string_engine = functional_utils::validation_engine::<String>();
-        let range_engine = functional_utils::validation_engine::<i32>();
-
-        let string_validations = [
-            string_engine.validate_field(
-                &self.name,
-                "name",
-                vec![Custom::new(
-                    Self::is_not_blank,
-                    "REQUIRED",
-                    "{} is required",
-                )],
-            ),
-            string_engine.validate_field(
-                &self.name,
-                "name",
-                vec![Length {
-                    min: None,
-                    max: Some(100),
-                }],
-            ),
-            string_engine.validate_field(
-                &self.email,
-                "email",
-                vec![Custom::new(
-                    Self::is_not_blank,
-                    "REQUIRED",
-                    "{} is required",
-                )],
-            ),
-            string_engine.validate_field(&self.email, "email", vec![Email]),
-            string_engine.validate_field(
-                &self.email,
-                "email",
-                vec![Length {
-                    min: None,
-                    max: Some(255),
-                }],
-            ),
-            string_engine.validate_field(
-                &self.phone,
-                "phone",
-                vec![Custom::new(
-                    Self::is_not_blank,
-                    "REQUIRED",
-                    "{} is required",
-                )],
-            ),
-            string_engine.validate_field(
-                &self.phone,
-                "phone",
-                vec![Length {
-                    min: Some(10),
-                    max: Some(20),
-                }],
-            ),
-            string_engine.validate_field(&self.phone, "phone", vec![Phone]),
-            {
-                let rules: Vec<Box<dyn ValidationRule<String>>> = vec![
-                    Box::new(Custom::new(
-                        Self::is_not_blank,
-                        "REQUIRED",
-                        "{} is required",
-                    )),
-                    Box::new(Length {
-                        min: None,
-                        max: Some(500),
-                    }),
-                ];
-                let mut errors = Vec::new();
-                for rule in &rules {
-                    if let Err(e) = rule.validate(&self.address, "address") {
-                        errors.push(e);
-                    }
-                }
-                if errors.is_empty() {
-                    ValidationOutcome::success(&self.address)
-                } else {
-                    ValidationOutcome::failure(errors)
-                }
-            },
-        ];
-
-        let age_validations = [range_engine.validate_field(
-            &self.age,
-            "age",
-            vec![Range {
-                min: Some(0),
-                max: Some(150),
-            }],
-        )];
-
-        let mut errors: Vec<String> = string_validations
-            .into_iter()
-            .flat_map(|outcome| functional_utils::to_error_messages(outcome.errors))
-            .collect();
-
-        errors.extend(
-            age_validations
-                .into_iter()
-                .flat_map(|outcome| functional_utils::to_error_messages(outcome.errors)),
-        );
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
+    /// Returns `Ok(())` when all validation rules pass or `Err(ServiceError)`
+    /// containing the first failing rule.
+    pub fn validate(&self) -> Result<(), ServiceError> {
+        validators::validate_person(self)
     }
 }
 
@@ -376,9 +238,7 @@ impl Person {
     /// ```
     pub fn insert(new_person: PersonDTO, conn: &mut Connection) -> Result<usize, ServiceError> {
         // Validate using functional validation patterns
-        new_person
-            .validate()
-            .map_err(|errors| ServiceError::bad_request(errors.join("; ")))?;
+        new_person.validate()?;
 
         // Insert using functional composition
         diesel::insert_into(people::table)

@@ -1,15 +1,18 @@
 use actix_web::http::StatusCode;
-use actix_web::{web, HttpMessage, HttpRequest, HttpResponse, Responder};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use log::info;
 use serde_json::json;
 use std::borrow::Cow;
 
 use crate::{
-    config::db::{Pool, TenantPoolManager},
+    api::controller_context::{AuthContext, ControllerContext, DatabaseContext},
+    config::db::TenantPoolManager,
     constants,
     error::ServiceError,
+    functional::performance_monitoring::OperationType,
     functional::response_transformers::{ResponseTransformError, ResponseTransformer},
-    models::user::{LoginDTO, SignupDTO, UserDTO},
+    measure_operation,
+    models::user::{validators, LoginDTO, SignupDTO, UserDTO},
     services::{
         account_service::{self, RefreshTokenRequest},
         functional_service_base::FunctionalErrorHandling,
@@ -27,29 +30,6 @@ fn respond_empty(req: &HttpRequest, status: StatusCode, message: &str) -> HttpRe
         .with_message(Cow::Owned(message.to_string()))
         .with_status(status)
         .respond_to(req)
-}
-
-/// Extracts the tenant Pool stored in the request's extensions.
-///
-/// # Returns
-///
-/// `Ok(pool)` with a clone of the tenant `Pool` if present in the request extensions, `Err(ServiceError::BadRequest)` with message `"Tenant not found"` otherwise.
-///
-/// # Examples
-///
-/// ```no_run
-/// use actix_web::HttpRequest;
-/// // assume `Pool` and `ServiceError` are in scope
-/// // let req: HttpRequest = /* request with Pool inserted into extensions */ ;
-/// // let pool = extract_tenant_pool(&req)?;
-/// ```
-fn extract_tenant_pool(req: &HttpRequest) -> Result<Pool, ServiceError> {
-    match req.extensions().get::<Pool>() {
-        Some(pool) => Ok(pool.clone()),
-        None => Err(ServiceError::bad_request("Tenant not found")
-            .with_tag("tenant")
-            .with_detail("Missing tenant pool in request extensions")),
-    }
 }
 
 /// Process a tenant-scoped user signup and produce an HTTP response.
@@ -73,31 +53,24 @@ pub async fn signup(
     info!("Processing signup request");
 
     let signup_payload = user_dto.into_inner();
-    let tenant_id = signup_payload.tenant_id.clone();
-    let user_db = UserDTO {
-        username: signup_payload.username,
-        email: signup_payload.email,
-        password: signup_payload.password,
-        active: true, // New users are active by default
-    };
+    validators::validate_signup(&signup_payload)?;
 
-    match manager.get_tenant_pool(&tenant_id) {
-        Some(pool) => {
-            let tenant_metadata = tenant_id.clone();
-            account_service::signup(user_db, &pool)
-                .log_error("account_controller::signup")
-                .and_then(|message| {
-                    ResponseTransformer::new(constants::EMPTY)
-                        .with_message(Cow::Owned(message))
-                        .try_with_metadata(json!({ "tenant_id": tenant_metadata }))
-                        .map(|transformer| transformer.respond_to(&req))
-                        .map_err(response_composition_error)
-                })
-        }
-        None => Err(ServiceError::bad_request("Tenant not found")
-            .with_metadata("tenant_id", tenant_id)
-            .with_tag("tenant")),
-    }
+    let tenant_id = signup_payload.tenant_id.clone();
+    let database = DatabaseContext::from_manager(manager.get_ref(), tenant_id.clone())?;
+    let context = ControllerContext::new(database);
+
+    let user_dto = UserDTO::from(&signup_payload);
+    let signup_flow = account_service::signup_reader(user_dto)?;
+
+    let operation = OperationType::Custom("account_signup_controller".to_string());
+    let signup_message = measure_operation!(operation, { context.run_query(signup_flow) })
+        .log_error("account_controller::signup")?;
+
+    ResponseTransformer::new(constants::EMPTY)
+        .with_message(Cow::Owned(signup_message))
+        .try_with_metadata(json!({ "tenant_id": tenant_id }))
+        .map(|transformer| transformer.respond_to(&req))
+        .map_err(response_composition_error)
 }
 
 // POST api/auth/login
@@ -107,38 +80,46 @@ pub async fn login(
     req: HttpRequest,
 ) -> Result<HttpResponse, ServiceError> {
     let login_payload = login_dto.into_inner();
+    validators::validate_login(&login_payload)?;
     let tenant_id = login_payload.tenant_id.clone();
 
-    if let Some(pool) = manager.get_tenant_pool(&tenant_id) {
-        let tenant_metadata = tenant_id.clone();
-        account_service::login(login_payload, &pool)
-            .log_error("account_controller::login")
-            .and_then(|token_res| {
-                ResponseTransformer::new(token_res)
-                    .with_message(Cow::Borrowed(constants::MESSAGE_LOGIN_SUCCESS))
-                    .try_with_metadata(json!({ "tenant_id": tenant_metadata }))
-                    .map(|transformer| transformer.respond_to(&req))
-                    .map_err(response_composition_error)
-            })
-    } else {
-        Err(ServiceError::bad_request("Tenant not found")
-            .with_tag("tenant")
-            .with_detail("Tenant pool missing for login request"))
-    }
+    let database = DatabaseContext::from_manager(manager.get_ref(), tenant_id.clone())?;
+    let context = ControllerContext::new(database);
+
+    let login_flow = account_service::login_reader(login_payload)?;
+    let operation = OperationType::Custom("account_login_controller".to_string());
+
+    let token_res = measure_operation!(operation, { context.run_query(login_flow) })
+        .log_error("account_controller::login")?;
+
+    ResponseTransformer::new(token_res)
+        .with_message(Cow::Borrowed(constants::MESSAGE_LOGIN_SUCCESS))
+        .try_with_metadata(json!({ "tenant_id": tenant_id }))
+        .map(|transformer| transformer.respond_to(&req))
+        .map_err(response_composition_error)
 }
 
 // POST api/auth/logout
 pub async fn logout(req: HttpRequest) -> Result<HttpResponse, ServiceError> {
-    if let Some(authen_header) = req.headers().get(constants::AUTHORIZATION) {
-        let pool = extract_tenant_pool(&req)?;
-        account_service::logout(authen_header, &pool)
-            .log_error("account_controller::logout")
-            .map(|_| respond_empty(&req, StatusCode::OK, constants::MESSAGE_LOGOUT_SUCCESS))
-    } else {
-        Err(ServiceError::bad_request(constants::MESSAGE_TOKEN_MISSING)
+    let auth_context = AuthContext::from_request(&req).ok_or_else(|| {
+        ServiceError::bad_request(constants::MESSAGE_TOKEN_MISSING)
             .with_tag("auth")
-            .with_detail("Authorization header missing"))
-    }
+            .with_detail("Authorization header missing")
+    })?;
+
+    let database = DatabaseContext::from_request(&req)?;
+
+    let operation = OperationType::Custom("account_logout_controller".to_string());
+    measure_operation!(operation, {
+        account_service::logout(auth_context.header(), database.pool())
+    })
+    .log_error("account_controller::logout")?;
+
+    Ok(respond_empty(
+        &req,
+        StatusCode::OK,
+        constants::MESSAGE_LOGOUT_SUCCESS,
+    ))
 }
 
 /// Refresh the authentication state and produce updated login information.
@@ -158,20 +139,23 @@ pub async fn logout(req: HttpRequest) -> Result<HttpResponse, ServiceError> {
 /// # }
 /// ```
 pub async fn refresh(req: HttpRequest) -> Result<HttpResponse, ServiceError> {
-    if let Some(authen_header) = req.headers().get(constants::AUTHORIZATION) {
-        let pool = extract_tenant_pool(&req)?;
-        account_service::refresh(authen_header, &pool)
-            .log_error("account_controller::refresh")
-            .map(|login_info| {
-                ResponseTransformer::new(login_info)
-                    .with_message(Cow::Borrowed(constants::MESSAGE_OK))
-                    .respond_to(&req)
-            })
-    } else {
-        Err(ServiceError::bad_request(constants::MESSAGE_TOKEN_MISSING)
+    let auth_context = AuthContext::from_request(&req).ok_or_else(|| {
+        ServiceError::bad_request(constants::MESSAGE_TOKEN_MISSING)
             .with_tag("auth")
-            .with_detail("Authorization header missing"))
-    }
+            .with_detail("Authorization header missing")
+    })?;
+
+    let database = DatabaseContext::from_request(&req)?;
+
+    let operation = OperationType::Custom("account_refresh_controller".to_string());
+    let login_info = measure_operation!(operation, {
+        account_service::refresh(auth_context.header(), database.pool())
+    })
+    .log_error("account_controller::refresh")?;
+
+    Ok(ResponseTransformer::new(login_info)
+        .with_message(Cow::Borrowed(constants::MESSAGE_OK))
+        .respond_to(&req))
 }
 
 // POST api/auth/refresh-token
@@ -198,21 +182,24 @@ pub async fn refresh_token(
     let refresh_payload = refresh_dto.into_inner();
     let tenant_id = refresh_payload.tenant_id;
 
-    if let Some(pool) = manager.get_tenant_pool(&tenant_id) {
-        account_service::refresh_with_token(&refresh_payload.refresh_token, &tenant_id, &pool)
-            .log_error("account_controller::refresh_token")
-            .and_then(|token_res| {
-                ResponseTransformer::new(token_res)
-                    .with_message(Cow::Borrowed(constants::MESSAGE_OK))
-                    .try_with_metadata(json!({ "tenant_id": tenant_id }))
-                    .map(|transformer| transformer.respond_to(&req))
-                    .map_err(response_composition_error)
-            })
-    } else {
-        Err(ServiceError::bad_request("Tenant not found")
-            .with_tag("tenant")
-            .with_detail("Tenant pool missing for refresh token request"))
-    }
+    let database = DatabaseContext::from_manager(manager.get_ref(), tenant_id.clone())?;
+    let context = ControllerContext::new(database);
+
+    let operation = OperationType::Custom("account_refresh_token_controller".to_string());
+    let token_res = measure_operation!(operation, {
+        account_service::refresh_with_token(
+            &refresh_payload.refresh_token,
+            &tenant_id,
+            context.database().pool(),
+        )
+    })
+    .log_error("account_controller::refresh_token")?;
+
+    ResponseTransformer::new(token_res)
+        .with_message(Cow::Borrowed(constants::MESSAGE_OK))
+        .try_with_metadata(json!({ "tenant_id": tenant_id }))
+        .map(|transformer| transformer.respond_to(&req))
+        .map_err(response_composition_error)
 }
 
 // GET api/auth/me
@@ -236,20 +223,23 @@ pub async fn refresh_token(
 /// // let resp = actix_web::rt::System::new().block_on(async { me(req).await });
 /// ```
 pub async fn me(req: HttpRequest) -> Result<HttpResponse, ServiceError> {
-    if let Some(authen_header) = req.headers().get(constants::AUTHORIZATION) {
-        let pool = extract_tenant_pool(&req)?;
-        account_service::me(authen_header, &pool)
-            .log_error("account_controller::me")
-            .map(|login_info| {
-                ResponseTransformer::new(login_info)
-                    .with_message(Cow::Borrowed(constants::MESSAGE_OK))
-                    .respond_to(&req)
-            })
-    } else {
-        Err(ServiceError::bad_request(constants::MESSAGE_TOKEN_MISSING)
+    let auth_context = AuthContext::from_request(&req).ok_or_else(|| {
+        ServiceError::bad_request(constants::MESSAGE_TOKEN_MISSING)
             .with_tag("auth")
-            .with_detail("Authorization header missing"))
-    }
+            .with_detail("Authorization header missing")
+    })?;
+
+    let database = DatabaseContext::from_request(&req)?;
+
+    let operation = OperationType::Custom("account_me_controller".to_string());
+    let login_info = measure_operation!(operation, {
+        account_service::me(auth_context.header(), database.pool())
+    })
+    .log_error("account_controller::me")?;
+
+    Ok(ResponseTransformer::new(login_info)
+        .with_message(Cow::Borrowed(constants::MESSAGE_OK))
+        .respond_to(&req))
 }
 
 #[cfg(test)]

@@ -21,7 +21,7 @@ use crate::{
     config::db::Pool,
     constants,
     error::ServiceError,
-    models::user::operations as user_ops,
+    models::user::{operations as user_ops, validators},
     models::{
         refresh_token::RefreshToken,
         user::{LoginDTO, LoginInfoDTO, UserDTO, UserResponseDTO, UserUpdateDTO},
@@ -34,56 +34,6 @@ use crate::{
     utils::token_utils,
 };
 use diesel::result::{DatabaseErrorKind, Error as DieselError};
-
-/// Iterator-based validation using functional combinator pattern for UserDTO
-fn create_user_validator() -> Validator<UserDTO> {
-    Validator::new()
-        .rule(|dto: &UserDTO| validation_rules::required("username")(&dto.username))
-        .rule(|dto: &UserDTO| validation_rules::min_length("username", 3)(&dto.username))
-        .rule(|dto: &UserDTO| validation_rules::max_length("username", 50)(&dto.username))
-        .rule(|dto: &UserDTO| {
-            let char_count = dto.password.chars().count();
-            if char_count < 8 {
-                Err(ServiceError::bad_request(
-                    "Password too short (min 8 characters)",
-                ))
-            } else if char_count > 64 {
-                Err(ServiceError::bad_request(
-                    "Password too long (max 64 characters)",
-                ))
-            } else if !dto.password.chars().any(|c| c.is_uppercase()) {
-                Err(ServiceError::bad_request(
-                    "Password must contain at least one uppercase letter",
-                ))
-            } else if !dto.password.chars().any(|c| c.is_lowercase()) {
-                Err(ServiceError::bad_request(
-                    "Password must contain at least one lowercase letter",
-                ))
-            } else if !dto.password.chars().any(|c| c.is_numeric()) {
-                Err(ServiceError::bad_request(
-                    "Password must contain at least one number",
-                ))
-            } else {
-                Ok(())
-            }
-        })
-        .rule(|dto: &UserDTO| validation_rules::required("email")(&dto.email))
-        .rule(|dto: &UserDTO| validation_rules::email("email")(&dto.email))
-        .rule(|dto: &UserDTO| validation_rules::max_length("email", 255)(&dto.email))
-}
-
-/// Iterator-based validation using functional combinator pattern for LoginDTO
-fn create_login_validator() -> Validator<LoginDTO> {
-    Validator::new()
-        .rule(|dto: &LoginDTO| {
-            validation_rules::required("username_or_email")(&dto.username_or_email)
-        })
-        .rule(|dto: &LoginDTO| {
-            validation_rules::max_length("username_or_email", 255)(&dto.username_or_email)
-        })
-        .rule(|dto: &LoginDTO| validation_rules::required("password")(&dto.password))
-        .rule(|dto: &LoginDTO| validation_rules::max_length("password", 128)(&dto.password))
-}
 
 fn build_user_signup_pipeline() -> Pipeline<UserDTO> {
     Pipeline::<UserDTO>::new()
@@ -113,6 +63,49 @@ fn build_login_pipeline() -> Pipeline<LoginDTO> {
         })
 }
 
+/// Build a query reader for the signup flow so controllers can compose request context with database execution.
+pub fn signup_reader(user: UserDTO) -> Result<QueryReader<String>, ServiceError> {
+    let sanitized_user = build_user_signup_pipeline().execute(user)?;
+    Ok(QueryReader::new(move |conn| {
+        user_ops::signup_user(sanitized_user.clone(), conn)
+    }))
+}
+
+/// Build a query reader for the login flow enabling controller-level orchestration.
+pub fn login_reader(login: LoginDTO) -> Result<QueryReader<TokenBodyResponse>, ServiceError> {
+    let sanitized_login = build_login_pipeline().execute(login)?;
+
+    let login_flow = QueryReader::new(move |conn| {
+        user_ops::login_user(sanitized_login.clone(), conn)
+            .ok_or_else(|| ServiceError::unauthorized(constants::MESSAGE_LOGIN_FAILED.to_string()))
+    })
+    .and_then(move |login_info| {
+        QueryReader::new(move |conn| {
+            let user =
+                user_ops::find_user_by_username(&login_info.username, conn).map_err(|_| {
+                    ServiceError::internal_server_error("Failed to find user".to_string())
+                })?;
+
+            let access_token = UserToken::generate_token(&login_info);
+
+            RefreshToken::create(user.id, conn)
+                .map_err(|e| {
+                    ServiceError::internal_server_error(format!(
+                        "Failed to create refresh token: {}",
+                        e
+                    ))
+                })
+                .map(|refresh_token| TokenBodyResponse {
+                    access_token,
+                    refresh_token,
+                    token_type: "bearer".to_string(),
+                })
+        })
+    });
+
+    Ok(login_flow)
+}
+
 fn verify_token_with_retry(
     token_data: TokenData<UserToken>,
     pool: &Pool,
@@ -131,12 +124,12 @@ fn verify_token_with_retry(
 
 /// Legacy validation for backward compatibility - uses new functional validator
 fn validate_user_dto(dto: &UserDTO) -> Result<(), ServiceError> {
-    create_user_validator().validate(dto)
+    validators::validate_user(dto)
 }
 
 /// Legacy validation for backward compatibility - uses new functional validator
 fn validate_login_dto(dto: &LoginDTO) -> Result<(), ServiceError> {
-    create_login_validator().validate(dto)
+    validators::validate_login(dto)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -174,11 +167,7 @@ pub struct RefreshTokenRequest {
 /// // `result` will be Ok(...) on success or Err(...) on failure.
 /// ```
 pub fn signup(user: UserDTO, pool: &Pool) -> Result<String, ServiceError> {
-    let sanitized_user = build_user_signup_pipeline().execute(user)?;
-
-    let signup_flow =
-        QueryReader::new(move |conn| user_ops::signup_user(sanitized_user.clone(), conn));
-
+    let signup_flow = signup_reader(user)?;
     run_query(signup_flow, pool).log_error("signup operation")
 }
 
@@ -212,36 +201,7 @@ pub fn signup_either(user: UserDTO, pool: &Pool) -> Either<ServiceError, String>
 /// assert_eq!(token_body.token_type, "bearer");
 /// ```
 pub fn login(login: LoginDTO, pool: &Pool) -> Result<TokenBodyResponse, ServiceError> {
-    let sanitized_login = build_login_pipeline().execute(login)?;
-
-    let login_flow = QueryReader::new(move |conn| {
-        user_ops::login_user(sanitized_login.clone(), conn)
-            .ok_or_else(|| ServiceError::unauthorized(constants::MESSAGE_LOGIN_FAILED.to_string()))
-    })
-    .and_then(move |login_info| {
-        QueryReader::new(move |conn| {
-            let user =
-                user_ops::find_user_by_username(&login_info.username, conn).map_err(|_| {
-                    ServiceError::internal_server_error("Failed to find user".to_string())
-                })?;
-
-            let access_token = UserToken::generate_token(&login_info);
-
-            RefreshToken::create(user.id, conn)
-                .map_err(|e| {
-                    ServiceError::internal_server_error(format!(
-                        "Failed to create refresh token: {}",
-                        e
-                    ))
-                })
-                .map(|refresh_token| TokenBodyResponse {
-                    access_token,
-                    refresh_token,
-                    token_type: "bearer".to_string(),
-                })
-        })
-    });
-
+    let login_flow = login_reader(login)?;
     run_query(login_flow, pool).log_error("login operation")
 }
 

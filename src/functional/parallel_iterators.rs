@@ -18,7 +18,7 @@ use log;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 /// Performance history entry for adaptive chunk sizing
@@ -120,6 +120,133 @@ fn calculate_adaptive_chunk_size(
     } else {
         base_chunk_size
     }
+}
+
+/// Dynamic load balancer for optimizing parallel execution
+#[derive(Debug, Clone)]
+pub struct DynamicLoadBalancer {
+    /// Target efficiency threshold (0.0 - 1.0)
+    target_efficiency: f64,
+    /// Minimum chunk size
+    min_chunk_size: usize,
+    /// Maximum chunk size
+    max_chunk_size: usize,
+    /// Recent performance samples
+    samples: Arc<Mutex<Vec<LoadBalanceSample>>>,
+}
+
+#[derive(Debug, Clone)]
+struct LoadBalanceSample {
+    chunk_size: usize,
+    efficiency: f64,
+    thread_utilization: f64,
+    timestamp: Instant,
+}
+
+impl DynamicLoadBalancer {
+    /// Create a new dynamic load balancer
+    pub fn new(target_efficiency: f64) -> Self {
+        Self {
+            target_efficiency: target_efficiency.clamp(0.5, 1.0),
+            min_chunk_size: 64,
+            max_chunk_size: 8192,
+            samples: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Calculate optimal chunk size based on data size and recent performance
+    pub fn calculate_chunk_size(&self, data_size: usize, thread_count: usize) -> usize {
+        if data_size == 0 || thread_count == 0 {
+            return self.min_chunk_size;
+        }
+
+        // Base calculation: divide work evenly with some overhead for work stealing
+        let base_chunk = (data_size / (thread_count * 4)).max(self.min_chunk_size);
+
+        // Adjust based on recent performance
+        if let Ok(samples) = self.samples.lock() {
+            if samples.len() >= 5 {
+                // Get recent samples (last 10)
+                let recent: Vec<_> = samples.iter().rev().take(10).collect();
+
+                // Calculate average efficiency
+                let avg_efficiency: f64 =
+                    recent.iter().map(|s| s.efficiency).sum::<f64>() / recent.len() as f64;
+
+                // If efficiency is below target, reduce chunk size for better load balancing
+                if avg_efficiency < self.target_efficiency {
+                    let adjustment_factor =
+                        (self.target_efficiency / avg_efficiency.max(0.1)).min(2.0);
+                    let adjusted = (base_chunk as f64 / adjustment_factor) as usize;
+                    return adjusted.clamp(self.min_chunk_size, self.max_chunk_size);
+                }
+
+                // If efficiency is good, slightly increase chunk size to reduce overhead
+                if avg_efficiency > self.target_efficiency + 0.1 {
+                    let adjusted = (base_chunk as f64 * 1.2) as usize;
+                    return adjusted.clamp(self.min_chunk_size, self.max_chunk_size);
+                }
+            }
+        }
+
+        base_chunk.clamp(self.min_chunk_size, self.max_chunk_size)
+    }
+
+    /// Record performance sample for adaptive learning
+    pub fn record_sample(&self, chunk_size: usize, efficiency: f64, thread_utilization: f64) {
+        if let Ok(mut samples) = self.samples.lock() {
+            samples.push(LoadBalanceSample {
+                chunk_size,
+                efficiency,
+                thread_utilization,
+                timestamp: Instant::now(),
+            });
+
+            // Keep only recent samples (last 100)
+            let samples_len = samples.len();
+            if samples_len > 100 {
+                samples.drain(0..samples_len - 100);
+            }
+        }
+    }
+
+    /// Get current load balancing statistics
+    pub fn get_stats(&self) -> LoadBalancingStats {
+        if let Ok(samples) = self.samples.lock() {
+            if samples.is_empty() {
+                return LoadBalancingStats::default();
+            }
+
+            let recent: Vec<_> = samples.iter().rev().take(20).collect();
+            let avg_efficiency =
+                recent.iter().map(|s| s.efficiency).sum::<f64>() / recent.len() as f64;
+            let avg_utilization =
+                recent.iter().map(|s| s.thread_utilization).sum::<f64>() / recent.len() as f64;
+
+            LoadBalancingStats {
+                sample_count: samples.len(),
+                avg_efficiency,
+                avg_thread_utilization: avg_utilization,
+                target_efficiency: self.target_efficiency,
+            }
+        } else {
+            LoadBalancingStats::default()
+        }
+    }
+}
+
+impl Default for DynamicLoadBalancer {
+    fn default() -> Self {
+        Self::new(0.75)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct LoadBalancingStats {
+    pub sample_count: usize,
+    pub avg_efficiency: f64,
+    pub avg_thread_utilization: f64,
+    pub target_efficiency: f64,
 }
 
 /// Parallel processing configuration for performance tuning
@@ -742,6 +869,233 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
         };
 
         ParallelResult { data, metrics }
+    }
+
+    /// Flat maps elements in parallel, flattening the results into a single collection.
+    ///
+    /// Applies the transformation function to each element, which returns an iterator,
+    /// then flattens all results into a single Vec. Uses parallel processing when the
+    /// dataset exceeds the configured threshold.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let config = ParallelConfig::default();
+    /// let data = vec![vec![1, 2], vec![3, 4], vec![5]];
+    /// let result = data.into_iter().par_flat_map(&config, |v| v.into_iter());
+    /// assert_eq!(result.data, vec![1, 2, 3, 4, 5]);
+    /// ```
+    fn par_flat_map<F, U, I>(self, config: &ParallelConfig, f: F) -> ParallelResult<Vec<U>>
+    where
+        F: Fn(T) -> I + Send + Sync,
+        I: IntoIterator<Item = U>,
+        U: Send,
+        Self: Sized,
+    {
+        let start_time = Instant::now();
+        let data: Vec<T> = self.collect();
+        let data_len = data.len();
+
+        if data_len < config.min_parallel_size {
+            // Sequential flat_map for small datasets
+            let result: Vec<U> = data.into_iter().flat_map(f).collect();
+            let elapsed = start_time.elapsed();
+            let metrics = ParallelMetrics {
+                total_time: elapsed,
+                thread_count: 1,
+                throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
+                memory_usage: (data_len * std::mem::size_of::<T>()
+                    + result.len() * std::mem::size_of::<U>()) as u64,
+                efficiency: 1.0,
+                work_stealing_metrics: WorkStealingMetrics::default(),
+                load_balancing_metrics: LoadBalancingMetrics::default(),
+            };
+            return ParallelResult {
+                data: result,
+                metrics,
+            };
+        }
+
+        // Parallel flat_map
+        let result: Vec<U> = data.into_par_iter().flat_map(f).collect();
+
+        let elapsed = start_time.elapsed();
+        let thread_count = rayon::current_num_threads();
+        let throughput = (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64;
+        let efficiency = (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0);
+
+        let metrics = ParallelMetrics {
+            total_time: elapsed,
+            thread_count,
+            throughput,
+            memory_usage: (data_len * std::mem::size_of::<T>()
+                + result.len() * std::mem::size_of::<U>()) as u64,
+            efficiency,
+            work_stealing_metrics: WorkStealingMetrics::default(),
+            load_balancing_metrics: LoadBalancingMetrics::default(),
+        };
+
+        ParallelResult {
+            data: result,
+            metrics,
+        }
+    }
+
+    /// Partitions elements into two collections based on a predicate in parallel.
+    ///
+    /// Returns a tuple of (matching, non-matching) vectors. Uses parallel processing
+    /// when the dataset exceeds the configured threshold.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let config = ParallelConfig::default();
+    /// let data = vec![1, 2, 3, 4, 5, 6];
+    /// let result = data.into_iter().par_partition(&config, |&x| x % 2 == 0);
+    /// assert_eq!(result.data.0, vec![2, 4, 6]);
+    /// assert_eq!(result.data.1, vec![1, 3, 5]);
+    /// ```
+    fn par_partition<F>(
+        self,
+        config: &ParallelConfig,
+        predicate: F,
+    ) -> ParallelResult<(Vec<T>, Vec<T>)>
+    where
+        F: Fn(&T) -> bool + Send + Sync,
+        T: Clone + Send + Sync,
+        Self: Sized,
+    {
+        let start_time = Instant::now();
+        let data: Vec<T> = self.collect();
+        let data_len = data.len();
+
+        if data_len < config.min_parallel_size {
+            // Sequential partition for small datasets
+            let (matching, non_matching): (Vec<T>, Vec<T>) = data.into_iter().partition(predicate);
+            let elapsed = start_time.elapsed();
+            let metrics = ParallelMetrics {
+                total_time: elapsed,
+                thread_count: 1,
+                throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
+                memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+                efficiency: 1.0,
+                work_stealing_metrics: WorkStealingMetrics::default(),
+                load_balancing_metrics: LoadBalancingMetrics::default(),
+            };
+            return ParallelResult {
+                data: (matching, non_matching),
+                metrics,
+            };
+        }
+
+        // Parallel partition using fold and reduce
+        let (matching, non_matching) = data
+            .into_par_iter()
+            .fold(
+                || (Vec::new(), Vec::new()),
+                |(mut matching, mut non_matching), item| {
+                    if predicate(&item) {
+                        matching.push(item);
+                    } else {
+                        non_matching.push(item);
+                    }
+                    (matching, non_matching)
+                },
+            )
+            .reduce(
+                || (Vec::new(), Vec::new()),
+                |(mut acc_match, mut acc_non_match), (mut match_vec, mut non_match_vec)| {
+                    acc_match.append(&mut match_vec);
+                    acc_non_match.append(&mut non_match_vec);
+                    (acc_match, acc_non_match)
+                },
+            );
+
+        let elapsed = start_time.elapsed();
+        let thread_count = rayon::current_num_threads();
+        let throughput = (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64;
+        let efficiency = (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0);
+
+        let metrics = ParallelMetrics {
+            total_time: elapsed,
+            thread_count,
+            throughput,
+            memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+            efficiency,
+            work_stealing_metrics: WorkStealingMetrics::default(),
+            load_balancing_metrics: LoadBalancingMetrics::default(),
+        };
+
+        ParallelResult {
+            data: (matching, non_matching),
+            metrics,
+        }
+    }
+
+    /// Finds the first element matching a predicate in parallel.
+    ///
+    /// Returns Some(element) if found, None otherwise. Uses parallel search
+    /// when the dataset exceeds the configured threshold.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let config = ParallelConfig::default();
+    /// let data = vec![1, 2, 3, 4, 5];
+    /// let result = data.into_iter().par_find(&config, |&x| x > 3);
+    /// assert!(result.data.is_some());
+    /// ```
+    fn par_find<F>(self, config: &ParallelConfig, predicate: F) -> ParallelResult<Option<T>>
+    where
+        F: Fn(&T) -> bool + Send + Sync,
+        T: Clone + Send + Sync,
+        Self: Sized,
+    {
+        let start_time = Instant::now();
+        let data: Vec<T> = self.collect();
+        let data_len = data.len();
+
+        if data_len < config.min_parallel_size {
+            // Sequential find for small datasets
+            let result = data.into_iter().find(|item| predicate(item));
+            let elapsed = start_time.elapsed();
+            let metrics = ParallelMetrics {
+                total_time: elapsed,
+                thread_count: 1,
+                throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
+                memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+                efficiency: 1.0,
+                work_stealing_metrics: WorkStealingMetrics::default(),
+                load_balancing_metrics: LoadBalancingMetrics::default(),
+            };
+            return ParallelResult {
+                data: result,
+                metrics,
+            };
+        }
+
+        // Parallel find
+        let result = data.into_par_iter().find_any(predicate);
+
+        let elapsed = start_time.elapsed();
+        let thread_count = rayon::current_num_threads();
+        let throughput = (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64;
+        let efficiency = (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0);
+
+        let metrics = ParallelMetrics {
+            total_time: elapsed,
+            thread_count,
+            throughput,
+            memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+            efficiency,
+            work_stealing_metrics: WorkStealingMetrics::default(),
+            load_balancing_metrics: LoadBalancingMetrics::default(),
+        };
+
+        ParallelResult {
+            data: result,
+            metrics,
+        }
     }
 }
 
@@ -1726,5 +2080,109 @@ mod tests {
 
         let current_data = pipeline.get_data();
         assert_eq!(current_data, &[2, 4, 6, 8, 10]);
+    }
+
+    #[test]
+    fn test_par_flat_map_basic() {
+        let data = vec![vec![1, 2], vec![3, 4], vec![5]];
+        let config = ParallelConfig::default();
+
+        let result = data.into_iter().par_flat_map(&config, |v| v.into_iter());
+
+        assert_eq!(result.data, vec![1, 2, 3, 4, 5]);
+        assert!(result.metrics.total_time.as_micros() > 0);
+    }
+
+    #[test]
+    fn test_par_flat_map_with_transformation() {
+        let data = vec![1, 2, 3];
+        let config = ParallelConfig::default();
+
+        let result = data.into_iter().par_flat_map(&config, |x| vec![x, x * 10]);
+
+        assert_eq!(result.data, vec![1, 10, 2, 20, 3, 30]);
+    }
+
+    #[test]
+    fn test_par_partition_basic() {
+        let data = vec![1, 2, 3, 4, 5, 6];
+        let config = ParallelConfig::default();
+
+        let result = data.into_iter().par_partition(&config, |&x| x % 2 == 0);
+
+        assert_eq!(result.data.0, vec![2, 4, 6]);
+        assert_eq!(result.data.1, vec![1, 3, 5]);
+        assert!(result.metrics.throughput > 0);
+    }
+
+    #[test]
+    fn test_par_partition_all_match() {
+        let data = vec![2, 4, 6, 8];
+        let config = ParallelConfig::default();
+
+        let result = data.into_iter().par_partition(&config, |&x| x % 2 == 0);
+
+        assert_eq!(result.data.0, vec![2, 4, 6, 8]);
+        assert_eq!(result.data.1, Vec::<i32>::new());
+    }
+
+    #[test]
+    fn test_par_find_exists() {
+        let data = vec![1, 2, 3, 4, 5];
+        let config = ParallelConfig::default();
+
+        let result = data.into_iter().par_find(&config, |&x| x > 3);
+
+        assert!(result.data.is_some());
+        let found = result.data.unwrap();
+        assert!(found > 3);
+    }
+
+    #[test]
+    fn test_par_find_not_exists() {
+        let data = vec![1, 2, 3, 4, 5];
+        let config = ParallelConfig::default();
+
+        let result = data.into_iter().par_find(&config, |&x| x > 10);
+
+        assert!(result.data.is_none());
+    }
+
+    #[test]
+    fn test_dynamic_load_balancer_basic() {
+        let balancer = DynamicLoadBalancer::new(0.8);
+        let chunk_size = balancer.calculate_chunk_size(1000, 4);
+
+        assert!(chunk_size >= 64);
+        assert!(chunk_size <= 8192);
+    }
+
+    #[test]
+    fn test_dynamic_load_balancer_adapts_to_low_efficiency() {
+        let balancer = DynamicLoadBalancer::new(0.8);
+
+        // Record some low-efficiency samples
+        for _ in 0..10 {
+            balancer.record_sample(1024, 0.5, 0.6);
+        }
+
+        let chunk_size = balancer.calculate_chunk_size(10000, 8);
+
+        // Should reduce chunk size when efficiency is low
+        assert!(chunk_size < 1024);
+    }
+
+    #[test]
+    fn test_dynamic_load_balancer_stats() {
+        let balancer = DynamicLoadBalancer::new(0.75);
+
+        balancer.record_sample(512, 0.8, 0.85);
+        balancer.record_sample(1024, 0.75, 0.8);
+
+        let stats = balancer.get_stats();
+
+        assert_eq!(stats.sample_count, 2);
+        assert!(stats.avg_efficiency > 0.0);
+        assert_eq!(stats.target_efficiency, 0.75);
     }
 }

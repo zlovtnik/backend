@@ -286,7 +286,7 @@ impl PureFunctionRegistry {
         first_sig: &str,
         second_sig: &str,
         category: FunctionCategory,
-        composed_sig: &'static str,
+        _composed_sig: &'static str,
     ) -> Result<(), RegistryError> {
         let _start = Instant::now();
         let functions = self

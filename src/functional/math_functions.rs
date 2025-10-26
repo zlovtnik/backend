@@ -121,7 +121,7 @@ pub fn register_string_functions(registry: &PureFunctionRegistry) -> Result<(), 
 
 /// Creates a set of common date/time processing functions and registers them
 /// with the provided registry.
-#[cfg(feature = "chrono")]
+#[cfg(feature = "datetime")]
 pub fn register_datetime_functions(registry: &PureFunctionRegistry) -> Result<(), RegistryError> {
     use chrono::{DateTime, Duration, Utc};
 
