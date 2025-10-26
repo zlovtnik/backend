@@ -25,7 +25,6 @@ use crate::config::db::Pool;
 use crate::functional::query_builder::{
     Column, Operator, Predicate, QueryFilter, TypeSafeQueryBuilder,
 };
-use diesel::prelude::*;
 use regex::Regex;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -1021,7 +1020,7 @@ where
     /// // let chunk = composer.execute_chunk_query(0, 100).expect("Query failed");
     /// // assert!(chunk.len() <= 100);
     /// ```
-    pub fn execute_chunk_query(&self, offset: usize, limit: usize) -> Result<Vec<U>, String> {
+    pub fn execute_chunk_query(&self, _offset: usize, _limit: usize) -> Result<Vec<U>, String> {
         // Check if we have a database pool
         let pool = self.pool.as_ref().ok_or("No database pool configured")?;
 
@@ -1048,7 +1047,7 @@ where
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         // Update metrics
-        let execution_time = start_time.elapsed();
+        let _execution_time = start_time.elapsed();
         // In a real implementation, we would update self.metrics here
 
         // Return an empty vector for now - in a real implementation, this would

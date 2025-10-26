@@ -454,21 +454,28 @@ pub mod validation_rules {
         field_name: &'static str,
         pattern: &'static str,
     ) -> impl Fn(&String) -> ServiceResult<()> {
+        use std::collections::HashMap;
+        use std::sync::{Arc, RwLock};
+
+        let pattern = pattern.to_string();
         move |value: &String| {
-            static mut REGEX_CACHE: Option<std::collections::HashMap<&'static str, Regex>> = None;
-            static REGEX_INIT: OnceLock<()> = OnceLock::new();
+            static REGEX_CACHE: std::sync::OnceLock<Arc<RwLock<HashMap<String, Regex>>>> =
+                std::sync::OnceLock::new();
 
-            REGEX_INIT.get_or_init(|| unsafe {
-                REGEX_CACHE = Some(std::collections::HashMap::new());
-            });
+            let cache = REGEX_CACHE.get_or_init(|| Arc::new(RwLock::new(HashMap::new())));
 
-            let regex = unsafe {
-                REGEX_CACHE
-                    .as_mut()
-                    .unwrap()
-                    .entry(pattern)
-                    .or_insert_with(|| Regex::new(pattern).expect("Invalid regex pattern"))
-                    .clone()
+            let regex = {
+                let cache_read = cache.read().unwrap();
+                if let Some(regex) = cache_read.get(&pattern) {
+                    regex.clone()
+                } else {
+                    drop(cache_read);
+                    let mut cache_write = cache.write().unwrap();
+                    let regex = cache_write
+                        .entry(pattern.clone())
+                        .or_insert_with(|| Regex::new(&pattern).expect("Invalid regex pattern"));
+                    regex.clone()
+                }
             };
 
             if !regex.is_match(value) {

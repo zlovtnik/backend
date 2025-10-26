@@ -20,23 +20,37 @@ use crate::{
         person::{Person, PersonDTO},
         response::Page,
     },
-    services::functional_patterns::{validation_rules, Either, Validator},
+    services::functional_patterns::{run_query, Either, QueryReader},
     services::functional_service_base::{FunctionalErrorHandling, FunctionalQueryService},
 };
 
-/// Iterator-based validation using functional combinator pattern
-fn create_person_validator() -> Validator<PersonDTO> {
-    Validator::new()
-        .rule(|dto: &PersonDTO| validation_rules::required("name")(&dto.name))
-        .rule(|dto: &PersonDTO| validation_rules::max_length("name", 100)(&dto.name))
-        .rule(|dto: &PersonDTO| validation_rules::required("email")(&dto.email))
-        .rule(|dto: &PersonDTO| validation_rules::email("email")(&dto.email))
-        .rule(|dto: &PersonDTO| validation_rules::max_length("email", 255)(&dto.email))
+use crate::models::person::validators;
+
+fn find_all_reader() -> QueryReader<Vec<Person>> {
+    QueryReader::new(|conn| {
+        Person::find_all(conn).map_err(|_| {
+            ServiceError::internal_server_error(constants::MESSAGE_CAN_NOT_FETCH_DATA.to_string())
+        })
+    })
 }
 
-/// Legacy validation for backward compatibility - uses new functional validator
-fn validate_person_dto(dto: &PersonDTO) -> Result<(), ServiceError> {
-    create_person_validator().validate(dto)
+fn find_by_id_reader(id: i32) -> QueryReader<Person> {
+    QueryReader::new(move |conn| {
+        Person::find_by_id(id, conn)
+            .map_err(|_| ServiceError::not_found(format!("Person with id {} not found", id)))
+    })
+}
+
+fn filter_reader(filter: PersonFilter) -> QueryReader<Page<Person>> {
+    use log::{debug, error};
+
+    QueryReader::new(move |conn| {
+        debug!("Executing Person::filter with filter: {:?}", filter);
+        Person::filter(filter.clone(), conn).map_err(|e| {
+            error!("Database error in Person::filter: {}", e);
+            ServiceError::internal_server_error(format!("Database error: {}", e))
+        })
+    })
 }
 
 /// Fetches all Person records with iterator-based processing and lazy evaluation.
@@ -47,28 +61,12 @@ fn validate_person_dto(dto: &PersonDTO) -> Result<(), ServiceError> {
 /// # Returns
 /// `Ok(Vec<Person>)` on success, `Err(ServiceError)` on database errors.
 pub fn find_all(pool: &Pool) -> Result<Vec<Person>, ServiceError> {
-    let query_service = FunctionalQueryService::new(pool.clone());
-
-    query_service
-        .query(|conn| {
-            Person::find_all(conn).map_err(|_| {
-                ServiceError::internal_server_error(
-                    constants::MESSAGE_CAN_NOT_FETCH_DATA.to_string(),
-                )
-            })
-        })
-        .log_error("find_all operation")
+    run_query(find_all_reader(), pool).log_error("find_all operation")
 }
 
 /// Fetches all Person records using Either types for functional composition
 pub fn find_all_either(pool: &Pool) -> Either<ServiceError, Vec<Person>> {
-    let query_service = FunctionalQueryService::new(pool.clone());
-
-    match query_service.query(|conn| {
-        Person::find_all(conn).map_err(|_| {
-            ServiceError::internal_server_error(constants::MESSAGE_CAN_NOT_FETCH_DATA.to_string())
-        })
-    }) {
+    match run_query(find_all_reader(), pool) {
         Ok(people) => Either::Right(people),
         Err(e) => Either::Left(e),
     }
@@ -81,22 +79,12 @@ pub fn find_all_either(pool: &Pool) -> Either<ServiceError, Vec<Person>> {
 /// # Returns
 /// `Ok(Person)` if found, `Err(ServiceError::NotFound)` if not found.
 pub fn find_by_id(id: i32, pool: &Pool) -> Result<Person, ServiceError> {
-    let query_service = FunctionalQueryService::new(pool.clone());
-
-    query_service.query(|conn| {
-        Person::find_by_id(id, conn)
-            .map_err(|_| ServiceError::not_found(format!("Person with id {} not found", id)))
-    })
+    run_query(find_by_id_reader(id), pool)
 }
 
 /// Retrieve a person by their ID using Either types for functional composition
 pub fn find_by_id_either(id: i32, pool: &Pool) -> Either<ServiceError, Person> {
-    let query_service = FunctionalQueryService::new(pool.clone());
-
-    match query_service.query(|conn| {
-        Person::find_by_id(id, conn)
-            .map_err(|_| ServiceError::not_found(format!("Person with id {} not found", id)))
-    }) {
+    match run_query(find_by_id_reader(id), pool) {
         Ok(person) => Either::Right(person),
         Err(e) => Either::Left(e),
     }
@@ -110,34 +98,18 @@ pub fn find_by_id_either(id: i32, pool: &Pool) -> Either<ServiceError, Person> {
 /// # Returns
 /// `Ok(Page<Person>)` with filtered and paginated results.
 pub fn filter(filter: PersonFilter, pool: &Pool) -> Result<Page<Person>, ServiceError> {
-    use log::{debug, error};
+    use log::debug;
 
     debug!("Starting filter operation with filter: {:?}", filter);
-    let query_service = FunctionalQueryService::new(pool.clone());
-
-    query_service.query(|conn| {
-        debug!("Executing Person::filter with database connection");
-        Person::filter(filter, conn).map_err(|e| {
-            error!("Database error in Person::filter: {}", e);
-            ServiceError::internal_server_error(format!("Database error: {}", e))
-        })
-    })
+    run_query(filter_reader(filter), pool).log_error("filter operation")
 }
 
 /// Retrieves a paginated page of people using Either types for functional composition
 pub fn filter_either(filter: PersonFilter, pool: &Pool) -> Either<ServiceError, Page<Person>> {
-    use log::{debug, error};
+    use log::debug;
 
     debug!("Starting filter operation with filter: {:?}", filter);
-    let query_service = FunctionalQueryService::new(pool.clone());
-
-    match query_service.query(|conn| {
-        debug!("Executing Person::filter with database connection");
-        Person::filter(filter, conn).map_err(|e| {
-            error!("Database error in Person::filter: {}", e);
-            ServiceError::internal_server_error(format!("Database error: {}", e))
-        })
-    }) {
+    match run_query(filter_reader(filter), pool) {
         Ok(page) => Either::Right(page),
         Err(e) => Either::Left(e),
     }
@@ -150,8 +122,7 @@ pub fn filter_either(filter: PersonFilter, pool: &Pool) -> Either<ServiceError, 
 /// # Returns
 /// `Ok(())` on successful insertion, `Err(ServiceError)` on validation or database errors.
 pub fn insert(new_person: PersonDTO, pool: &Pool) -> Result<(), ServiceError> {
-    // Use iterator-based validation pipeline
-    validate_person_dto(&new_person)?;
+    validators::validate_person(&new_person)?;
 
     // Use functional pipeline with validated data
     crate::services::functional_service_base::ServicePipeline::new(pool.clone())
@@ -169,8 +140,7 @@ pub fn insert(new_person: PersonDTO, pool: &Pool) -> Result<(), ServiceError> {
 
 /// Inserts a new person using Either types for functional composition
 pub fn insert_either(new_person: PersonDTO, pool: &Pool) -> Either<ServiceError, ()> {
-    // Convert validation result to Either
-    match validate_person_dto(&new_person) {
+    match validators::validate_person(&new_person) {
         Ok(()) => {
             // Use functional pipeline with validated data
             match crate::services::functional_service_base::ServicePipeline::new(pool.clone())
@@ -199,8 +169,7 @@ pub fn insert_either(new_person: PersonDTO, pool: &Pool) -> Either<ServiceError,
 /// # Returns
 /// `Ok(())` on successful update, `Err(ServiceError)` on validation or database errors.
 pub fn update(id: i32, updated_person: PersonDTO, pool: &Pool) -> Result<(), ServiceError> {
-    // Use iterator-based validation pipeline
-    validate_person_dto(&updated_person)?;
+    validators::validate_person(&updated_person)?;
 
     // Use functional pipeline with validated data
     crate::services::functional_service_base::ServicePipeline::new(pool.clone())
@@ -221,8 +190,7 @@ pub fn update(id: i32, updated_person: PersonDTO, pool: &Pool) -> Result<(), Ser
 
 /// Updates a person using Either types for functional composition
 pub fn update_either(id: i32, updated_person: PersonDTO, pool: &Pool) -> Either<ServiceError, ()> {
-    // Convert validation result to Either
-    match validate_person_dto(&updated_person) {
+    match validators::validate_person(&updated_person) {
         Ok(()) => {
             // Use functional pipeline with validated data
             match crate::services::functional_service_base::ServicePipeline::new(pool.clone())

@@ -292,17 +292,33 @@ cargo bench --bench functional_benchmarks
 
 ### Short-term (1-2 weeks)
 - [ ] FP-014: API Controller Updates
+  - Scope controllers that still rely on imperative flows and break the work into 3 PR-sized batches.
+  - Align the rollout with tenant requirements so multi-tenant endpoints land in the first batch.
+  - Draft an FP-014 kick-off note for the team with milestones and test expectations.
 - [ ] Integrate QueryReader in controllers
+  - Catalog shared request context (tenant, auth, pagination) and define corresponding `QueryReader` inputs.
+  - Convert one read-heavy and one write-heavy controller first to validate the pattern, then fan out.
+  - Add targeted integration tests proving context propagation and error handling still succeed.
 - [ ] Apply Validator to DTOs
+  - Extract current DTO validation rules into reusable combinators co-located with the DTO modules.
+  - Ensure DTO validators cover edge cases uncovered in FP-013 benchmarks and document examples.
+  - Backfill unit tests around invalid payload scenarios before removing the old validation code.
 - [ ] Add metrics collection
+  - Pick the KPI set (latency, validation failures, auth bypass) and define metric names/tags up front.
+  - Instrument the newly refactored controllers alongside QueryReader pipelines to keep telemetry cohesive.
+  - Update runbooks/dashboards so SRE can establish baselines immediately after deployment.
+
 
 ### Medium-term (1-2 months)
+
 - [ ] Profiling and optimization
 - [ ] Additional benchmark runs
 - [ ] Production monitoring
 - [ ] Performance tuning
 
+
 ### Long-term (Ongoing)
+
 - [ ] Extend patterns to other services
 - [ ] Community patterns library
 - [ ] Training and documentation
@@ -327,6 +343,7 @@ cargo bench --bench functional_benchmarks
 ## Deployment Checklist
 
 ### Pre-Deployment
+
 - [x] All tests passing
 - [x] Code reviewed
 - [x] Documentation complete
@@ -334,6 +351,7 @@ cargo bench --bench functional_benchmarks
 - [x] Benchmarks established
 
 ### Deployment
+
 - [x] No breaking changes
 - [x] Backward compatible
 - [x] Gradual rollout possible
@@ -341,6 +359,7 @@ cargo bench --bench functional_benchmarks
 - [x] Rollback plan available
 
 ### Post-Deployment
+
 - [ ] Monitor performance metrics
 - [ ] Validate functional patterns usage
 - [ ] Collect real-world data
@@ -374,7 +393,8 @@ cargo bench --bench functional_benchmarks
 
 ### Next Task
 
-**FP-014: API Controller Updates**
+#### FP-014: API Controller Updates
+
 - Apply functional patterns to controllers
 - Integrate QueryReader pattern
 - Use Validator combinators

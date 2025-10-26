@@ -695,49 +695,6 @@ impl<T: Clone + PartialEq> ValidationRule<T> for OneOf<T> {
     }
 }
 
-#[deprecated(
-    note = "Use the unique() function which returns a UniqueItems validator instead. The Unique struct is deprecated due to its cloning behavior."
-)]
-/// Unique validation within a collection
-pub struct Unique;
-
-impl<T: Clone + Eq + std::hash::Hash> ValidationRule<Vec<T>> for Unique {
-    /// Validates that a vector contains no duplicate values.
-    ///
-    /// On success returns `Ok(())`. If any duplicate is found returns `Err(ValidationError)`
-    /// with code `DUPLICATE_ITEMS` and a message indicating which field contains duplicates.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::collections::HashSet;
-    ///
-    /// // Assuming `Unique` implements `ValidationRule<Vec<T>>`
-    /// let rule = Unique;
-    /// let ok = rule.validate(&vec![1, 2, 3], "numbers");
-    /// assert!(ok.is_ok());
-    ///
-    /// let err = rule.validate(&vec![1, 2, 2], "numbers");
-    /// assert!(err.is_err());
-    /// let e = err.unwrap_err();
-    /// assert_eq!(e.code, "DUPLICATE_ITEMS");
-    /// assert!(e.message.contains("numbers"));
-    /// ```
-    fn validate(&self, value: &Vec<T>, field_name: &str) -> ValidationResult<()> {
-        let mut seen = HashSet::new();
-        for item in value {
-            if !seen.insert(item.clone()) {
-                return Err(ValidationError::new(
-                    field_name,
-                    "DUPLICATE_ITEMS",
-                    &format!("{} contains duplicate values", field_name),
-                ));
-            }
-        }
-        Ok(())
-    }
-}
-
 /// URL format validation
 pub struct Url;
 

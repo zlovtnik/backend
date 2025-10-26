@@ -7,6 +7,7 @@ use crate::schema::users;
 
 // Include pure functional operations for User
 pub mod operations;
+pub mod validators;
 
 #[derive(Identifiable, Queryable, Selectable, Serialize, Deserialize, Clone)]
 #[diesel(table_name = users)]
@@ -64,4 +65,26 @@ pub struct LoginInfoDTO {
     pub username: String,
     pub login_session: String,
     pub tenant_id: String,
+}
+
+impl From<SignupDTO> for UserDTO {
+    fn from(value: SignupDTO) -> Self {
+        Self {
+            username: value.username,
+            email: value.email,
+            password: value.password,
+            active: true,
+        }
+    }
+}
+
+impl From<&SignupDTO> for UserDTO {
+    fn from(value: &SignupDTO) -> Self {
+        Self {
+            username: value.username.clone(),
+            email: value.email.clone(),
+            password: value.password.clone(),
+            active: true,
+        }
+    }
 }

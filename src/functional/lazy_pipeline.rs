@@ -191,7 +191,7 @@
 //! let page = Page::new(
 //!     "Users retrieved successfully".to_string(),
 //!     paginated_users,
-//!     0, 50, None, None
+//!     0, 50, None, None, None
 //! );
 //! ```
 

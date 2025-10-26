@@ -10,7 +10,7 @@ use crate::{
     error::ServiceError,
     functional::response_transformers::{ResponseTransformError, ResponseTransformer},
     models::user::UserUpdateDTO,
-    services::{account_service, functional_service_base::FunctionalErrorHandling},
+    services::{account_service, functional_service_base::FunctionalErrorHandling, user_service},
 };
 
 fn response_composition_error(err: ResponseTransformError) -> ServiceError {
@@ -68,43 +68,28 @@ pub async fn find_all(
 ) -> Result<HttpResponse, ServiceError> {
     info!("Processing find_all users request");
 
-    let mut limit = query
-        .get("limit")
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(50);
-
-    if limit < 1 {
-        limit = 1;
-    } else if limit > 500 {
-        limit = 500;
-    }
-
-    let mut offset = query
-        .get("offset")
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(0);
-
-    if offset < 0 {
-        offset = 0;
-    }
+    // Use functional pagination parameter validation
+    let params =
+        user_service::PaginationParams::from_query(query.get("limit"), query.get("offset"))?;
 
     let pool = extract_tenant_pool(&req)?;
 
-    account_service::find_all_users(limit, offset, &pool)
-        .log_error("user_controller::find_all")
-        .and_then(|users| {
-            ResponseTransformer::new(json!(users))
-                .with_message(constants::MESSAGE_OK.to_string())
-                .try_with_metadata(json!({
-                    "pagination": {
-                        "limit": limit,
-                        "offset": offset,
-                        "count": users.len()
-                    }
-                }))
-                .map_err(response_composition_error)
-                .map(|transformer| transformer.respond_to(&req))
-        })
+    // Use functional QueryReader pattern
+    let users_reader = user_service::list_users_reader(params.limit, params.offset);
+    let users =
+        user_service::run_query(users_reader, &pool).log_error("user_controller::find_all")?;
+
+    ResponseTransformer::new(json!(users))
+        .with_message(constants::MESSAGE_OK.to_string())
+        .try_with_metadata(json!({
+            "pagination": {
+                "limit": params.limit,
+                "offset": params.offset,
+                "count": users.len()
+            }
+        }))
+        .map_err(response_composition_error)
+        .map(|transformer| transformer.respond_to(&req))
 }
 
 /// Get a user by ID.

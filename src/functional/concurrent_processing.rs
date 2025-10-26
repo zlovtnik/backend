@@ -501,6 +501,85 @@ impl ConcurrentProcessor {
     {
         self.map_async(data, processor).await
     }
+
+    /// Performs a parallel flat_map operation, flattening nested results.
+    ///
+    /// Applies the transformation function to each element, which returns an iterator,
+    /// then flattens all results into a single Vec using the processor's thread pool.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let proc = ConcurrentProcessor::try_default().unwrap();
+    /// let data = vec![vec![1, 2], vec![3, 4]];
+    /// let result = proc.flat_map(data, |v| v.into_iter()).into_inner();
+    /// assert_eq!(result, vec![1, 2, 3, 4]);
+    /// ```
+    pub fn flat_map<I, T, U, F, It>(&self, data: I, transform: F) -> ParallelResult<Vec<U>>
+    where
+        I: IntoIterator<Item = T>,
+        T: Send + Sync,
+        U: Send,
+        F: Fn(T) -> It + Send + Sync,
+        It: IntoIterator<Item = U>,
+    {
+        let config = self.config.clone();
+        let items: Vec<T> = data.into_iter().collect();
+
+        self.pool
+            .install(|| items.into_iter().par_flat_map(&config, transform))
+    }
+
+    /// Partitions elements into two collections based on a predicate in parallel.
+    ///
+    /// Returns a tuple of (matching, non-matching) vectors using the processor's thread pool.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let proc = ConcurrentProcessor::try_default().unwrap();
+    /// let data = vec![1, 2, 3, 4, 5, 6];
+    /// let (evens, odds) = proc.partition(data, |&x| x % 2 == 0).into_inner();
+    /// assert_eq!(evens, vec![2, 4, 6]);
+    /// assert_eq!(odds, vec![1, 3, 5]);
+    /// ```
+    pub fn partition<I, T, F>(&self, data: I, predicate: F) -> ParallelResult<(Vec<T>, Vec<T>)>
+    where
+        I: IntoIterator<Item = T>,
+        T: Clone + Send + Sync,
+        F: Fn(&T) -> bool + Send + Sync,
+    {
+        let config = self.config.clone();
+        let items: Vec<T> = data.into_iter().collect();
+
+        self.pool
+            .install(|| items.into_iter().par_partition(&config, predicate))
+    }
+
+    /// Finds the first element matching a predicate in parallel.
+    ///
+    /// Returns Some(element) if found, None otherwise, using the processor's thread pool.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let proc = ConcurrentProcessor::try_default().unwrap();
+    /// let data = vec![1, 2, 3, 4, 5];
+    /// let result = proc.find(data, |&x| x > 3).into_inner();
+    /// assert!(result.is_some());
+    /// ```
+    pub fn find<I, T, F>(&self, data: I, predicate: F) -> ParallelResult<Option<T>>
+    where
+        I: IntoIterator<Item = T>,
+        T: Clone + Send + Sync,
+        F: Fn(&T) -> bool + Send + Sync,
+    {
+        let config = self.config.clone();
+        let items: Vec<T> = data.into_iter().collect();
+
+        self.pool
+            .install(|| items.into_iter().par_find(&config, predicate))
+    }
 }
 
 /// Produces a consolidated ParallelMetrics by combining an iterator of metrics.

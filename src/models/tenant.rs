@@ -29,7 +29,7 @@ pub struct Tenant {
     pub updated_at: Option<NaiveDateTime>,
 }
 
-#[derive(Insertable, Serialize, Deserialize)]
+#[derive(Clone, Insertable, Serialize, Deserialize)]
 #[diesel(table_name = tenants)]
 pub struct TenantDTO {
     pub id: String,
@@ -37,7 +37,7 @@ pub struct TenantDTO {
     pub db_url: String,
 }
 
-#[derive(AsChangeset, Serialize, Deserialize)]
+#[derive(Clone, AsChangeset, Serialize, Deserialize)]
 #[diesel(table_name = tenants)]
 pub struct UpdateTenant {
     pub name: Option<String>,
