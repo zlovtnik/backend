@@ -516,7 +516,8 @@ mod tests {
             .to_request();
 
         let resp = test::call_service(&app, req).await;
-        // OPTIONS should skip authentication middleware; may be 404/405 since route not registered for OPTIONS
+        // OPTIONS should skip authentication middleware. Status codes other than 401 prove auth was bypassed:
+        // 404 if route not registered, 405 if route registered but method not allowed, 200 if OPTIONS handler exists
         let status = resp.status();
         assert!(
             status.is_success() 
