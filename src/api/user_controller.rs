@@ -69,8 +69,10 @@ pub async fn find_all(
     info!("Processing find_all users request");
 
     // Use functional pagination parameter validation
-    let params =
-        user_service::PaginationParams::from_query(query.get("limit"), query.get("offset"))?;
+    let params = user_service::PaginationParams::from_query(
+        query.get("limit").map(String::as_str),
+        query.get("offset").map(String::as_str),
+    );
 
     let pool = extract_tenant_pool(&req)?;
 

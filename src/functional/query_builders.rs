@@ -399,8 +399,8 @@ mod tests {
         let input = "%_%\\";
         let escaped = TenantQueryBuilder::escape_like_pattern(input);
         // Backslashes first: "%_%\\" → "%_%\\\\"
-        // Then %: "%_%\\\\" → "\\%_%\\\\"
-        // Then _: "\\%_%\\\\" → "\\%\\_\\\\"
-        assert_eq!(escaped, "\\%\\_\\\\");
+        // Then %: "%_%\\\\" → "\\%_\\%\\\\"
+        // Then _: "\\%_\\%\\\\" → "\\%\\_\\%\\\\"
+        assert_eq!(escaped, "\\%\\_\\%\\\\");
     }
 }

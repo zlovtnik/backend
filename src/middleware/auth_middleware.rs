@@ -516,8 +516,15 @@ mod tests {
             .to_request();
 
         let resp = test::call_service(&app, req).await;
-        // OPTIONS should pass through without auth
-        assert!(resp.status().is_success() || resp.status() == StatusCode::METHOD_NOT_ALLOWED);
+        // OPTIONS should skip authentication middleware; may be 404/405 since route not registered for OPTIONS
+        let status = resp.status();
+        assert!(
+            status.is_success() 
+                || status == StatusCode::METHOD_NOT_ALLOWED 
+                || status == StatusCode::NOT_FOUND,
+            "Unexpected status: {}",
+            status
+        );
     }
 
     #[actix_rt::test]

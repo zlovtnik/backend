@@ -87,9 +87,9 @@ if limit < 1 {
 **After (Functional):**
 ```rust
 let params = user_service::PaginationParams::from_query(
-    query.get("limit"),
-    query.get("offset"),
-)?;
+    query.get("limit").map(String::as_str),
+    query.get("offset").map(String::as_str),
+);
 ```
 
 **Improvement:** Declarative validation, eliminates mutation!

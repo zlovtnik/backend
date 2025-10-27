@@ -45,6 +45,28 @@ pub struct UserResponseDTO {
     pub active: bool,
 }
 
+impl From<User> for UserResponseDTO {
+    fn from(user: User) -> Self {
+        Self {
+            id: user.id,
+            username: user.username,
+            email: user.email,
+            active: user.active,
+        }
+    }
+}
+
+impl From<&User> for UserResponseDTO {
+    fn from(user: &User) -> Self {
+        Self {
+            id: user.id,
+            username: user.username.clone(),
+            email: user.email.clone(),
+            active: user.active,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SignupDTO {
     pub username: String,

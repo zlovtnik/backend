@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use actix_web::{http::header::HeaderValue, HttpRequest, HttpMessage};
 
 use crate::{
-    config::db::Pool,
+    config::db::{Pool, TenantPoolManager},
     constants,
     error::ServiceError,
     functional::pagination::Pagination,
@@ -111,9 +111,11 @@ impl PaginationContext {
             .or_else(|| query.get("offset"))
             .and_then(|value| value.parse::<i64>().ok());
 
-        let limit = query
+        let raw_limit = query
             .get("limit")
-            .and_then(|value| value.parse::<i64>().ok())
+            .and_then(|value| value.parse::<i64>().ok());
+
+        let limit = raw_limit
             .map(|value| value.max(1).min(max_page_size as i64));
 
         let pagination = Pagination::from_optional(cursor, limit, default_page_size);
@@ -121,7 +123,7 @@ impl PaginationContext {
         Self {
             pagination,
             raw_cursor: cursor,
-            raw_limit: limit,
+            raw_limit,
         }
     }
 

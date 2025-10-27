@@ -80,6 +80,8 @@ pub enum FunctionCategory {
     Mathematical,
     /// String processing functions
     StringProcessing,
+    /// Date and time processing functions
+    DateTimeProcessing,
     /// Custom business logic functions
     BusinessLogic,
 }
