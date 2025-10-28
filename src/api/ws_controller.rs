@@ -17,6 +17,18 @@ use std::env;
 /// This is initialized at module load time and shared across all handler instances.
 static ACTIVE_WS_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
+/// RAII guard for WebSocket connections.
+/// Automatically decrements the connection counter when dropped,
+/// guaranteeing cleanup on all exit paths (success, error, or panic).
+/// This prevents connection count leaks when operations fail after incrementing.
+struct ConnectionGuard;
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        ACTIVE_WS_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// Maximum concurrent WebSocket connections allowed globally.
 /// Set via WS_MAX_GLOBAL_CONNECTIONS environment variable (default: 1000).
 /// This prevents resource exhaustion from too many simultaneous connections.
@@ -88,21 +100,45 @@ pub async fn ws_logs(
     stream: web::Payload,
     broadcaster: web::Data<LogBroadcaster>,
 ) -> Result<HttpResponse, Error> {
-    // Check global connection limit to prevent resource exhaustion
+    // Get max global connection limit from environment or use default
     let max_global_connections = env::var("WS_MAX_GLOBAL_CONNECTIONS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(DEFAULT_MAX_GLOBAL_CONNECTIONS);
 
-    let current_connections = ACTIVE_WS_CONNECTIONS.load(Ordering::Relaxed);
-    if current_connections >= max_global_connections {
-        error!(
-            "WebSocket logs: Connection rejected - global limit ({}) reached ({})",
-            max_global_connections, current_connections
-        );
-        return Err(actix_web::error::ErrorServiceUnavailable(
-            "WebSocket service at capacity - too many active connections",
-        ));
+    // Atomically reserve a connection slot using compare-and-swap.
+    // This eliminates the TOCTOU race condition by making the check-and-increment operation
+    // indivisible: only one thread can successfully reserve each slot.
+    let mut current = ACTIVE_WS_CONNECTIONS.load(Ordering::Relaxed);
+    loop {
+        if current >= max_global_connections {
+            error!(
+                "WebSocket logs: Connection rejected - global limit ({}) reached ({})",
+                max_global_connections, current
+            );
+            return Err(actix_web::error::ErrorServiceUnavailable(
+                "WebSocket service at capacity - too many active connections",
+            ));
+        }
+
+        // Attempt to atomically increment from current to current+1.
+        // This succeeds only if no other thread incremented the counter between our load and this compare_exchange.
+        match ACTIVE_WS_CONNECTIONS.compare_exchange(
+            current,
+            current + 1,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => {
+                // Successfully reserved a slot; create the guard to guarantee cleanup
+                let _guard = ConnectionGuard;
+                break;
+            }
+            Err(actual) => {
+                // Another thread changed the counter; retry with the current value
+                current = actual;
+            }
+        }
     }
 
     // Validate Origin header during WebSocket handshake to prevent cross-site WebSocket hijacking (CSWSH)
@@ -177,10 +213,8 @@ pub async fn ws_logs(
             .any(|auth_user| auth_user == user_id);
 
         if !is_authorized {
-            error!(
-                "WebSocket logs: User {} not in authorized list",
-                user_id
-            );
+            error!("WebSocket logs: unauthorized access attempt");
+            debug!("WebSocket logs: User {} not in authorized list", user_id);
             return Err(actix_web::error::ErrorForbidden(
                 "User not authorized for WebSocket logs",
             ));
@@ -191,20 +225,20 @@ pub async fn ws_logs(
         return Err(actix_web::error::ErrorForbidden("WebSocket logs not configured"));
     }
 
-    // Increment global connection counter
-    ACTIVE_WS_CONNECTIONS.fetch_add(1, Ordering::Relaxed);
-
-    // Upgrade the HTTP connection to WebSocket
+    // Upgrade the HTTP connection to WebSocket.
+    // If this fails, the guard is still held and will decrement the counter on drop.
     let (res, session, stream) = actix_ws::handle(&req, stream)?;
 
-    // Spawn a task to handle the WebSocket session
+    // Move the guard into the spawned task.
+    // The guard will be dropped when the task completes, decrementing the counter.
+    // This guarantees cleanup on all exit paths: success, error, or panic.
     let broadcaster = broadcaster.get_ref().clone();
     actix_web::rt::spawn(async move {
+        let _guard = ConnectionGuard;
         if let Err(e) = handle_ws_session(session, stream, broadcaster).await {
             debug!("WebSocket session error: {}", e);
         }
-        // Decrement global connection counter when session ends
-        ACTIVE_WS_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+        // Guard drops here, decrementing the counter
     });
 
     Ok(res)

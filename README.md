@@ -317,16 +317,60 @@ The application now provides real-time log streaming through a WebSocket endpoin
 
 **Description**: Connects to this endpoint to receive real-time application logs as they happen. The WebSocket connection remains open, streaming log messages to the client as the application generates them.
 
-### JavaScript Example
+### JavaScript Examples
+
+#### Node.js Backend Example (Using `ws` Package)
+
+For server-side Node.js applications, use the `ws` package to set custom headers with Bearer tokens:
 
 ```javascript
-// Connect to the WebSocket log stream on dedicated port
+const WebSocket = require('ws');
+
 const token = 'your-jwt-token-here';
-const ws = new WebSocket('ws://localhost:9000/logs', undefined, {
+const url = 'ws://localhost:9000/logs';
+
+const ws = new WebSocket(url, {
     headers: {
         'Authorization': `Bearer ${token}`
     }
 });
+
+ws.on('open', () => {
+    console.log('Connected to log stream');
+});
+
+ws.on('message', (data) => {
+    console.log('Log:', data);
+    // data contains formatted log messages:
+    // Text format: [2024-10-28 14:48:32.123] INFO [module::path] User logged in successfully
+    // JSON format: {"timestamp":"2024-10-28 14:48:32.123","level":"INFO","target":"module::path","message":"User logged in successfully"}
+});
+
+ws.on('error', (error) => {
+    console.error('WebSocket error:', error);
+});
+
+ws.on('close', () => {
+    console.log('Disconnected from log stream');
+});
+```
+
+**Installation:**
+```bash
+npm install ws
+```
+
+#### Browser Example (Using Native WebSocket API)
+
+Browser environments don't allow custom `Authorization` headers due to CORS and WebSocket specification restrictions. Instead, authenticate via query parameter or cookie:
+
+**Option 1: Token via Query Parameter** (Recommended for demos)
+```javascript
+// Browser-based client sending token via query parameter
+const token = 'your-jwt-token-here';
+const url = `ws://localhost:9000/logs?token=${encodeURIComponent(token)}`;
+
+const ws = new WebSocket(url);
 
 ws.onopen = () => {
     console.log('Connected to log stream');
@@ -334,9 +378,6 @@ ws.onopen = () => {
 
 ws.onmessage = (event) => {
     console.log('Log:', event.data);
-    // event.data contains formatted log messages:
-    // Text format: [2024-10-28 14:48:32.123] INFO [module::path] User logged in successfully
-    // JSON format: {"timestamp":"2024-10-28 14:48:32.123","level":"INFO","target":"module::path","message":"User logged in successfully"}
 };
 
 ws.onerror = (error) => {
@@ -347,6 +388,45 @@ ws.onclose = () => {
     console.log('Disconnected from log stream');
 };
 ```
+
+**Option 2: Token via Cookie** (Recommended for production)
+```javascript
+// Browser-based client using cookie authentication
+// (Ensure the server sets a secure HttpOnly cookie after login)
+
+const url = 'wss://yourdomain.com:9000/logs';  // Use WSS in production!
+
+const ws = new WebSocket(url);
+
+ws.onopen = () => {
+    console.log('Connected to log stream');
+};
+
+ws.onmessage = (event) => {
+    console.log('Log:', event.data);
+};
+
+ws.onerror = (error) => {
+    console.error('WebSocket error:', error);
+};
+
+ws.onclose = () => {
+    console.log('Disconnected from log stream');
+};
+```
+
+**Security Notes:**
+- ⚠️ Use `wss://` (WebSocket Secure) in production environments to encrypt the connection
+- ⚠️ Query parameters may be logged in server/proxy logs—avoid sensitive data in URLs for production
+- ✅ Cookies with `HttpOnly` flag are more secure for browser-based clients
+- ✅ Configure CORS appropriately to restrict WebSocket connections to your domain
+
+**Server Requirements:**
+To support browser-based clients, your server must implement one or both of these authentication methods:
+- Query parameter parsing: Check `?token=...` in the connection request
+- Cookie parsing: Extract authentication token from `Cookie` header (automatically sent by browsers)
+
+Please verify which authentication method your server supports and adjust the client code accordingly.
 
 ### Rust Example (Using `tokio-tungstenite`)
 
@@ -359,14 +439,15 @@ async fn main() {
     let token = "your-jwt-token-here";
     let url = "ws://127.0.0.1:9000/logs";
     
-    // Add authorization header
+    // Build request with authorization header
     let req = http::Request::builder()
         .uri(url)
         .header("Authorization", format!("Bearer {}", token))
         .body(())
         .unwrap();
     
-    match connect_async(url).await {
+    // Connect using the request (sends the Authorization header)
+    match connect_async(req).await {
         Ok((ws_stream, _)) => {
             let (_, mut read) = ws_stream.split();
             

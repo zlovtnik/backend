@@ -52,9 +52,14 @@ pub struct LogBroadcaster {
 impl LogBroadcaster {
     /// Creates a new `LogBroadcaster` with the specified buffer capacity.
     ///
+    /// The capacity will be clamped to at least 1 to avoid panics from
+    /// misconfigured zero capacity values. If capacity is 0, it will be
+    /// automatically increased to 1.
+    ///
     /// # Arguments
     ///
     /// * `capacity` - The maximum number of log messages to buffer in the broadcast channel
+    ///   (will be clamped to at least 1 if 0)
     ///
     /// # Examples
     ///
@@ -62,9 +67,14 @@ impl LogBroadcaster {
     /// use rcs::utils::ws_logger::LogBroadcaster;
     ///
     /// let broadcaster = LogBroadcaster::new(1000);
+    /// 
+    /// // Zero capacity is automatically clamped to 1
+    /// let broadcaster_min = LogBroadcaster::new(0);
     /// ```
     pub fn new(capacity: usize) -> Self {
-        let (sender, _) = broadcast::channel(capacity);
+        // Guard against zero capacity which would panic in broadcast::channel
+        let cap = capacity.max(1);
+        let (sender, _) = broadcast::channel(cap);
         LogBroadcaster { sender }
     }
 

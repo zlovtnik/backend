@@ -40,10 +40,9 @@ pub fn register_math_functions(registry: &PureFunctionRegistry) -> Result<(), Re
         FunctionCategory::Mathematical,
     ))?;
 
-    // Division function (unsafe: panics on b == 0; also overflows on i32::MIN / -1)
-    // In debug mode: panic on i32::MIN / -1 (overflow)
-    // In release mode: wraps to i32::MIN (undefined behavior in C, but defined in Rust)
-    // Recommendation: Use checked_div() or validate (a == i32::MIN && b == -1) before dividing
+    // Division function (unsafe: panics on b == 0; also panics on i32::MIN / -1)
+    // Both debug and release modes: panic on i32::MIN / -1 (overflow detected and panics)
+    // Recommendation: Use checked_div() or explicitly validate (a == i32::MIN && b == -1) before dividing
     registry.register(FunctionWrapper::new(
         |(a, b): (i32, i32)| a / b,
         "divide_i32",

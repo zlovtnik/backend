@@ -101,10 +101,6 @@ async fn main() -> io::Result<()> {
     })?;
     let app_url = format!("{}:{}", &app_host, &app_port);
     
-    // WebSocket port configuration (defaults to 9000 if not specified)
-    let ws_port = env::var("APP_WS_PORT").unwrap_or_else(|_| "9000".to_string());
-    let ws_url = format!("{}:{}", &app_host, &ws_port);
-    
     let db_url = env::var("DATABASE_URL").map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -129,11 +125,10 @@ async fn main() -> io::Result<()> {
         .add_tenant_pool("tenant1".to_string(), main_pool.clone())
         .expect("Failed to add tenant pool");
 
-    // Clone log_broadcaster for use in both main and WebSocket servers
+    // Clone log_broadcaster for use in main server
     let main_broadcaster = log_broadcaster.clone();
-    let ws_broadcaster = log_broadcaster.clone();
 
-    // Start the main HTTP server and WebSocket-only server concurrently
+    // Start the main HTTP server
     let main_server = HttpServer::new(move || {
         // יהי רצון שימצא עבודה, הגדר CORS על פי סביבה
         let app_env = env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
@@ -213,94 +208,8 @@ async fn main() -> io::Result<()> {
     .bind(&app_url)?
     .run();
 
-    // WebSocket-only server on dedicated port
-    // SECURITY: This server implements strict CORS and origin validation via middleware.
-    // The actual endpoint (ws_logs in ws_controller) performs additional authentication
-    // checks including JWT token validation and origin header inspection.
-    // In production, ensure the APP_WS_PORT is firewalled to only allow connections from
-    // trusted networks/origins using iptables, firewalld, or cloud provider security groups.
-    let ws_server = HttpServer::new(move || {
-        // Reuse the same origin configuration as the main server
-        let app_env = env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
-        let mut cors_builder = if app_env == "production" {
-            // Production: strict CORS with explicit allowed origins from environment
-            let mut builder = Cors::default();
-
-            if let Ok(allowed_origins) = env::var("CORS_ALLOWED_ORIGINS") {
-                for origin in allowed_origins
-                    .split(',')
-                    .map(|s| s.trim())
-                    .filter(|s| !s.is_empty())
-                {
-                    builder = builder.allowed_origin(origin);
-                }
-            } else {
-                // Default to localhost if not configured
-                builder = builder.allowed_origin("http://localhost:3000");
-            }
-            builder
-        } else {
-            // Development: allow common dev origins (but still not using send_wildcard for security)
-            Cors::default()
-                .allowed_origin("http://localhost:3000")
-                .allowed_origin("http://localhost:3001")
-                .allowed_origin("http://127.0.0.1:3000")
-                .allowed_origin("http://127.0.0.1:3001")
-                .allowed_origin("http://localhost:5173") // Vite dev server
-                .allowed_origin("http://127.0.0.1:5173") // Vite dev server
-        };
-
-        // Configure CORS methods and headers for WebSocket upgrade
-        cors_builder = cors_builder
-            .allowed_methods(vec![
-                http::Method::GET,  // WebSocket upgrade uses GET
-                http::Method::OPTIONS, // CORS preflight
-            ])
-            .allowed_headers(vec![
-                http::header::AUTHORIZATION,  // Bearer token
-                http::header::CONTENT_TYPE,
-                http::header::HeaderName::from_static("origin"),
-                http::header::HeaderName::from_static("sec-websocket-key"),
-                http::header::HeaderName::from_static("sec-websocket-version"),
-            ])
-            .expose_headers(vec![
-                http::header::AUTHORIZATION,
-                http::header::CONTENT_TYPE,
-            ])
-            .max_age(3600)
-            .supports_credentials();  // Required for origin-based requests to include auth headers
-
-        App::new()
-            .wrap(cors_builder)
-            .app_data(web::Data::new(ws_broadcaster.clone()))
-            .wrap(tracing_actix_web::TracingLogger::default())
-            // The ws_logs endpoint performs additional validation:
-            // 1. JWT token authentication
-            // 2. Origin header validation (prevents cross-site WebSocket hijacking)
-            // 3. User authorization checks via WS_LOGS_ADMIN_USER env var
-            .service(web::resource("/logs").route(web::get().to(api::ws_controller::ws_logs)))
-    })
-    .bind(&ws_url)?
-    .run();
-
-    // Run both servers concurrently
-    // Run both servers concurrently
-    let main_task = actix_rt::spawn(main_server);
-    let ws_task = actix_rt::spawn(ws_server);
-
-    // Wait for either server to fail
-    tokio::select! {
-        result = main_task => {
-            result
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Main server task panicked: {}", e)))??;
-        }
-        result = ws_task => {
-            result
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("WebSocket server task panicked: {}", e)))??;
-        }
-    }
-
-    Ok(())
+    // Run the main server
+    main_server.await
 }
 
 #[cfg(test)]
