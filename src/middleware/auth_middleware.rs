@@ -516,7 +516,8 @@ mod tests {
             .to_request();
 
         let resp = test::call_service(&app, req).await;
-        // OPTIONS should skip authentication middleware; may be 404/405 since route not registered for OPTIONS
+        // OPTIONS should skip authentication middleware. Status codes other than 401 prove auth was bypassed:
+        // 404 if route not registered, 405 if route registered but method not allowed, 200 if OPTIONS handler exists
         let status = resp.status();
         assert!(
             status.is_success() 
@@ -527,6 +528,9 @@ mod tests {
         );
     }
 
+    /// Tests that OPTIONS requests with an explicit handler reach the inner service and return 200 OK.
+    /// This test specifically covers the 200 OK path to demonstrate the middleware correctly skips
+    /// authentication when an OPTIONS handler is registered, allowing the preflight handler to execute.
     #[actix_rt::test]
     async fn functional_auth_options_request_reaches_inner_service() {
         let app = test::init_service(
@@ -550,7 +554,9 @@ mod tests {
 
         let resp = test::call_service(&app, req).await;
 
+        // Assert 200 OK status - proves authentication middleware was skipped for OPTIONS
         assert_eq!(resp.status(), StatusCode::OK);
+        // Assert custom header from preflight handler is present - proves inner service was reached
         let header = resp
             .headers()
             .get("X-Preflight")

@@ -5,3 +5,4 @@ pub mod health_controller;
 pub mod ping_controller;
 pub mod tenant_controller;
 pub mod user_controller;
+pub mod ws_controller;

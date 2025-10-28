@@ -40,17 +40,35 @@ pub fn register_math_functions(registry: &PureFunctionRegistry) -> Result<(), Re
         FunctionCategory::Mathematical,
     ))?;
 
-    // Division function
+    // Division function (unsafe: panics on b == 0; also panics on i32::MIN / -1)
+    // Both debug and release modes: panic on i32::MIN / -1 (overflow detected and panics)
+    // Recommendation: Use checked_div() or explicitly validate (a == i32::MIN && b == -1) before dividing
     registry.register(FunctionWrapper::new(
         |(a, b): (i32, i32)| a / b,
         "divide_i32",
         FunctionCategory::Mathematical,
     ))?;
 
-    // Power function
+    // Safe division: returns None on b == 0 or overflow
+    registry.register(FunctionWrapper::new(
+        |(a, b): (i32, i32)| a.checked_div(b),
+        "safe_divide_i32",
+        FunctionCategory::Mathematical,
+    ))?;
+
+    // Power function (unsafe for negative b and may overflow)
     registry.register(FunctionWrapper::new(
         |(a, b): (i32, i32)| a.pow(b as u32),
         "power_i32",
+        FunctionCategory::Mathematical,
+    ))?;
+
+    // Checked power: negative exponents => None; overflow => None
+    registry.register(FunctionWrapper::new(
+        |(a, b): (i32, i32)| {
+            if b < 0 { None } else { i32::checked_pow(a, b as u32) }
+        },
+        "power_i32_checked",
         FunctionCategory::Mathematical,
     ))?;
 
@@ -68,10 +86,17 @@ pub fn register_math_functions(registry: &PureFunctionRegistry) -> Result<(), Re
         FunctionCategory::Mathematical,
     ))?;
 
-    // Modulo function
+    // Modulo function (unsafe: panics on b == 0 or on overflow (i32::MIN % -1))
     registry.register(FunctionWrapper::new(
         |(a, b): (i32, i32)| a % b,
         "modulo_i32",
+        FunctionCategory::Mathematical,
+    ))?;
+
+    // Safe modulo: returns None on b == 0 or overflow (e.g., i32::MIN % -1)
+    registry.register(FunctionWrapper::new(
+        |(a, b): (i32, i32)| a.checked_rem(b),
+        "safe_modulo_i32",
         FunctionCategory::Mathematical,
     ))?;
 

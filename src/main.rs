@@ -1,15 +1,13 @@
-#![allow(unused_must_use)]
-
 use std::default::Default;
-use std::io::LineWriter;
-use std::path::Path;
-use std::{env, fs::OpenOptions, io};
+use std::{env, io};
 
 use actix_cors::Cors;
 use actix_web::dev::Service;
 use actix_web::web;
 use actix_web::{http, App, HttpServer};
 use futures::FutureExt;
+
+use crate::utils::ws_logger::{LogBroadcaster, init_websocket_logging};
 
 mod api;
 mod config;
@@ -53,25 +51,30 @@ async fn main() -> io::Result<()> {
             }
         }
     }
-    env::set_var("RUST_LOG", "actix_web=debug");
-
-    if let Ok(log_file_path) = env::var("LOG_FILE") {
-        let path = Path::new(&log_file_path);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let log_file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_file_path)?;
-        env_logger::Builder::from_default_env()
-            .target(env_logger::Target::Pipe(Box::new(LineWriter::new(
-                log_file,
-            ))))
-            .init();
-    } else {
-        env_logger::init();
+    // Only set RUST_LOG to a default if not already set in environment
+    if env::var("RUST_LOG").is_err() {
+        env::set_var("RUST_LOG", "info");
     }
+
+    // Read WebSocket log buffer size from environment or use default of 1000
+    let ws_log_buffer_size = match env::var("WS_LOG_BUFFER_SIZE") {
+        Ok(s) => match s.parse::<usize>() {
+            Ok(size) => size,
+            Err(_) => {
+                log::warn!(
+                    "Invalid WS_LOG_BUFFER_SIZE value '{}': failed to parse as usize. Using default 1000",
+                    s
+                );
+                1000
+            }
+        },
+        Err(_) => 1000,
+    };
+
+    // Initialize WebSocket-based logging with tracing
+    let log_broadcaster = LogBroadcaster::new(ws_log_buffer_size);
+    init_websocket_logging(log_broadcaster.clone())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to initialize logging: {}", e)))?;
 
     // Validate cursor encryption key at startup to fail fast on misconfiguration
     if let Err(e) = unified_pagination::validate_cursor_encryption_key() {
@@ -97,6 +100,7 @@ async fn main() -> io::Result<()> {
         )
     })?;
     let app_url = format!("{}:{}", &app_host, &app_port);
+    
     let db_url = env::var("DATABASE_URL").map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -111,7 +115,8 @@ async fn main() -> io::Result<()> {
     })?;
 
     let main_pool = config::db::init_db_pool(&db_url);
-    config::db::run_migration(&mut main_pool.get().unwrap());
+    config::db::run_migration(&mut main_pool.get().unwrap())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Database migration failed: {}", e)))?;
     let redis_client = config::cache::init_redis_client(&redis_url);
 
     let manager = config::db::TenantPoolManager::new(main_pool.clone());
@@ -120,7 +125,11 @@ async fn main() -> io::Result<()> {
         .add_tenant_pool("tenant1".to_string(), main_pool.clone())
         .expect("Failed to add tenant pool");
 
-    HttpServer::new(move || {
+    // Clone log_broadcaster for use in main server
+    let main_broadcaster = log_broadcaster.clone();
+
+    // Start the main HTTP server
+    let main_server = HttpServer::new(move || {
         // יהי רצון שימצא עבודה, הגדר CORS על פי סביבה
         let app_env = env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
         let mut cors_builder = if app_env == "production" {
@@ -190,14 +199,17 @@ async fn main() -> io::Result<()> {
             .app_data(web::Data::new(manager.clone()))
             .app_data(web::Data::new(main_pool.clone()))
             .app_data(web::Data::new(redis_client.clone()))
-            .wrap(actix_web::middleware::Logger::default())
+            .app_data(web::Data::new(main_broadcaster.clone()))
+            .wrap(tracing_actix_web::TracingLogger::default())
             .wrap(crate::middleware::auth_middleware::Authentication) // יהי רצון שימצא עבודה, הערה לקו זה אם רוצים לשלב עם yew-address-book-frontend
             .wrap_fn(|req, srv| srv.call(req).map(|res| res))
             .configure(config::app::config_services)
     })
     .bind(&app_url)?
-    .run()
-    .await
+    .run();
+
+    // Run the main server
+    main_server.await
 }
 
 #[cfg(test)]
@@ -214,6 +226,7 @@ mod tests {
     use testcontainers::Container;
 
     use crate::config;
+    use crate::utils::ws_logger::{LogBroadcaster, init_websocket_logging};
 
     fn try_run_postgres<'a>(docker: &'a clients::Cli) -> Option<Container<'a, Postgres>> {
         catch_unwind(AssertUnwindSafe(|| docker.run(Postgres::default()))).ok()
@@ -238,6 +251,11 @@ mod tests {
         );
         config::db::run_migration(&mut pool.get().unwrap());
 
+        // Initialize logging for tests
+        let log_broadcaster = LogBroadcaster::new(100);
+        init_websocket_logging(log_broadcaster.clone())
+            .expect("failed to initialize websocket logging in test_startup_ok");
+
         HttpServer::new(move || {
             App::new()
                 .wrap(
@@ -250,7 +268,8 @@ mod tests {
                         .max_age(3600),
                 )
                 .app_data(web::Data::new(pool.clone()))
-                .wrap(actix_web::middleware::Logger::default())
+                .app_data(web::Data::new(log_broadcaster.clone()))
+                .wrap(tracing_actix_web::TracingLogger::default())
                 .wrap(crate::middleware::auth_middleware::Authentication)
                 .wrap_fn(|req, srv| srv.call(req).map(|res| res))
                 .configure(config::app::config_services)
@@ -296,6 +315,11 @@ mod tests {
         );
         config::db::run_migration(&mut pool.get().unwrap());
 
+        // Initialize logging for tests
+        let log_broadcaster = LogBroadcaster::new(100);
+        init_websocket_logging(log_broadcaster.clone())
+            .expect("failed to initialize websocket logging in test_startup_without_auth_middleware_ok");
+
         HttpServer::new(move || {
             App::new()
                 .wrap(
@@ -308,7 +332,8 @@ mod tests {
                         .max_age(3600),
                 )
                 .app_data(web::Data::new(pool.clone()))
-                .wrap(actix_web::middleware::Logger::default())
+                .app_data(web::Data::new(log_broadcaster.clone()))
+                .wrap(tracing_actix_web::TracingLogger::default())
                 .wrap_fn(|req, srv| srv.call(req).map(|res| res))
                 .configure(config::app::config_services)
         })

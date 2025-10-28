@@ -3,7 +3,7 @@ name = "rcs"
 version = "0.1.0"
 authors = ["Rafael Cardoso dos Santos <racasantos@icloud.com>"]
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.86"
 build = "build.rs"
 
 [lib]
@@ -16,9 +16,13 @@ actix-web = "4.3.1"
 actix-rt = "2.8.0"
 actix-service = "2.0.2"
 actix-cors = "0.6.4"
+actix-ws = "0.3"
 awc = "3.8.1"
 log = "0.4.18"
-env_logger = "0.10.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-log = "0.2"
+tracing-actix-web = "0.7"
 diesel_migrations = "2.1.0"
 serde = "1.0.163"
 serde_derive = "1.0.163"
