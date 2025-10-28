@@ -1,15 +1,13 @@
-#![allow(unused_must_use)]
-
 use std::default::Default;
-use std::io::LineWriter;
-use std::path::Path;
-use std::{env, fs::OpenOptions, io};
+use std::{env, io};
 
 use actix_cors::Cors;
 use actix_web::dev::Service;
 use actix_web::web;
 use actix_web::{http, App, HttpServer};
 use futures::FutureExt;
+
+use crate::utils::ws_logger::{LogBroadcaster, init_websocket_logging};
 
 mod api;
 mod config;
@@ -58,23 +56,25 @@ async fn main() -> io::Result<()> {
         env::set_var("RUST_LOG", "info");
     }
 
-    if let Ok(log_file_path) = env::var("LOG_FILE") {
-        let path = Path::new(&log_file_path);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let log_file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_file_path)?;
-        env_logger::Builder::from_default_env()
-            .target(env_logger::Target::Pipe(Box::new(LineWriter::new(
-                log_file,
-            ))))
-            .init();
-    } else {
-        env_logger::init();
-    }
+    // Read WebSocket log buffer size from environment or use default of 1000
+    let ws_log_buffer_size = match env::var("WS_LOG_BUFFER_SIZE") {
+        Ok(s) => match s.parse::<usize>() {
+            Ok(size) => size,
+            Err(_) => {
+                log::warn!(
+                    "Invalid WS_LOG_BUFFER_SIZE value '{}': failed to parse as usize. Using default 1000",
+                    s
+                );
+                1000
+            }
+        },
+        Err(_) => 1000,
+    };
+
+    // Initialize WebSocket-based logging with tracing
+    let log_broadcaster = LogBroadcaster::new(ws_log_buffer_size);
+    init_websocket_logging(log_broadcaster.clone())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to initialize logging: {}", e)))?;
 
     // Validate cursor encryption key at startup to fail fast on misconfiguration
     if let Err(e) = unified_pagination::validate_cursor_encryption_key() {
@@ -100,6 +100,11 @@ async fn main() -> io::Result<()> {
         )
     })?;
     let app_url = format!("{}:{}", &app_host, &app_port);
+    
+    // WebSocket port configuration (defaults to 9000 if not specified)
+    let ws_port = env::var("APP_WS_PORT").unwrap_or_else(|_| "9000".to_string());
+    let ws_url = format!("{}:{}", &app_host, &ws_port);
+    
     let db_url = env::var("DATABASE_URL").map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -114,7 +119,8 @@ async fn main() -> io::Result<()> {
     })?;
 
     let main_pool = config::db::init_db_pool(&db_url);
-    config::db::run_migration(&mut main_pool.get().unwrap());
+    config::db::run_migration(&mut main_pool.get().unwrap())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Database migration failed: {}", e)))?;
     let redis_client = config::cache::init_redis_client(&redis_url);
 
     let manager = config::db::TenantPoolManager::new(main_pool.clone());
@@ -123,7 +129,12 @@ async fn main() -> io::Result<()> {
         .add_tenant_pool("tenant1".to_string(), main_pool.clone())
         .expect("Failed to add tenant pool");
 
-    HttpServer::new(move || {
+    // Clone log_broadcaster for use in both main and WebSocket servers
+    let main_broadcaster = log_broadcaster.clone();
+    let ws_broadcaster = log_broadcaster.clone();
+
+    // Start the main HTTP server and WebSocket-only server concurrently
+    let main_server = HttpServer::new(move || {
         // יהי רצון שימצא עבודה, הגדר CORS על פי סביבה
         let app_env = env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
         let mut cors_builder = if app_env == "production" {
@@ -193,14 +204,103 @@ async fn main() -> io::Result<()> {
             .app_data(web::Data::new(manager.clone()))
             .app_data(web::Data::new(main_pool.clone()))
             .app_data(web::Data::new(redis_client.clone()))
-            .wrap(actix_web::middleware::Logger::default())
+            .app_data(web::Data::new(main_broadcaster.clone()))
+            .wrap(tracing_actix_web::TracingLogger::default())
             .wrap(crate::middleware::auth_middleware::Authentication) // יהי רצון שימצא עבודה, הערה לקו זה אם רוצים לשלב עם yew-address-book-frontend
             .wrap_fn(|req, srv| srv.call(req).map(|res| res))
             .configure(config::app::config_services)
     })
     .bind(&app_url)?
-    .run()
-    .await
+    .run();
+
+    // WebSocket-only server on dedicated port
+    // SECURITY: This server implements strict CORS and origin validation via middleware.
+    // The actual endpoint (ws_logs in ws_controller) performs additional authentication
+    // checks including JWT token validation and origin header inspection.
+    // In production, ensure the APP_WS_PORT is firewalled to only allow connections from
+    // trusted networks/origins using iptables, firewalld, or cloud provider security groups.
+    let ws_server = HttpServer::new(move || {
+        // Reuse the same origin configuration as the main server
+        let app_env = env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
+        let mut cors_builder = if app_env == "production" {
+            // Production: strict CORS with explicit allowed origins from environment
+            let mut builder = Cors::default();
+
+            if let Ok(allowed_origins) = env::var("CORS_ALLOWED_ORIGINS") {
+                for origin in allowed_origins
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                {
+                    builder = builder.allowed_origin(origin);
+                }
+            } else {
+                // Default to localhost if not configured
+                builder = builder.allowed_origin("http://localhost:3000");
+            }
+            builder
+        } else {
+            // Development: allow common dev origins (but still not using send_wildcard for security)
+            Cors::default()
+                .allowed_origin("http://localhost:3000")
+                .allowed_origin("http://localhost:3001")
+                .allowed_origin("http://127.0.0.1:3000")
+                .allowed_origin("http://127.0.0.1:3001")
+                .allowed_origin("http://localhost:5173") // Vite dev server
+                .allowed_origin("http://127.0.0.1:5173") // Vite dev server
+        };
+
+        // Configure CORS methods and headers for WebSocket upgrade
+        cors_builder = cors_builder
+            .allowed_methods(vec![
+                http::Method::GET,  // WebSocket upgrade uses GET
+                http::Method::OPTIONS, // CORS preflight
+            ])
+            .allowed_headers(vec![
+                http::header::AUTHORIZATION,  // Bearer token
+                http::header::CONTENT_TYPE,
+                http::header::HeaderName::from_static("origin"),
+                http::header::HeaderName::from_static("sec-websocket-key"),
+                http::header::HeaderName::from_static("sec-websocket-version"),
+            ])
+            .expose_headers(vec![
+                http::header::AUTHORIZATION,
+                http::header::CONTENT_TYPE,
+            ])
+            .max_age(3600)
+            .supports_credentials();  // Required for origin-based requests to include auth headers
+
+        App::new()
+            .wrap(cors_builder)
+            .app_data(web::Data::new(ws_broadcaster.clone()))
+            .wrap(tracing_actix_web::TracingLogger::default())
+            // The ws_logs endpoint performs additional validation:
+            // 1. JWT token authentication
+            // 2. Origin header validation (prevents cross-site WebSocket hijacking)
+            // 3. User authorization checks via WS_LOGS_ADMIN_USER env var
+            .service(web::resource("/logs").route(web::get().to(api::ws_controller::ws_logs)))
+    })
+    .bind(&ws_url)?
+    .run();
+
+    // Run both servers concurrently
+    // Run both servers concurrently
+    let main_task = actix_rt::spawn(main_server);
+    let ws_task = actix_rt::spawn(ws_server);
+
+    // Wait for either server to fail
+    tokio::select! {
+        result = main_task => {
+            result
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Main server task panicked: {}", e)))??;
+        }
+        result = ws_task => {
+            result
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("WebSocket server task panicked: {}", e)))??;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -217,6 +317,7 @@ mod tests {
     use testcontainers::Container;
 
     use crate::config;
+    use crate::utils::ws_logger::{LogBroadcaster, init_websocket_logging};
 
     fn try_run_postgres<'a>(docker: &'a clients::Cli) -> Option<Container<'a, Postgres>> {
         catch_unwind(AssertUnwindSafe(|| docker.run(Postgres::default()))).ok()
@@ -241,6 +342,11 @@ mod tests {
         );
         config::db::run_migration(&mut pool.get().unwrap());
 
+        // Initialize logging for tests
+        let log_broadcaster = LogBroadcaster::new(100);
+        init_websocket_logging(log_broadcaster.clone())
+            .expect("failed to initialize websocket logging in test_startup_ok");
+
         HttpServer::new(move || {
             App::new()
                 .wrap(
@@ -253,7 +359,8 @@ mod tests {
                         .max_age(3600),
                 )
                 .app_data(web::Data::new(pool.clone()))
-                .wrap(actix_web::middleware::Logger::default())
+                .app_data(web::Data::new(log_broadcaster.clone()))
+                .wrap(tracing_actix_web::TracingLogger::default())
                 .wrap(crate::middleware::auth_middleware::Authentication)
                 .wrap_fn(|req, srv| srv.call(req).map(|res| res))
                 .configure(config::app::config_services)
@@ -299,6 +406,11 @@ mod tests {
         );
         config::db::run_migration(&mut pool.get().unwrap());
 
+        // Initialize logging for tests
+        let log_broadcaster = LogBroadcaster::new(100);
+        init_websocket_logging(log_broadcaster.clone())
+            .expect("failed to initialize websocket logging in test_startup_without_auth_middleware_ok");
+
         HttpServer::new(move || {
             App::new()
                 .wrap(
@@ -311,7 +423,8 @@ mod tests {
                         .max_age(3600),
                 )
                 .app_data(web::Data::new(pool.clone()))
-                .wrap(actix_web::middleware::Logger::default())
+                .app_data(web::Data::new(log_broadcaster.clone()))
+                .wrap(tracing_actix_web::TracingLogger::default())
                 .wrap_fn(|req, srv| srv.call(req).map(|res| res))
                 .configure(config::app::config_services)
         })

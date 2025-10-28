@@ -9,17 +9,10 @@ use crate::error::ServiceError;
 use crate::models::response::ResponseBody;
 use crate::models::tenant::Tenant;
 
-use actix_web::web::Bytes;
 use chrono::Utc;
 use diesel::prelude::*;
-use log::{debug, error, info};
+use log::{error, info};
 use redis;
-use std::io::Error as IoError;
-use std::path::Path;
-
-use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 
 use crate::functional::performance_monitoring::{
     get_performance_monitor, HealthSummary as PerformanceHealthSummary, OperationType,
@@ -359,7 +352,12 @@ fn check_cache_health(
     Ok(())
 }
 
+/// **DEPRECATED**: Use WebSocket endpoint `/api/ws/logs` instead.
+///
 /// Streams the application's log file to clients over Server-Sent Events (SSE).
+///
+/// This endpoint is deprecated in favor of the WebSocket-based log streaming
+/// at `/api/ws/logs` which provides real-time log messages without file I/O.
 ///
 /// When `ENABLE_LOG_STREAM` is set to `"true"` and the file at `LOG_FILE` (defaults to
 /// `/var/log/app.log`) exists, this handler returns an `HttpResponse` that continuously
@@ -387,159 +385,18 @@ fn check_cache_health(
 /// ```
 #[get("/logs")]
 async fn logs() -> Result<HttpResponse, ServiceError> {
-    // Check if log streaming is enabled
-    if !std::env::var("ENABLE_LOG_STREAM")
-        .map(|v| v == "true")
-        .unwrap_or(false)
-    {
-        return Ok(HttpResponse::MethodNotAllowed().body("Log streaming disabled"));
-    }
-
-    // Get log file path
-    let log_file = std::env::var("LOG_FILE").unwrap_or_else(|_| "/var/log/app.log".to_string());
-    let path = Path::new(&log_file);
-
-    if !path.exists() {
-        return Ok(HttpResponse::NotFound().body("Log file not found"));
-    }
-
-    // Channel for streaming log lines
-    let (tx, rx) = mpsc::channel::<Result<Bytes, IoError>>(100);
-
-    // Spawn a task to tail the log file
-    let log_file_clone = log_file.clone();
-    tokio::spawn(async move {
-        let path = Path::new(&log_file_clone);
-
-        // Open log file and seek to end
-        let mut file = match tokio::fs::File::open(&path).await {
-            Ok(f) => f,
-            Err(e) => {
-                error!("Failed to open log file: {}", e);
-                let _ = tx.send(Err(e)).await;
-                return;
-            }
-        };
-
-        if let Err(e) = file.seek(SeekFrom::End(0)).await {
-            error!("Failed to seek to end of log file: {}", e);
-            let _ = tx
-                .send(Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                )))
-                .await;
-            return;
-        }
-
-        let mut buffer = [0u8; 8192];
-        let mut pending_data = Vec::new();
-
-        // Send initial message
-        if tx
-            .send(Ok(Bytes::from(
-                "data: Log streaming started for ".to_string() + &log_file + "\n\n",
-            )))
-            .await
-            .is_err()
-        {
-            return;
-        }
-
-        // If in test mode, send end message and close stream
-        if std::env::var("TEST_MODE")
-            .map(|v| v == "true")
-            .unwrap_or(false)
-        {
-            if tx.send(Ok(Bytes::from("data: end\n\n"))).await.is_err() {
-                return;
-            }
-            return;
-        }
-
-        let mut keep_alive_count = 0;
-
-        loop {
-            // Sleep for 10 seconds
-            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-
-            // Check if file has grown
-            let metadata = match file.metadata().await {
-                Ok(m) => m,
-                Err(e) => {
-                    error!("Error getting file metadata: {}", e);
-                    continue;
-                }
-            };
-
-            let current_pos = match file.seek(SeekFrom::Current(0)).await {
-                Ok(p) => p,
-                Err(e) => {
-                    error!("Error getting current position: {}", e);
-                    continue;
-                }
-            };
-
-            if metadata.len() > current_pos {
-                let to_read = (metadata.len() - current_pos) as usize;
-                if to_read <= buffer.len() {
-                    match file.read(&mut buffer[..to_read]).await {
-                        Ok(n) if n == to_read => {
-                            pending_data.extend_from_slice(&buffer[..n]);
-                        }
-                        _ => {
-                            error!("Failed to read expected data");
-                            continue;
-                        }
-                    }
-                } else {
-                    // File grew too much, skip or handle
-                    if file.seek(SeekFrom::End(0)).await.is_ok() {
-                        pending_data.clear(); // Reset to end
-                    }
-                    continue;
-                }
-
-                // Process complete lines
-                while let Some(pos) = pending_data.iter().position(|&b| b == b'\n') {
-                    let line_bytes = pending_data.drain(..=pos).collect::<Vec<_>>();
-                    if let Ok(line) = String::from_utf8(line_bytes) {
-                        let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-                        if !trimmed.is_empty() {
-                            // Channel saturation is expected under high load, reducing log noise
-                            if tx
-                                .send(Ok(Bytes::from(format!("data: {}\n\n", trimmed))))
-                                .await
-                                .is_err()
-                            {
-                                debug!("failed to send log line '{}' to watcher channel", trimmed);
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-
-            keep_alive_count += 1;
-            if keep_alive_count >= 3 {
-                // Every 30 seconds
-                keep_alive_count = 0;
-                if tx.send(Ok(Bytes::from("data: \n\n"))).await.is_err() {
-                    return;
-                }
-            }
-        }
-    });
-
-    // Create the streaming response
-    let stream = ReceiverStream::new(rx);
-
-    Ok(HttpResponse::Ok()
-        .insert_header(("Content-Type", "text/event-stream"))
-        .insert_header(("Cache-Control", "no-cache"))
-        .insert_header(("Connection", "keep-alive"))
-        .streaming(stream))
+    // Return deprecation notice
+    Ok(HttpResponse::Gone().json(serde_json::json!({
+        "message": "This endpoint is deprecated. Please use WebSocket endpoint /api/ws/logs instead",
+        "websocket_url": "/api/ws/logs",
+        "deprecation_version": "0.2.0",
+        "more_info": "WebSocket provides real-time log streaming without file I/O"
+    })))
 }
+
+// Legacy log streaming implementation removed in commit: git log -1 --format=%H
+// See: WebSocket endpoint /api/ws/logs for current real-time log streaming
+// The legacy SSE-based implementation has been superseded by the WebSocket-based solution.
 
 /// Retrieves performance monitoring data and metrics for functional programming operations.
 ///
@@ -968,9 +825,6 @@ mod tests {
     use testcontainers::Container;
 
     use crate::config;
-    use std::env;
-    use tempfile::NamedTempFile;
-    use tokio::time::{timeout, Duration};
 
     fn try_run_postgres<'a>(docker: &'a clients::Cli) -> Option<Container<'a, Postgres>> {
         catch_unwind(AssertUnwindSafe(|| docker.run(Postgres::default()))).ok()
@@ -1046,88 +900,22 @@ mod tests {
         // You can parse the JSON and check fields
     }
 
-    /// Verifies that the `/api/logs` endpoint streams Server-Sent Events (SSE) when log streaming is enabled.
+    /// Verifies that the `/api/logs` endpoint returns HTTP 410 Gone with deprecation notice.
     ///
-    /// This integration test enables log streaming via environment variables, creates a temporary log file,
-    /// starts PostgreSQL and Redis test containers, initializes the application, and asserts that:
-    /// - the endpoint responds with HTTP 200,
-    /// - the `Content-Type` header is `text/event-stream`,
-    /// - at least one SSE frame (a body starting with `data:`) is received within 35 seconds.
-    ///
-    /// **Note**: This test and other log-related tests (`test_logs_disabled`, `test_logs_file_not_found`)
-    /// use global environment variables and may fail when run in parallel due to test isolation issues.
-    /// Run with `cargo test -- --test-threads=1` to avoid race conditions.
+    /// The SSE-based log streaming endpoint is deprecated in favor of the WebSocket endpoint
+    /// at `/api/ws/logs`. This test confirms that the deprecated endpoint returns 410 (Gone)
+    /// with a JSON response body containing the new WebSocket endpoint URL and deprecation message.
     ///
     /// # Examples
     ///
     /// ```
-    /// // The test performs an end-to-end request against the initialized Actix app:
-    /// // 1. Enable log streaming and point LOG_FILE to a temp file.
-    /// // 2. Start required test containers and initialize DB/Redis clients.
-    /// // 3. Call GET /api/logs and assert SSE response and an initial `data:` frame.
+    /// // The test performs a GET request to /api/logs and validates:
+    /// // 1. Response status is 410 Gone
+    /// // 2. Response Content-Type is application/json
+    /// // 3. JSON body contains websocket_url and deprecation fields
     /// ```
     #[actix_web::test]
-    async fn test_logs_ok() {
-        use actix_web::body::to_bytes;
-
-        // Ensure clean environment state
-        env::remove_var("ENABLE_LOG_STREAM");
-        env::remove_var("LOG_FILE");
-        env::remove_var("TEST_MODE");
-
-        // Create a temporary log file
-        let temp_file = NamedTempFile::new().unwrap();
-        let log_path = temp_file.path().to_str().unwrap().to_string();
-        // Persist the file so it remains after temp_file is dropped
-        let (_file, persisted_path) = temp_file.keep().unwrap();
-
-        // Create a cleanup guard to ensure file is deleted even on panic
-        struct CleanupGuard(std::path::PathBuf);
-        impl Drop for CleanupGuard {
-            fn drop(&mut self) {
-                std::fs::remove_file(&self.0).ok();
-            }
-        }
-        let _cleanup = CleanupGuard(persisted_path);
-
-        // Set environment variables
-        env::set_var("ENABLE_LOG_STREAM", "true");
-        env::set_var("LOG_FILE", &log_path);
-        env::set_var("TEST_MODE", "true");
-
-        // initialize testcontainers for Postgres and Redis
-        let docker = clients::Cli::default();
-        let postgres = match try_run_postgres(&docker) {
-            Some(container) => container,
-            None => {
-                eprintln!("Skipping test_logs_ok because Docker is unavailable");
-                return;
-            }
-        };
-        let redis = match try_run_redis(&docker) {
-            Some(container) => container,
-            None => {
-                eprintln!("Skipping test_logs_ok because Redis container could not start");
-                return;
-            }
-        };
-
-        // set up the database pool and run migrations
-        let pool = config::db::init_db_pool(
-            format!(
-                "postgres://postgres:postgres@127.0.0.1:{}/postgres",
-                postgres.get_host_port_ipv4(5432)
-            )
-            .as_str(),
-        );
-        config::db::run_migration(&mut pool.get().unwrap())
-            .expect("DB migration failed in test setup");
-
-        // set up the Redis client
-        let redis_client = config::cache::init_redis_client(
-            format!("redis://127.0.0.1:{}", redis.get_host_port_ipv4(6379)).as_str(),
-        );
-
+    async fn test_logs_deprecated() {
         let app = test::init_service(
             actix_web::App::new()
                 .wrap(
@@ -1137,8 +925,6 @@ mod tests {
                         .allowed_header(actix_web::http::header::CONTENT_TYPE)
                         .max_age(3600),
                 )
-                .app_data(Data::new(pool))
-                .app_data(Data::new(redis_client))
                 .wrap(crate::middleware::auth_middleware::Authentication)
                 .configure(config::app::config_services),
         )
@@ -1147,26 +933,38 @@ mod tests {
         let req = test::TestRequest::get().uri("/api/logs").to_request();
         let resp = test::call_service(&app, req).await;
 
-        assert_eq!(resp.status(), StatusCode::OK);
+        // Verify the response is 410 Gone
         assert_eq!(
-            resp.headers().get("content-type").unwrap(),
-            "text/event-stream"
+            resp.status(),
+            StatusCode::GONE,
+            "Expected 410 Gone for deprecated /api/logs endpoint"
         );
 
-        // Consume the body to verify SSE frames or keep-alive messages
-        let sse_frame_received = timeout(Duration::from_secs(35), async {
-            let body = resp.into_body();
-            let bytes = to_bytes(body).await.unwrap();
-            let body_str = String::from_utf8_lossy(&bytes);
-            Ok::<bool, ()>(body_str.starts_with("data:"))
-        })
-        .await
-        .unwrap_or(Ok(false))
-        .unwrap();
+        // Verify the response contains deprecation JSON
+        assert_eq!(
+            resp.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or(""),
+            "application/json"
+        );
 
-        assert!(sse_frame_received, "No SSE frame received within timeout");
+        let body_bytes = actix_web::body::to_bytes(resp.into_body())
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
 
-        // Cleanup happens automatically via CleanupGuard's Drop implementation
+        // Verify JSON contains expected fields
+        assert!(
+            body_str.contains("websocket_url"),
+            "Response should contain websocket_url field. Body: {}",
+            body_str
+        );
+        assert!(
+            body_str.contains("deprecated"),
+            "Response should contain deprecation message. Body: {}",
+            body_str
+        );
     }
 
     /// Verifies that the /api/health/performance endpoint returns performance metrics data.

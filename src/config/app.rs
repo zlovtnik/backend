@@ -60,6 +60,9 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
         .add_route(|cfg| {
             cfg.service(health_controller::logs);
         })
+        .add_route(|cfg| {
+            cfg.service(web::resource("/ws/logs").route(web::get().to(ws_controller::ws_logs)));
+        })
         // Scoped routes
         .add_route(|cfg| {
             cfg.service(web::scope("/auth").configure(configure_auth_routes));

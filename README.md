@@ -27,7 +27,7 @@ Built to solve real-world SaaS and managed platform pain points—compliance, sc
 - **Authentication**: JWT tokens with tenant context built-in
 - **Caching**: Redis for sessions and performance
 - **Connection Pooling**: r2d2 for efficient database connections
-- **Logging**: Structured logging with file rotation
+- **Logging**: Structured logging via `tracing` with real-time WebSocket streaming and optional JSON output
 
 ## How It Works
 
@@ -304,6 +304,234 @@ LOG_FILE=logs/app.log
 CORS_ORIGINS=http://localhost:3000,http://localhost:4321
 CORS_CREDENTIALS=true
 ```
+
+## Real-Time Logging via WebSocket
+
+The application now provides real-time log streaming through a WebSocket endpoint, replacing the previous file-based SSE streaming. This allows multiple clients to subscribe to live application logs without file I/O overhead.
+
+### WebSocket Log Streaming Endpoint
+
+**Endpoint**: `GET /api/ws/logs`
+
+**Protocol**: WebSocket (ws:// or wss://)
+
+**Description**: Connects to this endpoint to receive real-time application logs as they happen. The WebSocket connection remains open, streaming log messages to the client as the application generates them.
+
+### JavaScript Example
+
+```javascript
+// Connect to the WebSocket log stream on dedicated port
+const token = 'your-jwt-token-here';
+const ws = new WebSocket('ws://localhost:9000/logs', undefined, {
+    headers: {
+        'Authorization': `Bearer ${token}`
+    }
+});
+
+ws.onopen = () => {
+    console.log('Connected to log stream');
+};
+
+ws.onmessage = (event) => {
+    console.log('Log:', event.data);
+    // event.data contains formatted log messages:
+    // Text format: [2024-10-28 14:48:32.123] INFO [module::path] User logged in successfully
+    // JSON format: {"timestamp":"2024-10-28 14:48:32.123","level":"INFO","target":"module::path","message":"User logged in successfully"}
+};
+
+ws.onerror = (error) => {
+    console.error('WebSocket error:', error);
+};
+
+ws.onclose = () => {
+    console.log('Disconnected from log stream');
+};
+```
+
+### Rust Example (Using `tokio-tungstenite`)
+
+```rust
+use tokio_tungstenite::connect_async;
+use futures::StreamExt;
+
+#[tokio::main]
+async fn main() {
+    let token = "your-jwt-token-here";
+    let url = "ws://127.0.0.1:9000/logs";
+    
+    // Add authorization header
+    let req = http::Request::builder()
+        .uri(url)
+        .header("Authorization", format!("Bearer {}", token))
+        .body(())
+        .unwrap();
+    
+    match connect_async(url).await {
+        Ok((ws_stream, _)) => {
+            let (_, mut read) = ws_stream.split();
+            
+            while let Some(msg) = read.next().await {
+                match msg {
+                    Ok(msg) => println!("Log: {}", msg.to_text().unwrap_or_default()),
+                    Err(e) => eprintln!("Error: {}", e),
+                }
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+```
+
+### Log Message Format
+
+Log messages are formatted with the following structure:
+
+```text
+[TIMESTAMP] LEVEL [MODULE::PATH] MESSAGE
+```
+
+Example:
+
+```text
+[2024-10-28 14:48:32.123] INFO [rcs::services::auth] User admin logged in
+[2024-10-28 14:48:33.456] ERROR [rcs::services::db] Database connection pool exhausted
+[2024-10-28 14:48:34.789] WARN [rcs::api::health_controller] High memory usage detected
+```
+
+### Configuration
+
+Log level filtering is controlled via the `RUST_LOG` environment variable:
+
+```bash
+# Set log level to debug
+export RUST_LOG=debug
+
+# Filter by module
+export RUST_LOG=rcs::api=debug,rcs::services=info
+
+# Multiple modules
+export RUST_LOG=rcs::services::auth=debug,rcs::api::health_controller=info
+```
+
+Available log levels: `trace`, `debug`, `info`, `warn`, `error`
+
+### WebSocket Logging Configuration
+
+Configure WebSocket logging with the following environment variables:
+
+**`APP_WS_PORT`** (default: `9000`)
+- Dedicated port for WebSocket logging endpoint
+- Example: `APP_WS_PORT=9000`
+
+**`WS_LOG_BUFFER_SIZE`** (default: `1000`)
+- Number of log messages to keep in the broadcast buffer
+- Higher values use more memory but tolerate slower clients better
+- Example: `WS_LOG_BUFFER_SIZE=5000`
+
+**`WS_LOG_FORMAT`** (default: `text`)
+- Output format for log messages
+- Options: `text` (human-readable) or `json` (structured)
+- Example: `WS_LOG_FORMAT=json`
+
+**`WS_LOGS_ADMIN_USER`** (optional)
+- Comma-separated list of user IDs authorized to access WebSocket logs
+- If not set, any valid JWT token holder can access logs
+- **RECOMMENDED**: Set this in production to restrict access to authorized admins only
+- Example: `WS_LOGS_ADMIN_USER=admin@example.com,user1,user2`
+
+**`CORS_ALLOWED_ORIGINS`** (production-specific)
+- Comma-separated list of allowed origin domains for WebSocket and HTTP requests
+- In production, explicitly list only trusted origins
+- **SECURITY**: Do NOT use wildcards; each origin must be explicit
+- Example: `CORS_ALLOWED_ORIGINS=https://app.example.com,https://admin.example.com`
+
+### WebSocket Security
+
+The WebSocket logging endpoint implements multiple security layers:
+
+#### 1. **Authentication**
+- All WebSocket connections require a valid JWT token in the `Authorization: Bearer <token>` header
+- Invalid or missing tokens receive HTTP 403 Forbidden
+- Tokens are validated and not logged to prevent credential leakage
+
+#### 2. **Authorization**
+- Optional authorization check via `WS_LOGS_ADMIN_USER` environment variable
+- Restrict WebSocket log access to specific admin users
+- Without this setting, any valid JWT token holder can access logs (use for development only)
+
+#### 3. **Origin Validation (CSWSH Prevention)**
+- WebSocket connections validate the `Origin` header against the configured `CORS_ALLOWED_ORIGINS` list
+- Prevents cross-site WebSocket hijacking (CSWSH) attacks
+- In production (APP_ENV=production), origin validation is enforced
+- Mismatched origins receive HTTP 403 Forbidden with sanitized error messages
+
+#### 4. **Network-Level Firewall Rules**
+- **CRITICAL for Production**: The WebSocket port (APP_WS_PORT, default 9000) must be firewalled to only allow trusted sources
+- Without firewall rules, any network-accessible system can attempt connections
+
+**Example firewall configuration using iptables:**
+```bash
+# Allow WebSocket connections only from internal networks
+iptables -A INPUT -p tcp --dport 9000 -s 10.0.0.0/8 -j ACCEPT
+iptables -A INPUT -p tcp --dport 9000 -s 172.16.0.0/12 -j ACCEPT
+iptables -A INPUT -p tcp --dport 9000 -j DROP
+```
+
+**Example using firewalld:**
+```bash
+# Create a service for WebSocket logs (allow internal network only)
+firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="10.0.0.0/8" port port="9000" protocol="tcp" accept'
+firewall-cmd --permanent --add-rich-rule='rule family="ipv4" port port="9000" protocol="tcp" reject'
+firewall-cmd --reload
+```
+
+**Example using AWS Security Groups:**
+```
+Inbound Rules:
+- Type: Custom TCP
+- Port: 9000
+- Source: 10.0.0.0/8 (your private network CIDR)
+```
+
+#### 5. **Log Sanitization**
+- Authentication tokens are NOT logged even on errors
+- Sensitive error messages are omitted from logs; details available only at DEBUG level
+- Connection metadata (but not credentials) is logged for troubleshooting
+
+### Deprecated: SSE Endpoint
+
+The previous Server-Sent Events (SSE) endpoint at `GET /api/logs` is deprecated as of v0.2.0. This endpoint returned HTTP 410 (Gone) with a deprecation notice. WebSocket at `/api/ws/logs` is the recommended replacement.
+
+**Migration from SSE to WebSocket:**
+
+- **Old**: `curl http://localhost:8000/api/logs` (SSE)
+- **New**: `wscat -c ws://localhost:9000/logs` (WebSocket, dedicated port)
+
+### Buffer Management
+
+The WebSocket log broadcast channel has a capacity of 1000 messages. If messages are produced faster than consumed:
+
+- Slow clients will receive a `[WARNING]` message notifying them that messages were dropped
+- This prevents memory buildup from accumulating log messages
+
+### Architecture
+
+The logging system uses:
+
+- **`tracing` crate**: Structured logging framework
+- **`tracing-log` bridge**: Compatibility with existing `log` crate macros throughout the codebase
+- **`tokio::sync::broadcast`**: Efficient multi-client message distribution
+- **`tracing-actix-web`**: Structured HTTP request logging
+
+Applications logs are captured via the `log::*!` macros:
+
+```rust
+log::info!("User logged in");
+log::error!("Database error: {}", err);
+log::debug!("Processing request...");
+```
+
+These are automatically broadcasted to all connected WebSocket clients.
 
 ## Contributing
 

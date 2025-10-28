@@ -26,6 +26,8 @@ test-backend: ## Run Rust backend tests
 	cargo test
 
 # Development targets
+dev: dev-backend ## Run development mode
+
 dev-backend: ## Run backend in development mode
 	cargo run
 

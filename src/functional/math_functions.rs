@@ -40,16 +40,19 @@ pub fn register_math_functions(registry: &PureFunctionRegistry) -> Result<(), Re
         FunctionCategory::Mathematical,
     ))?;
 
-    // Division function (unsafe: panics on b == 0)
+    // Division function (unsafe: panics on b == 0; also overflows on i32::MIN / -1)
+    // In debug mode: panic on i32::MIN / -1 (overflow)
+    // In release mode: wraps to i32::MIN (undefined behavior in C, but defined in Rust)
+    // Recommendation: Use checked_div() or validate (a == i32::MIN && b == -1) before dividing
     registry.register(FunctionWrapper::new(
         |(a, b): (i32, i32)| a / b,
         "divide_i32",
         FunctionCategory::Mathematical,
     ))?;
 
-    // Safe division: returns None on b == 0
+    // Safe division: returns None on b == 0 or overflow
     registry.register(FunctionWrapper::new(
-        |(a, b): (i32, i32)| if b == 0 { None } else { Some(a / b) },
+        |(a, b): (i32, i32)| a.checked_div(b),
         "safe_divide_i32",
         FunctionCategory::Mathematical,
     ))?;
@@ -84,16 +87,16 @@ pub fn register_math_functions(registry: &PureFunctionRegistry) -> Result<(), Re
         FunctionCategory::Mathematical,
     ))?;
 
-    // Modulo function (unsafe: panics on b == 0)
+    // Modulo function (unsafe: panics on b == 0 or on overflow (i32::MIN % -1))
     registry.register(FunctionWrapper::new(
         |(a, b): (i32, i32)| a % b,
         "modulo_i32",
         FunctionCategory::Mathematical,
     ))?;
 
-    // Safe modulo: returns None on b == 0
+    // Safe modulo: returns None on b == 0 or overflow (e.g., i32::MIN % -1)
     registry.register(FunctionWrapper::new(
-        |(a, b): (i32, i32)| if b == 0 { None } else { Some(a % b) },
+        |(a, b): (i32, i32)| a.checked_rem(b),
         "safe_modulo_i32",
         FunctionCategory::Mathematical,
     ))?;

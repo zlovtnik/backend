@@ -1,4 +1,5 @@
 pub mod token_utils;
+pub mod ws_logger;
 
 use uuid::Uuid;
 
