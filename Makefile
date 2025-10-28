@@ -1,10 +1,10 @@
-# Makefile for Actix Web REST API with Frontend
-# Provides common tasks for backend (Rust), frontend (TypeScript/React), and CI/CD
+# Makefile for Actix Web REST API
+# Provides common tasks for backend (Rust) and CI/CD
 
-.PHONY: help build build-backend build-frontend test test-backend test-frontend \
-        dev dev-backend dev-frontend lint format clean docker-build docker-push \
+.PHONY: help build build-backend test test-backend \
+        dev dev-backend lint format clean docker-build docker-push \
         docker-up-local docker-down-local docker-up-prod docker-down-prod migrate \
-        seed-db check-backend check-frontend
+        seed-db check-backend
 
 # Default target
 all: build
@@ -14,29 +14,20 @@ help: ## Display this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 # Build targets
-build: build-backend build-frontend ## Build both backend and frontend
+build: build-backend ## Build backend
 
 build-backend: ## Build the Rust backend
 	cargo build --release
 
-build-frontend: ## Build the frontend
-	cd frontend && bun run build
-
 # Test targets
-test: test-backend test-frontend ## Run tests for both backend and frontend
+test: test-backend ## Run tests for backend
 
 test-backend: ## Run Rust backend tests
 	cargo test
 
-test-frontend: ## Run frontend tests
-	cd frontend && bun run test
-
 # Development targets
 dev-backend: ## Run backend in development mode
 	cargo run
-
-dev-frontend: ## Run frontend in development mode
-	cd frontend && bun run dev
 
 # Code quality
 lint: lint-backend ## Run linters
@@ -50,13 +41,10 @@ format-backend: ## Format Rust backend code
 	cargo fmt
 
 # Clean
-clean: clean-backend clean-frontend ## Clean build artifacts
+clean: clean-backend ## Clean build artifacts
 
 clean-backend: ## Clean Rust backend build artifacts
 	cargo clean
-
-clean-frontend: ## Clean frontend build artifacts
-	cd frontend && rm -rf dist
 
 # Database migration
 migrate: ## Run database migrations
@@ -67,7 +55,7 @@ seed-db: ## Seed database with initial data
 
 # Docker targets
 docker-build: ## Build Docker image for backend
-	docker build -f Dockerfile.local -t rcs:local .
+	docker build -f Dockerfile -t rcs:local .
 
 docker-up-local: ## Start local Docker containers
 	docker-compose -f docker-compose.local.yml up -d
@@ -83,12 +71,9 @@ docker-down-prod: ## Stop and remove production Docker containers
 
 # CI/CD targets
 ci-build: build-backend docker-build docker-push ## CI build pipeline
-ci-test: test-backend test-frontend docker-build ## CI test pipeline
+ci-test: test-backend docker-build ## CI test pipeline
 ci-deploy: docker-push ## CI deploy pipeline (push image)
 
 # Health checks
 check-backend: ## Check backend compilation without building
 	cargo check
-
-check-frontend: ## Check frontend dependencies and build
-	cd frontend && bun install && bun run build --dry-run || echo "Dry run not supported"

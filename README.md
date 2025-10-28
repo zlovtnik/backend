@@ -29,14 +29,6 @@ Built to solve real-world SaaS and managed platform pain points—compliance, sc
 - **Connection Pooling**: r2d2 for efficient database connections
 - **Logging**: Structured logging with file rotation
 
-### Frontend (React + TypeScript)
-
-- **Framework**: React 18 with TypeScript for type safety
-- **Build Tool**: Vite + Bun for lightning-fast development
-- **UI Library**: Ant Design for professional components
-- **Forms**: React Hook Form with real-time validation
-- **State**: Context API for global state management
-
 ## How It Works
 
 ### Multi-Tenant Architecture
@@ -70,17 +62,15 @@ Each tenant gets their own database. Tenant context is derived server-side from 
 
 ### ✅ What's Working Now
 
-- **Frontend**: Complete React app with authentication, tenant switching, and contact management
 - **Backend**: Rust API with JWT auth, database isolation, and health checks
 - **Database**: Multi-tenant PostgreSQL setup with proper migrations
 - **Security**: CORS, input validation, password hashing, and secure token handling
 
 ### 🔄 What's Next
 
-- **API Integration**: [Issue #1](https://github.com/zlovtnik/dispo-rusty/issues/1) @frontend-team — Switch baseURL in frontend/.env to backend and remove mock data; verified by end-to-end login/profile flows passing
 - **Testing**: [Issue #2](https://github.com/zlovtnik/dispo-rusty/issues/2) @qa-team — Add comprehensive test coverage for critical paths; verified by 85%+ code coverage and all integration tests passing
-- **Performance**: [Issue #3](https://github.com/zlovtnik/dispo-rusty/issues/3) @devops-team — Implement bundle optimization and caching improvements; verified by Lighthouse scores >90 and <2s page load times
-- **Features**: [Issue #4](https://github.com/zlovtnik/dispo-rusty/issues/4) @product-team — Add advanced search, data export, and internationalization; verified by user acceptance testing with 10+ beta users
+- **Performance**: [Issue #3](https://github.com/zlovtnik/dispo-rusty/issues/3) @devops-team — Implement caching improvements and query optimization; verified by <100ms avg response times
+- **Features**: [Issue #4](https://github.com/zlovtnik/dispo-rusty/issues/4) @product-team — Add advanced search, data export, and analytics; verified by user acceptance testing
 
 ## Quick Start
 
@@ -89,7 +79,6 @@ Each tenant gets their own database. Tenant context is derived server-side from 
 - Rust stable 1.90.0 (MSRV: 1.86.0+) with Diesel CLI
 - PostgreSQL 13+
 - Redis 6+
-- Bun 1.0+ (for frontend)
 
 #### Installing Diesel CLI
 
@@ -115,9 +104,8 @@ cargo install diesel_cli --no-default-features --features postgres
 git clone https://github.com/zlovtnik/dispo-rusty.git
 cd dispo-rusty
 
-# Copy environment files
+# Copy environment file
 cp .env.example .env
-cp frontend/.env.example frontend/.env
 ```
 
 ### 2. Database Setup
@@ -145,16 +133,6 @@ cargo run                    # Development mode
 cargo run --release          # Production mode (recommended for performance)
 ```
 
-### 4. Start the Frontend
-
-```bash
-cd frontend
-bun install
-bun run dev
-```
-
-Visit `http://localhost:3000` to see the app in action.
-
 ## API Usage
 
 ### Authentication
@@ -163,7 +141,7 @@ Visit `http://localhost:3000` to see the app in action.
 
 ```bash
 # Register a new user (tenant context derived server-side)
-curl -X POST http://localhost:8080/api/auth/signup \
+curl -X POST http://localhost:8000/api/auth/signup \
   -H "Content-Type: application/json" \
   -d '{
     "username": "admin",
@@ -172,7 +150,7 @@ curl -X POST http://localhost:8080/api/auth/signup \
   }'
 
 # Login and capture JWT token (tenant context derived server-side)
-TOKEN=$(curl -X POST http://localhost:8080/api/auth/login \
+TOKEN=$(curl -X POST http://localhost:8000/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "username_or_email": "admin",
@@ -183,19 +161,15 @@ TOKEN=$(curl -X POST http://localhost:8080/api/auth/login \
 
 # Note: "MyS3cur3P@ssw0rd!" is only an example and should not be reused in production.
 # Always use strong, unique passwords for each account.
-curl -X GET http://localhost:8080/api/address-book \
+curl -X GET http://localhost:8000/api/address-book \
   -H "Authorization: Bearer $TOKEN"
 ```
 
 ### Address Book Operations
 
 ```bash
-# Get all contacts (using captured JWT token)
-curl -X GET http://localhost:8080/api/address-book \
-  -H "Authorization: Bearer $TOKEN"
-
 # Create a new contact (using captured JWT token)
-curl -X POST http://localhost:8080/api/address-book \
+curl -X POST http://localhost:8000/api/address-book \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -205,14 +179,14 @@ curl -X POST http://localhost:8080/api/address-book \
   }'
 
 # Unauthorized responses
-curl -X GET http://localhost:8080/api/address-book  # 401: Missing JWT
+curl -X GET http://localhost:8000/api/address-book  # 401: Missing JWT
 # Response: {"status":401,"error":"Unauthorized","message":"Missing authorization header"}
 
-curl -X GET http://localhost:8080/api/address-book \
+curl -X GET http://localhost:8000/api/address-book \
   -H "Authorization: Bearer invalid_token"  # 401: Invalid JWT
 # Response: {"status":401,"error":"Unauthorized","message":"Invalid token"}
 
-curl -X GET http://localhost:8080/api/address-book \
+curl -X GET http://localhost:8000/api/address-book \
   -H "Authorization: Bearer $OTHER_TENANT_TOKEN"  # 403: Tenant mismatch
 # Response: {"status":403,"error":"Forbidden","message":"Tenant access denied"}
 ```
@@ -233,16 +207,11 @@ curl -X GET http://localhost:8080/api/address-book \
 ```bash
 # Backend tests
 cargo test
-
-# Frontend tests
-cd frontend
-bun test
 ```
 
 #### Coverage Reports
 
-**Rust:** `cargo tarpaulin --out Html` (reports in `tarpaulin-report.html`)  
-**Bun:** `bun test --coverage` (reports in `coverage/` directory)
+**Rust:** `cargo tarpaulin --out Html` (reports in `tarpaulin-report.html`)
 
 #### Integration Tests
 
@@ -270,22 +239,11 @@ jobs:
     strategy:
       matrix:
         rust: [1.86.0, stable]
-        bun: [1.0.0, latest]
     steps:
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: ${{ matrix.rust }}
-      - uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: ${{ matrix.bun }}
       - run: cargo test
-      - run: cd frontend && bun test --coverage
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./frontend/coverage/lcov.info
-          flags: frontend
-          name: frontend-coverage
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v3
         with:
@@ -312,25 +270,19 @@ diesel migration revert
 ### Docker
 
 ```bash
-# Build and run with Docker Compose (dev profile)
-docker compose --profile dev up --build
+# Build and run with Docker Compose
+docker-compose -f docker-compose.local.yml up --build
 ```
 
-### Docker Compose Profiles
+### Docker Compose Environments
 
-The project uses Docker Compose profiles to separate different environments:
+The project uses separate Docker Compose files for different environments:
 
-- **dev**: For local development with hot-reload and developer tools
-  - Enables backend service with development configuration
-  - Mounts source code for live reloading
-  - Exposes debugging ports
+- **docker-compose.local.yml**: For local development with hot-reload and developer tools
+  - Runs backend service with development configuration
+  - Exposes port 8000 for local testing
 
-- **test**: For CI/test-only services
-  - Runs minimal services needed for testing
-  - Uses test-specific configurations
-  - Optimized for fast startup
-
-See `docker-compose.local.yml` and `docker-compose.prod.yml` for full details on services per profile.
+See `docker-compose.local.yml` and `docker-compose.prod.yml` for full configuration details.
 
 ### Environment Variables
 
@@ -361,7 +313,7 @@ We welcome contributions! Here's how to get started:
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Make your changes
 4. Add tests for new functionality
-5. Run the test suite (`cargo test` and `bun test`)
+5. Run the test suite (`cargo test`)
 6. Commit your changes (`git commit -m 'Add amazing feature'`)
 7. Push to your branch (`git push origin feature/amazing-feature`)
 8. Open a Pull Request
@@ -376,13 +328,11 @@ Thanks to the amazing open-source community:
 
 - **Actix Web** - High-performance Rust web framework
 - **Diesel** - Type-safe ORM for Rust
-- **React** - The UI library that powers the frontend
-- **Ant Design** - Enterprise UI component library
 - **PostgreSQL** - The world's most advanced open-source database
 - **Redis** - In-memory data structure store
 
 ---
 
-## Built with ❤️ using [Rust](https://www.rust-lang.org), [Actix Web](https://actix.rs), [React](https://react.dev), and modern DevOps practices
+## Built with ❤️ using [Rust](https://www.rust-lang.org), [Actix Web](https://actix.rs), and modern DevOps practices
 
 *Solving real-world multi-tenant challenges with production-ready architecture and security-first design.*

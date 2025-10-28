@@ -53,7 +53,10 @@ async fn main() -> io::Result<()> {
             }
         }
     }
-    env::set_var("RUST_LOG", "actix_web=debug");
+    // Only set RUST_LOG to a default if not already set in environment
+    if env::var("RUST_LOG").is_err() {
+        env::set_var("RUST_LOG", "info");
+    }
 
     if let Ok(log_file_path) = env::var("LOG_FILE") {
         let path = Path::new(&log_file_path);

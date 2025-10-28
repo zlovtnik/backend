@@ -1,7 +1,7 @@
 version: '3'
 services:
   address-book-api-prod:
-    container_name: address_book_be
+    container_name: address_book_be_prod
     restart: always
     ports:
       - "8000:8000"

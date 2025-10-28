@@ -1,10 +1,10 @@
 version: '3'
 services:
   address-book-api-local:
-    container_name: address_book_be
+    container_name: address_book_be_local
     build:
       context: .
-      dockerfile: Dockerfile.local
+      dockerfile: Dockerfile
     restart: always
     ports:
       - "8000:8000"
@@ -13,3 +13,4 @@ services:
     environment:
       - APP_HOST=0.0.0.0
       - APP_PORT=8000
+
