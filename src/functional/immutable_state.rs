@@ -2478,7 +2478,7 @@ mod tests {
     #[test]
     fn test_snapshot_history_mixed_pruning() {
         let mut history = SnapshotHistory::new(2, 2); // Max 2 auto, 2 named
-        let empty_state = Arc::new(TenantApplicationState::default());
+        let empty_state = create_test_state("mixed_pruning_test");
 
         // Add 4 automatic and 4 named snapshots
         for i in 0..4 {

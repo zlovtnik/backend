@@ -933,7 +933,7 @@ mod tests {
 
         let body = body::to_bytes(response.into_body()).await.unwrap();
         let payload = String::from_utf8(body.to_vec()).unwrap();
-        assert!(payload.contains("\"value\": \"value\""));
+        assert!(payload.contains("\"test\": \"value\""));
     }
 
     #[actix_rt::test]
