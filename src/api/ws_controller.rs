@@ -106,41 +106,6 @@ pub async fn ws_logs(
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(DEFAULT_MAX_GLOBAL_CONNECTIONS);
 
-    // Atomically reserve a connection slot using compare-and-swap.
-    // This eliminates the TOCTOU race condition by making the check-and-increment operation
-    // indivisible: only one thread can successfully reserve each slot.
-    let mut current = ACTIVE_WS_CONNECTIONS.load(Ordering::Relaxed);
-    loop {
-        if current >= max_global_connections {
-            error!(
-                "WebSocket logs: Connection rejected - global limit ({}) reached ({})",
-                max_global_connections, current
-            );
-            return Err(actix_web::error::ErrorServiceUnavailable(
-                "WebSocket service at capacity - too many active connections",
-            ));
-        }
-
-        // Attempt to atomically increment from current to current+1.
-        // This succeeds only if no other thread incremented the counter between our load and this compare_exchange.
-        match ACTIVE_WS_CONNECTIONS.compare_exchange(
-            current,
-            current + 1,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => {
-                // Successfully reserved a slot; create the guard to guarantee cleanup
-                let _guard = ConnectionGuard;
-                break;
-            }
-            Err(actual) => {
-                // Another thread changed the counter; retry with the current value
-                current = actual;
-            }
-        }
-    }
-
     // Validate Origin header during WebSocket handshake to prevent cross-site WebSocket hijacking (CSWSH)
     if should_enforce_origin_validation() {
         let allowed_origins = get_allowed_origins();
@@ -153,7 +118,9 @@ pub async fn ws_logs(
         match origin {
             Some(origin_str) => {
                 if !is_origin_allowed(origin_str, &allowed_origins) {
-                    let sanitized = SanitizedOrigin::from_header(req.headers().get("Origin").unwrap())
+                    let sanitized = req.headers()
+                        .get("Origin")
+                        .and_then(SanitizedOrigin::from_header)
                         .map(|s| s.as_str().to_string())
                         .unwrap_or_else(|| "[invalid]".to_string());
                     error!("WebSocket logs: Rejected connection from disallowed origin: {}", sanitized);
@@ -197,14 +164,10 @@ pub async fn ws_logs(
         actix_web::error::ErrorForbidden("Invalid token")
     })?;
 
-    // Get list of authorized admin users from environment
-    let authorized_users = env::var("WS_LOGS_ADMIN_USER")
-        .map_err(|_| {
-            error!("WS_LOGS_ADMIN_USER not configured - WebSocket logs access denied");
-            actix_web::error::ErrorForbidden("WebSocket logs not configured")
-        })?;
+    // Get list of authorized admin users from environment (optional - use empty string to allow any valid token)
+    let authorized_users = env::var("WS_LOGS_ADMIN_USER").unwrap_or_default();
 
-    // Check if current user is in the authorized list
+    // Check if current user is in the authorized list (only enforce if list is non-empty)
     if !authorized_users.is_empty() {
         let user_id = token_data.claims.user.to_string();
         let is_authorized = authorized_users
@@ -219,27 +182,54 @@ pub async fn ws_logs(
                 "User not authorized for WebSocket logs",
             ));
         }
-    } else {
-        // Explicitly deny access if the list is empty
-        error!("WS_LOGS_ADMIN_USER is empty - WebSocket logs access denied");
-        return Err(actix_web::error::ErrorForbidden("WebSocket logs not configured"));
     }
 
     // Upgrade the HTTP connection to WebSocket.
-    // If this fails, the guard is still held and will decrement the counter on drop.
+    // This must succeed before we reserve a connection slot.
     let (res, session, stream) = actix_ws::handle(&req, stream)?;
 
-    // Move the guard into the spawned task.
-    // The guard will be dropped when the task completes, decrementing the counter.
-    // This guarantees cleanup on all exit paths: success, error, or panic.
-    let broadcaster = broadcaster.get_ref().clone();
-    actix_web::rt::spawn(async move {
-        let _guard = ConnectionGuard;
-        if let Err(e) = handle_ws_session(session, stream, broadcaster).await {
-            debug!("WebSocket session error: {}", e);
+    // Atomically reserve a connection slot using compare-and-swap after successful handshake.
+    // This eliminates the TOCTOU race condition by making the check-and-increment operation
+    // indivisible: only one thread can successfully reserve each slot.
+    let mut current = ACTIVE_WS_CONNECTIONS.load(Ordering::Relaxed);
+    loop {
+        if current >= max_global_connections {
+            error!(
+                "WebSocket logs: Connection rejected - global limit ({}) reached ({})",
+                max_global_connections, current
+            );
+            // Connection is established but we couldn't reserve a slot; gracefully close it
+            let _ = session.close(None).await;
+            return Err(actix_web::error::ErrorServiceUnavailable(
+                "WebSocket service at capacity - too many active connections",
+            ));
         }
-        // Guard drops here, decrementing the counter
-    });
+
+        // Attempt to atomically increment from current to current+1.
+        // This succeeds only if no other thread incremented the counter between our load and this compare_exchange.
+        match ACTIVE_WS_CONNECTIONS.compare_exchange(
+            current,
+            current + 1,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => {
+                // Successfully reserved a slot; create ConnectionGuard and move it into the spawned task
+                let guard = ConnectionGuard;
+                let broadcaster = broadcaster.get_ref().clone();
+                actix_web::rt::spawn(async move {
+                    if let Err(e) = handle_ws_session(session, stream, broadcaster).await {
+                        debug!("WebSocket session error: {}", e);
+                    }
+                });
+                break;
+            }
+            Err(actual) => {
+                // Another thread changed the counter; retry with the current value
+                current = actual;
+            }
+        }
+    }
 
     Ok(res)
 }

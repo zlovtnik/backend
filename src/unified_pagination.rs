@@ -28,7 +28,7 @@
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
-use base64::Engine;
+use base64::{engine::general_purpose, Engine};
 use once_cell::sync::Lazy;
 use rand::RngCore;
 use std::fmt;
@@ -36,9 +36,7 @@ use std::fmt;
 static CURSOR_KEY: Lazy<Result<Key<Aes256Gcm>, CursorError>> =
     Lazy::new(|| match std::env::var("CURSOR_ENCRYPTION_KEY") {
         Ok(key_b64) => {
-            let key_bytes = base64::engine::general_purpose::STANDARD
-                .decode(&key_b64)
-                .map_err(|e| CursorError::KeyLoad(format!("Base64 decode failed: {}", e)))?;
+            let key_bytes = general_purpose::STANDARD.decode(&key_b64).map_err(|e| CursorError::KeyLoad(format!("Base64 decode failed: {}", e)))?;
             if key_bytes.len() != 32 {
                 return Err(CursorError::KeyLoad("Key must be 32 bytes".to_string()));
             }
@@ -108,7 +106,7 @@ pub enum CursorError {
 /// Utility functions for secure cursor encoding/decoding using AES-GCM
 pub mod cursor_encoding {
     use super::*;
-    use base64::{engine::general_purpose, Engine as _};
+    use base64::Engine;
 
     /// Encode data as an authenticated encrypted cursor string
     pub fn encode_opaque(data: &str) -> Result<String, CursorError> {
@@ -145,9 +143,7 @@ pub mod cursor_encoding {
         let cipher = Aes256Gcm::new(key);
 
         // Base64 decode
-        let combined = general_purpose::URL_SAFE_NO_PAD
-            .decode(encoded)
-            .map_err(CursorError::Base64Decode)?;
+        let combined = general_purpose::URL_SAFE_NO_PAD.decode(encoded).map_err(CursorError::Base64Decode)?;
 
         if combined.len() < 12 + 16 {
             // nonce + min tag

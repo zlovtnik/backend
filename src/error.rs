@@ -10,6 +10,7 @@ use log::{debug, error as log_error, info as log_info, warn as log_warn, Level};
 use serde::Serialize;
 use serde_json::to_string as to_json_string;
 use std::collections::{BTreeMap, BTreeSet};
+use tracing;
 
 pub type ServiceResult<T> = Result<T, ServiceError>;
 
@@ -264,10 +265,10 @@ impl ServiceError {
         let envelope = ErrorEnvelope::from_error(self);
         let payload = to_json_string(&envelope).unwrap_or_else(|_| envelope.message.clone());
         match level {
-            Level::Error => log_error!(target: "service_error", "{}", payload),
-            Level::Warn => log_warn!(target: "service_error", "{}", payload),
-            Level::Info => log_info!(target: "service_error", "{}", payload),
-            Level::Debug | Level::Trace => debug!(target: "service_error", "{}", payload),
+            Level::Error => tracing::error!(target: "service_error", "{}", payload),
+            Level::Warn => tracing::warn!(target: "service_error", "{}", payload),
+            Level::Info => tracing::info!(target: "service_error", "{}", payload),
+            Level::Debug | Level::Trace => tracing::debug!(target: "service_error", "{}", payload),
         }
     }
 }
