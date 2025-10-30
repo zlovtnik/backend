@@ -1,16 +1,13 @@
 use actix_service::forward_ready;
 use actix_web::body::EitherBody;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
-use actix_web::http::{
-    header::{HeaderName, HeaderValue},
-    Method,
-};
+use actix_web::http::Method;
 use actix_web::web::Data;
 use actix_web::Error;
 use actix_web::HttpMessage;
 use actix_web::HttpResponse;
 use futures::future::{ok, LocalBoxFuture, Ready};
-use log::{error, info};
+use log::{debug, error, info};
 
 use crate::config::db::TenantPoolManager;
 use crate::constants;
@@ -89,17 +86,11 @@ where
             authenticate_pass = true;
         }
 
-        // Bypass some account routes
-        let mut headers = req.headers().clone();
-        headers.append(
-            HeaderName::from_static("content-length"),
-            HeaderValue::from_static("true"),
-        );
-
         if !authenticate_pass {
             if let Some(manager) = req.app_data::<Data<TenantPoolManager>>() {
                 if let Some(authen_header) = req.headers().get(constants::AUTHORIZATION) {
-                    info!("Parsing authorization header...");
+                    // Log authentication attempt with low-cardinality information only, avoiding sensitive data
+                    info!("Authentication attempt for route: {}", req.path());
                     if let Ok(authen_str) = authen_header.to_str() {
                         if authen_str.starts_with("bearer") || authen_str.starts_with("Bearer") {
                             if authen_str.len() <= 7 {
@@ -108,22 +99,29 @@ where
                                 let token = authen_str[7..].trim();
                                 if let Ok(token_data) = token_utils::decode_token(token.to_string())
                                 {
-                                    info!("Decoding token...");
+                                    // Debug log for token decode success, logging user ID only (no sensitive token values)
+                                    debug!("Token successfully decoded for user: {}", token_data.claims.user);
                                     if let Some(tenant_pool) =
                                         manager.get_tenant_pool(&token_data.claims.tenant_id)
                                     {
                                         if token_utils::verify_token(&token_data, &tenant_pool)
                                             .is_ok()
                                         {
-                                            info!("Valid token");
+                                            // Info log for successful authentication, using low-cardinality tags for tenant and user without exposing sensitive details
+                                            info!("Successful authentication - tenant: {}, user: {}, route: {}", token_data.claims.tenant_id, token_data.claims.user, req.path());
                                             req.extensions_mut().insert(tenant_pool.clone());
+                                            // Store tenant_id in extensions for later retrieval by controllers
+                                            req.extensions_mut().insert(token_data.claims.tenant_id.clone());
                                             authenticate_pass = true;
                                         } else {
-                                            error!("Invalid token");
+                                            error!("Token verification failed");
                                         }
                                     } else {
-                                        error!("Tenant not found");
+                                        error!("Tenant not found for token");
                                     }
+                                } else {
+                                    // Log token decode failure (without token value)
+                                    debug!("Token decode failed - invalid token format or signature");
                                 }
                             }
                         }
@@ -335,6 +333,8 @@ mod functional_auth {
                 };
 
             req.extensions_mut().insert(tenant_pool);
+            // Store tenant_id in extensions for later retrieval by controllers
+            req.extensions_mut().insert(tenant_id.clone());
             info!(
                 "Authentication successful for tenant: {}, user: {}",
                 tenant_id, user_id

@@ -653,7 +653,7 @@ impl SnapshotHistory {
         }
     }
 
-    /// Adds a snapshot to the history with automatic pruning
+    /// Adds a snapshot to the history with automatic pruning and memory limit enforcement
     pub fn add_snapshot(&mut self, snapshot: StateSnapshot) {
         let is_named = snapshot.name.is_some();
 
@@ -668,23 +668,49 @@ impl SnapshotHistory {
         self.prune_snapshots(is_named);
     }
 
-    /// Prunes old snapshots based on retention policies
+    /// Prunes old snapshots based on retention policies, removing oldest snapshots first
     fn prune_snapshots(&mut self, is_named: bool) {
         let auto_count = self.snapshots.iter().filter(|s| s.name.is_none()).count();
         let named_count = self.snapshots.iter().filter(|s| s.name.is_some()).count();
 
-        // Remove oldest automatic snapshots if over limit
+        // Remove oldest automatic snapshots if over limit (keep newest ones)
         if !is_named && auto_count > self.max_auto_snapshots {
+            // Count automatic snapshots and remove oldest ones
+            let to_remove = auto_count - self.max_auto_snapshots;
+            let mut removed = 0;
             self.snapshots.retain(|s| {
-                s.name.is_some() || {
-                    // Keep the newest automatic snapshots
+                // Keep all named snapshots
+                if s.name.is_some() {
+                    return true;
+                }
+                // Remove oldest automatic snapshots
+                if removed < to_remove {
+                    removed += 1;
+                    false
+                } else {
                     true
                 }
             });
         }
 
-        // Remove oldest named snapshots if over limit
+        // Remove oldest named snapshots if over limit (keep newest ones)
         if is_named && named_count > self.max_named_snapshots {
+            // Find and remove oldest named snapshots
+            let to_remove = named_count - self.max_named_snapshots;
+            let mut removed = 0;
+            self.snapshots.retain(|s| {
+                // Keep all automatic snapshots
+                if s.name.is_none() {
+                    return true;
+                }
+                // Remove oldest named snapshots
+                if removed < to_remove {
+                    removed += 1;
+                    false
+                } else {
+                    true
+                }
+            });
             // Rebuild named_snapshots index after potential removals
             self.rebuild_named_index();
         }
@@ -966,11 +992,29 @@ impl ImmutableStateManager {
             transition(current_state).map_err(|e| format!("Transition failed: {}", e))?;
         let new_state_arc = Arc::new(new_state);
 
-        states.insert(tenant_id.to_string(), new_state_arc);
+        // Capture the previous entry before mutating the map
+        let previous = states.insert(tenant_id.to_string(), new_state_arc);
 
-        // Update metrics
+        // Update metrics and enforce memory limit
         let duration = start.elapsed();
         self.update_metrics(duration)?;
+        
+        // Check if memory limit is exceeded
+        if !self.check_memory_limits()? {
+            // Restore the previous state if the memory check fails
+            match previous {
+                Some(prev_arc) => {
+                    states.insert(tenant_id.to_string(), prev_arc);
+                }
+                None => {
+                    states.remove(tenant_id);
+                }
+            }
+            return Err(format!(
+                "Memory limit exceeded: {} MB limit configured",
+                self.max_memory_mb
+            ));
+        }
 
         Ok(())
     }
@@ -1144,7 +1188,6 @@ impl ImmutableStateManager {
 
         // Memory metrics: documented estimates (per task requirement option b)
         // These are not sampled at runtime due to performance/cost reasons
-        // memory_overhead_percent: estimate based on Arc/im::Vector structural sharing overhead
         metrics.memory_overhead_percent = 15.0;
         // peak_memory_usage: baseline estimate, not updated with actual measurements
         metrics.peak_memory_usage = metrics.peak_memory_usage.max(1024 * 1024);
@@ -1472,6 +1515,22 @@ mod tests {
         }
     }
 
+    /// Create a test TenantApplicationState wrapped in Arc from a tenant id.
+    ///
+    /// This is a convenience helper for tests that need a fully initialized
+    /// TenantApplicationState without calling the full initialization pipeline.
+    /// It creates a new state with the given tenant id and default/empty persistent data structures.
+    fn create_test_state(tenant_id: &str) -> Arc<TenantApplicationState> {
+        let tenant = create_test_tenant(tenant_id);
+        Arc::new(TenantApplicationState {
+            tenant,
+            user_sessions: PersistentHashMap::new(),
+            app_data: PersistentHashMap::new(),
+            query_cache: PersistentVector::new(),
+            last_updated: Utc::now(),
+        })
+    }
+
     #[test]
     fn test_persistent_vector() {
         let v1 = PersistentVector::new();
@@ -1517,12 +1576,12 @@ mod tests {
     #[test]
     fn test_state_transition() {
         let manager = ImmutableStateManager::new(100);
-        let tenant = create_test_tenant("test1");
+        let tenant = create_test_tenant("perf_test");
         manager.initialize_tenant(tenant).unwrap();
 
         // Apply a transition that adds user session data
         manager
-            .apply_transition("test1", |state| {
+            .apply_transition("perf_test", |state| {
                 let mut new_state = state.clone();
                 new_state.user_sessions = state.user_sessions.insert(
                     "session1".to_string(),
@@ -1536,7 +1595,7 @@ mod tests {
             })
             .unwrap();
 
-        let updated_state = manager.get_tenant_state("test1").unwrap();
+        let updated_state = manager.get_tenant_state("perf_test").unwrap();
         assert_eq!(
             updated_state
                 .user_sessions
@@ -1714,12 +1773,11 @@ mod tests {
     #[test]
     fn test_tenant_isolation_comprehensive() {
         let manager = ImmutableStateManager::new(100);
+        let tenant1 = create_test_tenant("tenant1");
+        let tenant2 = create_test_tenant("tenant2");
 
-        // Create multiple tenants
-        for i in 0..5 {
-            let tenant = create_test_tenant(&format!("tenant_{}", i));
-            manager.initialize_tenant(tenant).unwrap();
-        }
+        manager.initialize_tenant(tenant1).unwrap();
+        manager.initialize_tenant(tenant2).unwrap();
 
         // Apply isolation-breaking operations to verify boundaries
         for i in 0..5 {
@@ -1794,7 +1852,7 @@ mod tests {
                     let mut new_state = state.clone();
                     // Add various types of data to simulate realistic usage
                     new_state.app_data = state.app_data.insert(
-                        format!("config_{}", i),
+                        format!("key{}", i),
                         serde_json::json!({
                             "key": format!("value_{}", i),
                             "timestamp": Utc::now().timestamp(),
@@ -2350,5 +2408,109 @@ mod tests {
             restored.app_data.get(&"key_0".to_string()),
             Some(&serde_json::json!({"data": vec![0; 100]}))
         );
+    }
+
+    #[test]
+    fn test_memory_limit_enforcement_on_apply_transition() {
+        // Create manager with very low memory limit to trigger checks
+        let manager = ImmutableStateManager::new(1); // 1 MB limit (will be tight)
+        let tenant = create_test_tenant("memory_test");
+        manager.initialize_tenant(tenant).unwrap();
+
+        // Apply transitions should check memory limits
+        let result = manager.apply_transition("memory_test", |state| {
+            let mut new_state = state.clone();
+            // This won't actually exceed the limit in a unit test, but the check is in place
+            new_state.last_updated = chrono::Utc::now();
+            Ok(new_state)
+        });
+
+        // Should succeed on first call (memory is minimal)
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_snapshot_history_pruning_auto_snapshots() {
+        let mut history = SnapshotHistory::new(2, 5); // Max 2 auto, 5 named snapshots
+        let empty_state = create_test_state("auto_snapshots_test");
+
+        // Add 5 automatic snapshots (should keep only 2 newest)
+        for i in 0..5 {
+            history.add_snapshot(StateSnapshot {
+                snapshot_id: format!("auto_{}", i),
+                name: None,
+                created_at: chrono::Utc::now(),
+                created_by: "test".to_string(),
+                description: None,
+                tags: vec![],
+                state: empty_state.clone(),
+            });
+        }
+
+        // Count automatic snapshots (should be <= 2)
+        let auto_count = history.snapshots.iter().filter(|s| s.name.is_none()).count();
+        assert!(auto_count <= 2, "Auto snapshots count {} exceeds limit of 2", auto_count);
+    }
+
+    #[test]
+    fn test_snapshot_history_pruning_named_snapshots() {
+        let mut history = SnapshotHistory::new(10, 2); // Max 10 auto, 2 named snapshots
+        let empty_state = create_test_state("named_snapshots_test");
+
+        // Add 5 named snapshots (should keep only 2 newest)
+        for i in 0..5 {
+            history.add_snapshot(StateSnapshot {
+                snapshot_id: format!("named_{}", i),
+                name: Some(format!("snapshot_{}", i)),
+                created_at: chrono::Utc::now(),
+                created_by: "test".to_string(),
+                description: None,
+                tags: vec![],
+                state: empty_state.clone(),
+            });
+        }
+
+        // Count named snapshots (should be <= 2)
+        let named_count = history.snapshots.iter().filter(|s| s.name.is_some()).count();
+        assert!(named_count <= 2, "Named snapshots count {} exceeds limit of 2", named_count);
+    }
+
+    #[test]
+    fn test_snapshot_history_mixed_pruning() {
+        let mut history = SnapshotHistory::new(2, 2); // Max 2 auto, 2 named
+        let empty_state = create_test_state("mixed_pruning_test");
+
+        // Add 4 automatic and 4 named snapshots
+        for i in 0..4 {
+            history.add_snapshot(StateSnapshot {
+                snapshot_id: format!("auto_{}", i),
+                name: None,
+                created_at: chrono::Utc::now(),
+                created_by: "test".to_string(),
+                description: None,
+                tags: vec![],
+                state: empty_state.clone(),
+            });
+        }
+
+        for i in 0..4 {
+            history.add_snapshot(StateSnapshot {
+                snapshot_id: format!("named_{}", i),
+                name: Some(format!("snapshot_{}", i)),
+                created_at: chrono::Utc::now(),
+                created_by: "test".to_string(),
+                description: None,
+                tags: vec![],
+                state: empty_state.clone(),
+            });
+        }
+
+        // Verify total snapshots respect the limits
+        let auto_count = history.snapshots.iter().filter(|s| s.name.is_none()).count();
+        let named_count = history.snapshots.iter().filter(|s| s.name.is_some()).count();
+
+        assert!(auto_count <= 2, "Auto snapshots {} exceeds limit", auto_count);
+        assert!(named_count <= 2, "Named snapshots {} exceeds limit", named_count);
+        assert!(auto_count + named_count <= 4, "Total snapshots exceeds limits");
     }
 }

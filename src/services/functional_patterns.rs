@@ -685,11 +685,12 @@ impl<T> Retry<T> {
     }
 
     /// Execute the operation with retry logic
+    ///
+    /// Retries the operation with configurable delays between attempts.
+    /// Logs warnings for each failed attempt and sleeps between retries.
     pub fn execute(&self) -> ServiceResult<T> {
         let mut attempts = 0;
         let mut delay_ms = self.delay_ms;
-        let fib_prev = 0u64;
-        let fib_curr = 1u64;
 
         loop {
             attempts += 1;
@@ -699,29 +700,27 @@ impl<T> Retry<T> {
                     if attempts >= self.max_attempts {
                         return Err(err);
                     }
-                    // In a real implementation, add async sleep here
+                    
                     log::warn!(
                         "Retry attempt {} failed, retrying in {}ms...",
                         attempts,
                         delay_ms
                     );
 
-                    // Calculate next delay based on strategy
-                    // For now, we'll just use exponential backoff as default
-                    let next_delay = delay_ms * 2;
-                    delay_ms = next_delay;
+                    // Sleep between retries to avoid hot-loop retry storms
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
 
-                    // For fibonacci, we would do:
-                    // let next_fib = fib_prev + fib_curr;
-                    // fib_prev = fib_curr;
-                    // fib_curr = next_fib;
-                    // delay_ms = base_delay_ms * next_fib;
+                    // Calculate next delay based on exponential backoff
+                    delay_ms = delay_ms.saturating_mul(2);
                 }
             }
         }
     }
 
     /// Execute the operation with retry logic and a custom backoff strategy
+    ///
+    /// Allows specifying a custom backoff function to calculate delay between retries.
+    /// Sleeps between attempts to avoid busy-waiting.
     pub fn execute_with_backoff<F>(&self, backoff_fn: F) -> ServiceResult<T>
     where
         F: Fn(usize, u64) -> u64,
@@ -744,6 +743,9 @@ impl<T> Retry<T> {
                         attempts,
                         delay_ms
                     );
+                    
+                    // Sleep between retries to avoid hot-loop
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
                 }
             }
         }

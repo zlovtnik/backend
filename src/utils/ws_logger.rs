@@ -149,13 +149,12 @@ where
     fn on_event(
         &self,
         event: &tracing::Event<'_>,
-        _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
     ) {
         let metadata = event.metadata();
         let level = metadata.level();
-
-        // Format the log event based on configured format
-        let message = format_log_event(event, level, metadata, self.format);
+        let span_name = metadata.name().to_string();
+        let message = format_log_event(event, level, metadata, self.format, span_name);
         self.broadcaster.send(message);
     }
 }
@@ -168,6 +167,7 @@ where
 /// * `level` - The log level
 /// * `metadata` - The event metadata
 /// * `format` - The output format (Text or Json)
+/// * `span_name` - The name of the current span
 ///
 /// # Returns
 ///
@@ -177,11 +177,12 @@ fn format_log_event(
     level: &tracing::Level,
     metadata: &tracing::Metadata<'_>,
     format: LogFormat,
+    span_name: String,
 ) -> String {
     let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
     let target = metadata.target();
 
-    // Create a visitor to extract the message
+    // Create a visitor to extract the message and all fields
     let mut visitor = LogVisitor::default();
     event.record(&mut visitor);
 
@@ -196,29 +197,54 @@ fn format_log_event(
             format!("[{}] {} [{}] {}", timestamp, level, target, message)
         }
         LogFormat::Json => {
-            // Use serde_json for JSON output
-            let json_obj = serde_json::json!({
+            // Build JSON object with structured fields
+            let mut json_obj = serde_json::json!({
                 "timestamp": timestamp.to_string(),
                 "level": level.to_string(),
                 "target": target,
                 "message": message,
+                "span": span_name,
             });
+            
+            // Add all captured fields (if any besides message)
+            if let Some(obj) = json_obj.as_object_mut() {
+                // Include fields object with all recorded field values
+                if !visitor.fields.is_empty() {
+                    let fields: serde_json::Map<String, serde_json::Value> = visitor.fields
+                        .into_iter()
+                        .filter(|(k, _)| k != "message") // Message already at root level
+                        .map(|(k, v)| (k, serde_json::Value::String(v)))
+                        .collect();
+                    if !fields.is_empty() {
+                        obj.insert("fields".to_string(), serde_json::Value::Object(fields));
+                    }
+                }
+            }
+            
             json_obj.to_string()
         }
     }
 }
 
-/// A visitor that extracts the message from a tracing event.
+/// A visitor that captures all fields from a tracing event into a structured map.
 #[derive(Default)]
 struct LogVisitor {
     message: String,
+    fields: std::collections::BTreeMap<String, String>,
 }
 
 impl tracing::field::Visit for LogVisitor {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
-        if field.name() == "message" {
-            self.message = format!("{:?}", value);
+        let field_name = field.name();
+        let value_str = format!("{:?}", value);
+        
+        // Always capture the message field
+        if field_name == "message" {
+            self.message = value_str.clone();
         }
+        
+        // Capture all fields (including message) in the structured map for JSON output
+        self.fields.insert(field_name.to_string(), value_str);
     }
 }
 
@@ -286,13 +312,92 @@ pub fn init_websocket_logging(
     match result {
         Ok(()) => Ok(()),
         Err(e) => {
-            // If the subscriber is already set, we return Ok since we want idempotent behavior
-            // In tests, this allows multiple calls to init_websocket_logging
-            eprintln!(
-                "Tracing subscriber already initialized or failed to initialize: {:?}",
-                e
-            );
-            Ok(())
+            // Treat already-initialized scenarios as success (idempotent)
+            let err_text = e.to_string().to_lowercase();
+            if err_text.contains("already been initialized")
+                || err_text.contains("already initialized")
+                || err_text.contains("global default subscriber set")
+            {
+                log::debug!(
+                    "Tracing subscriber already initialized (expected in tests or multi-starts): {:?}",
+                    e
+                );
+                Ok(())
+            } else {
+                log::warn!("Failed to initialize tracing subscriber: {:?}", e);
+                Err(Box::new(e))
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::time::{timeout, Duration};
+
+    #[tokio::test]
+    async fn test_log_broadcaster_sends_and_receives() {
+        let broadcaster = LogBroadcaster::new(100);
+        let mut receiver = broadcaster.subscribe();
+
+        broadcaster.send("Test message 1".to_string());
+        broadcaster.send("Test message 2".to_string());
+
+        // Verify messages are received
+        let msg1 = timeout(Duration::from_millis(100), receiver.recv())
+            .await
+            .expect("should receive message 1")
+            .expect("message should be valid");
+        assert_eq!(msg1, "Test message 1");
+
+        let msg2 = timeout(Duration::from_millis(100), receiver.recv())
+            .await
+            .expect("should receive message 2")
+            .expect("message should be valid");
+        assert_eq!(msg2, "Test message 2");
+    }
+
+    #[tokio::test]
+    async fn test_log_broadcaster_multiple_receivers() {
+        let broadcaster = LogBroadcaster::new(100);
+        let mut receiver1 = broadcaster.subscribe();
+        let mut receiver2 = broadcaster.subscribe();
+
+        broadcaster.send("Broadcast message".to_string());
+
+        // Both receivers should get the message
+        let msg1 = timeout(Duration::from_millis(100), receiver1.recv())
+            .await
+            .expect("receiver1 should receive message")
+            .expect("message should be valid");
+        assert_eq!(msg1, "Broadcast message");
+
+        let msg2 = timeout(Duration::from_millis(100), receiver2.recv())
+            .await
+            .expect("receiver2 should receive message")
+            .expect("message should be valid");
+        assert_eq!(msg2, "Broadcast message");
+    }
+
+    #[test]
+    fn test_log_broadcaster_ignores_no_receivers() {
+        let broadcaster = LogBroadcaster::new(100);
+        // Send message with no receivers - should not panic
+        broadcaster.send("Message with no receivers".to_string());
+        // If we reach here, test passes
+    }
+
+    #[test]
+    fn test_log_format_from_env_default() {
+        // When WS_LOG_FORMAT is not set, should default to Text
+        let format = LogFormat::from_env_or_default();
+        assert_eq!(format, LogFormat::Text);
+    }
+
+    #[test]
+    fn test_log_format_debug_display() {
+        assert_eq!(format!("{:?}", LogFormat::Text), "Text");
+        assert_eq!(format!("{:?}", LogFormat::Json), "Json");
     }
 }

@@ -18,19 +18,24 @@ pub struct DatabaseContext {
 
 impl DatabaseContext {
     pub fn from_request(req: &HttpRequest) -> Result<Self, ServiceError> {
-        req.extensions()
+        let pool = req
+            .extensions()
             .get::<Pool>()
             .cloned()
-            .map(|pool| Self {
-                pool,
-                tenant_id: None,
-            })
             .ok_or_else(|| {
                 ServiceError::internal_server_error("Pool not found").with_context(|ctx| {
                     ctx.with_tag("tenant")
                         .with_detail("Missing tenant pool in request extensions")
                 })
-            })
+            })?;
+
+        // Attempt to extract tenant_id from request extensions (set by auth middleware)
+        let tenant_id = req
+            .extensions()
+            .get::<String>()
+            .cloned();
+
+        Ok(Self { pool, tenant_id })
     }
 
     pub fn from_manager(

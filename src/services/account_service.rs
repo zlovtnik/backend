@@ -34,6 +34,7 @@ use crate::{
     utils::token_utils,
 };
 use diesel::result::{DatabaseErrorKind, Error as DieselError};
+use diesel::Connection;
 
 fn build_user_signup_pipeline() -> Pipeline<UserDTO> {
     Pipeline::<UserDTO>::new()
@@ -61,6 +62,39 @@ fn build_login_pipeline() -> Pipeline<LoginDTO> {
             validate_login_dto(&dto)?;
             Ok(dto)
         })
+}
+
+/// Extract bearer token from Authorization header
+///
+/// Safely extracts the token string from a bearer token header,
+/// handling both "Bearer" and "bearer" schemes (case-insensitive).
+///
+/// # Arguments
+/// * `auth_str` - The Authorization header value as a string
+///
+/// # Returns
+/// `Ok(String)` with the token on success, `Err` if header format is invalid
+fn extract_bearer_token(auth_str: &str) -> Result<String, ServiceError> {
+    if let Some(token) = auth_str
+        .strip_prefix("Bearer ")
+        .or_else(|| auth_str.strip_prefix("bearer "))
+        .or_else(|| auth_str.strip_prefix("BEARER "))
+    {
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
+            Err(ServiceError::unauthorized("Token is empty".to_string()))
+        } else if !trimmed.contains('.') {
+            Err(ServiceError::unauthorized(
+                "Invalid token format".to_string(),
+            ))
+        } else {
+            Ok(trimmed.to_string())
+        }
+    } else {
+        Err(ServiceError::unauthorized(
+            "Invalid authorization header".to_string(),
+        ))
+    }
 }
 
 /// Build a query reader for the signup flow so controllers can compose request context with database execution.
@@ -248,8 +282,7 @@ pub fn logout(authen_header: &HeaderValue, pool: &Pool) -> Result<(), ServiceErr
                     constants::MESSAGE_PROCESS_TOKEN_ERROR.to_string(),
                 ))
             } else {
-                let token = authen_str[6..authen_str.len()].trim().to_string();
-                Ok(token)
+                extract_bearer_token(authen_str)
             }
         })
         .and_then(|token| {
@@ -325,8 +358,7 @@ pub fn refresh(
                     constants::MESSAGE_TOKEN_MISSING.to_string(),
                 ))
             } else {
-                let token = authen_str[6..authen_str.len()].trim().to_string();
-                Ok(token)
+                extract_bearer_token(authen_str)
             }
         })
         .and_then(|token| {
@@ -424,21 +456,17 @@ pub fn refresh_with_token(
                         tenant_id: tenant_id.to_string(),
                     });
 
-                    // Revoke old refresh token and create new one
+                    // Revoke old refresh token and create new one in a single atomic transaction
+                    // This ensures that if either operation fails, both are rolled back
                     query_service
                         .query(|conn| {
-                            // Revoke old token
-                            RefreshToken::revoke(refresh_token, conn).map_err(|e| {
+                            conn.transaction(|conn| {
+                                RefreshToken::revoke(refresh_token, conn)?;
+                                RefreshToken::create(user.id, conn)
+                            })
+                            .map_err(|e| {
                                 ServiceError::internal_server_error(format!(
-                                    "Failed to revoke old token: {}",
-                                    e
-                                ))
-                            })?;
-
-                            // Create new refresh token
-                            RefreshToken::create(user.id, conn).map_err(|e| {
-                                ServiceError::internal_server_error(format!(
-                                    "Failed to create refresh token: {}",
+                                    "Refresh token rotation failed: {}",
                                     e
                                 ))
                             })
@@ -483,8 +511,7 @@ pub fn me(authen_header: &HeaderValue, pool: &Pool) -> Result<LoginInfoDTO, Serv
                     constants::MESSAGE_PROCESS_TOKEN_ERROR.to_string(),
                 ))
             } else {
-                let token = authen_str[6..authen_str.len()].trim().to_string();
-                Ok(token)
+                extract_bearer_token(authen_str)
             }
         })
         .and_then(|token| {

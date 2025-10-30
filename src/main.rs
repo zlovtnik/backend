@@ -130,37 +130,14 @@ async fn main() -> io::Result<()> {
 
     // Start the main HTTP server
     let main_server = HttpServer::new(move || {
-        // יהי רצון שימצא עבודה, הגדר CORS על פי סביבה
-        let app_env = env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
-        let mut cors_builder = if app_env == "production" {
-            // יהי רצון שימצא עבודה, ייצור: CORS מגביל עם מקורות מותרים מוגדרים
-            let mut builder = Cors::default();
-
-            if let Ok(allowed_origins) = env::var("CORS_ALLOWED_ORIGINS") {
-                // יהי רצון שימצא עבודה, חלק מקורות מופרדות בפסיק והוסף כל אחד
-                for origin in allowed_origins
-                    .split(',')
-                    .map(|s| s.trim())
-                    .filter(|s| !s.is_empty())
-                {
-                    builder = builder.allowed_origin(origin);
-                }
-            } else {
-                // יהי רצון שימצא עבודה, ברירת מחדל ללוקאל-הוסט אם לא מוגדר מקורות
-                builder = builder.allowed_origin("http://localhost:3000");
-            }
-            builder
-        } else {
-            // יהי רצון שימצא עבודה, פיתוח/בדיקה: CORS מתיר יותר אך מפורש
-            // Note: send_wildcard() conflicts with allowed_origin(), so we use explicit origins
-            Cors::default()
-                .allowed_origin("http://localhost:3000")
-                .allowed_origin("http://localhost:3001")
-                .allowed_origin("http://127.0.0.1:3000")
-                .allowed_origin("http://127.0.0.1:3001")
-                .allowed_origin("http://localhost:5173") // Vite dev server
-                .allowed_origin("http://127.0.0.1:5173") // Vite dev server
-        };
+        // Use shared CORS origin configuration from middleware::ws_security
+        let allowed_origins = crate::middleware::ws_security::get_allowed_origins();
+        let mut cors_builder = Cors::default();
+        
+        // Apply allowed origins to CORS builder
+        for origin in allowed_origins {
+            cors_builder = cors_builder.allowed_origin(&origin);
+        }
 
         // יהי רצון שימצא עבודה, הוסף שיטות וכותרות נפוצות
         cors_builder = cors_builder

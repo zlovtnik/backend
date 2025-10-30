@@ -140,14 +140,16 @@ impl TenantQueryBuilder {
                             .as_ref()
                             .ok_or("Value required for string column predicate")?;
                         let pattern = format!("%{}%", Self::escape_like_pattern(v));
-                        Ok(query.filter($column.like(pattern)))
+                        // Use ESCAPE clause for robust Postgres LIKE pattern matching
+                        Ok(query.filter($column.like(pattern).escape('\\')))
                     }
                     Operator::NotContains => {
                         let v = value
                             .as_ref()
                             .ok_or("Value required for string column predicate")?;
                         let pattern = format!("%{}%", Self::escape_like_pattern(v));
-                        Ok(query.filter($column.not_like(pattern)))
+                        // Use ESCAPE clause for robust Postgres LIKE pattern matching
+                        Ok(query.filter($column.not_like(pattern).escape('\\')))
                     }
                     Operator::IsNull => Ok(query.filter($column.is_null())),
                     Operator::IsNotNull => Ok(query.filter($column.is_not_null())),
