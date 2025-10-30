@@ -218,9 +218,12 @@ pub async fn ws_logs(
                 let guard = ConnectionGuard;
                 let broadcaster = broadcaster.get_ref().clone();
                 actix_web::rt::spawn(async move {
+                    // Bind the guard to a local variable to keep it alive for the duration of this task
+                    let _guard = guard;
                     if let Err(e) = handle_ws_session(session, stream, broadcaster).await {
                         debug!("WebSocket session error: {}", e);
                     }
+                    // _guard is dropped here when the task completes, decrementing the counter
                 });
                 break;
             }

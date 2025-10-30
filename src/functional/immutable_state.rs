@@ -992,7 +992,8 @@ impl ImmutableStateManager {
             transition(current_state).map_err(|e| format!("Transition failed: {}", e))?;
         let new_state_arc = Arc::new(new_state);
 
-        states.insert(tenant_id.to_string(), new_state_arc);
+        // Capture the previous entry before mutating the map
+        let previous = states.insert(tenant_id.to_string(), new_state_arc);
 
         // Update metrics and enforce memory limit
         let duration = start.elapsed();
@@ -1000,6 +1001,15 @@ impl ImmutableStateManager {
         
         // Check if memory limit is exceeded
         if !self.check_memory_limits()? {
+            // Restore the previous state if the memory check fails
+            match previous {
+                Some(prev_arc) => {
+                    states.insert(tenant_id.to_string(), prev_arc);
+                }
+                None => {
+                    states.remove(tenant_id);
+                }
+            }
             return Err(format!(
                 "Memory limit exceeded: {} MB limit configured",
                 self.max_memory_mb
@@ -1503,6 +1513,22 @@ mod tests {
             created_at: Some(Utc::now().naive_utc()),
             updated_at: Some(Utc::now().naive_utc()),
         }
+    }
+
+    /// Create a test TenantApplicationState wrapped in Arc from a tenant id.
+    ///
+    /// This is a convenience helper for tests that need a fully initialized
+    /// TenantApplicationState without calling the full initialization pipeline.
+    /// It creates a new state with the given tenant id and default/empty persistent data structures.
+    fn create_test_state(tenant_id: &str) -> Arc<TenantApplicationState> {
+        let tenant = create_test_tenant(tenant_id);
+        Arc::new(TenantApplicationState {
+            tenant,
+            user_sessions: PersistentHashMap::new(),
+            app_data: PersistentHashMap::new(),
+            query_cache: PersistentVector::new(),
+            last_updated: Utc::now(),
+        })
     }
 
     #[test]
@@ -2406,7 +2432,7 @@ mod tests {
     #[test]
     fn test_snapshot_history_pruning_auto_snapshots() {
         let mut history = SnapshotHistory::new(2, 5); // Max 2 auto, 5 named snapshots
-        let empty_state = Arc::new(TenantApplicationState::default());
+        let empty_state = create_test_state("auto_snapshots_test");
 
         // Add 5 automatic snapshots (should keep only 2 newest)
         for i in 0..5 {
@@ -2429,7 +2455,7 @@ mod tests {
     #[test]
     fn test_snapshot_history_pruning_named_snapshots() {
         let mut history = SnapshotHistory::new(10, 2); // Max 10 auto, 2 named snapshots
-        let empty_state = Arc::new(TenantApplicationState::default());
+        let empty_state = create_test_state("named_snapshots_test");
 
         // Add 5 named snapshots (should keep only 2 newest)
         for i in 0..5 {

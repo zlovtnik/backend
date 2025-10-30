@@ -553,10 +553,51 @@ fn escape_xml(input: &str) -> String {
 }
 
 fn escape_csv_field(field: &str) -> String {
-    if field.contains(',') || field.contains('"') || field.contains('\n') {
+    if field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r') {
         format!("\"{}\"", field.replace("\"", "\"\""))
     } else {
         field.to_string()
+    }
+}
+
+/// Recursively converts a serde_json::Value to XML elements.
+/// Handles objects, arrays, and primitive values with proper escaping.
+fn json_to_xml(key: &str, value: &JsonValue) -> String {
+    match value {
+        JsonValue::Object(map) => {
+            let mut content = String::new();
+            for (k, v) in map.iter() {
+                content.push_str(&json_to_xml(k, v));
+            }
+            if content.is_empty() {
+                format!("<{} />", escape_xml(key))
+            } else {
+                format!("<{}>{}</{}>\n", escape_xml(key), content, escape_xml(key))
+            }
+        }
+        JsonValue::Array(arr) => {
+            let mut content = String::new();
+            for item in arr {
+                content.push_str(&json_to_xml("item", item));
+            }
+            if content.is_empty() {
+                format!("<{} />", escape_xml(key))
+            } else {
+                format!("<{}>{}</{}>\n", escape_xml(key), content, escape_xml(key))
+            }
+        }
+        JsonValue::String(s) => {
+            format!("<{}>{}</{}>\n", escape_xml(key), escape_xml(s), escape_xml(key))
+        }
+        JsonValue::Number(n) => {
+            format!("<{}>{}</{}>\n", escape_xml(key), n, escape_xml(key))
+        }
+        JsonValue::Bool(b) => {
+            format!("<{}>{}</{}>\n", escape_xml(key), b, escape_xml(key))
+        }
+        JsonValue::Null => {
+            format!("<{} />", escape_xml(key))
+        }
     }
 }
 
@@ -597,12 +638,13 @@ where
             Ok(builder.body(payload))
         }
         ResponseFormat::Xml => {
-            let json_str = serde_json::to_string(&envelope)?;
+            // Convert the JSON data to proper XML structure
+            let data_xml = json_to_xml("data", &serde_json::to_value(&envelope.data)?);
             let xml_payload = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <response>
   <message>{}</message>
-  <data>{}</data>
-</response>", escape_xml(&envelope.message), escape_xml(&json_str));
+{}
+</response>", escape_xml(&envelope.message), data_xml);
             // Validate response size to prevent DoS from large responses
             if xml_payload.len() > MAX_RESPONSE_SIZE_BYTES {
                 return Err(serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::Other, format!("Response size {} exceeds maximum of {} bytes", xml_payload.len(), MAX_RESPONSE_SIZE_BYTES))));
@@ -612,8 +654,15 @@ where
             Ok(builder.body(xml_payload))
         }
         ResponseFormat::Csv => {
-            let json_str = serde_json::to_string(&envelope)?;
-            let csv_payload = format!("message,data\n\"{}\",\"{}\"", escape_csv_field(&envelope.message), escape_csv_field(&json_str));
+            // CSV output strategy: flatten envelope to ensure compatibility with CSV consumers.
+            // The message is output as-is in the message column, and the data is serialized
+            // to a compact JSON string (no pretty-printing) in the data column.
+            // This ensures CSV parsers can correctly handle both columns without confusion.
+            let data_json = serde_json::to_string(&envelope.data)?;
+            let csv_payload = format!("message,data\n{},{}", 
+                escape_csv_field(&envelope.message), 
+                escape_csv_field(&data_json)
+            );
             // Validate response size to prevent DoS from large responses
             if csv_payload.len() > MAX_RESPONSE_SIZE_BYTES {
                 return Err(serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::Other, format!("Response size {} exceeds maximum of {} bytes", csv_payload.len(), MAX_RESPONSE_SIZE_BYTES))));
@@ -1249,7 +1298,9 @@ mod tests {
             "application/json;q=0.8, text/plain;q=0.9",
         ));
 
-        let response = ResponseTransformer::new("data").respond_to(&request.to_http_request());
+        let response = ResponseTransformer::new("data")
+            .allow_format(ResponseFormat::Text)
+            .respond_to(&request.to_http_request());
 
         let content_type = response.headers().get(CONTENT_TYPE).unwrap();
         // Should prefer text/plain due to higher quality value (0.9 > 0.8)
