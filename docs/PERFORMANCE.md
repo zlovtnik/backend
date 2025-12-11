@@ -160,6 +160,6 @@ Testing with 100 concurrent users making 10 requests each:
 
 ## Last Updated
 
-**Date**: October 23, 2025
-**Version**: 1.0
-**Tested With**: dispo-rusty v1.2.0
+**Date**: October 23, 2024
+**Version**: 0.1.0
+**Tested With**: rcs v0.1.0

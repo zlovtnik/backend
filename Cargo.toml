@@ -52,6 +52,7 @@ rust_decimal = { version = "1.38", features = ["serde", "db-diesel-postgres"] }
 bigdecimal = { version = "0.4.8", features = ["serde"] }
 async-trait = "0.1.89"
 aes-gcm = "0.10"
+validator = { version = "0.16", features = ["derive"] }
 
 [dependencies.diesel]
 version = "2.2.0"

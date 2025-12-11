@@ -12,7 +12,7 @@ Built to solve real-world SaaS and managed platform pain points—compliance, sc
 
 ### What You Get Out of the Box
 
-- **🔒 Strong Data Isolation**: One PostgreSQL database per tenant (not per-schema) to minimize cross-tenant risk
+- **🔒 Strong Data Isolation**: Tenants share a single PostgreSQL database (one DATABASE_URL) with per-tenant schemas for isolation (see src/main.rs for shared pool, src/config/db.rs for schema provisioning)
 - **⚡ High Performance**: Rust backend designed for low-latency APIs; see benchmarks for your workload.
 - **🛡️ Security First**: JWT authentication, CORS protection, input validation
 - **🎨 Modern Frontend**: React + TypeScript with Ant Design components
