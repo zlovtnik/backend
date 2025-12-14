@@ -38,6 +38,7 @@ pub mod ret_nfag;
 pub mod tenant;
 pub mod user;
 pub mod user_token;
+pub mod validation;
 
 // Re-export functional programming utilities for model operations
 pub use crate::functional::{

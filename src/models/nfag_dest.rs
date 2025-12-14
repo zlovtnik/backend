@@ -2,6 +2,7 @@ use crate::models::nfag::Nfag;
 use crate::schema::*;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
+use chrono::{DateTime, Utc};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum TaxIdentifier {
@@ -47,6 +48,22 @@ pub struct NfagDest {
     pub cpf: Option<String>,
     pub idestrangeiro: Option<String>,
     pub xnome: Option<String>,
+    pub ie: Option<String>,
+    pub im: Option<String>,
+    pub email: Option<String>,
+    pub telefone: Option<String>,
+    pub logradouro: Option<String>,
+    pub numero: Option<String>,
+    pub complemento: Option<String>,
+    pub bairro: Option<String>,
+    pub codigo_municipio: Option<String>,
+    pub municipio: Option<String>,
+    pub uf: Option<String>,
+    pub cep: Option<String>,
+    pub codigo_pais: Option<String>,
+    pub pais: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 impl NfagDest {
@@ -98,13 +115,43 @@ pub struct NewNfagDest {
     pub cpf: Option<String>,
     pub idestrangeiro: Option<String>,
     pub xnome: Option<String>,
+    pub ie: Option<String>,
+    pub im: Option<String>,
+    pub email: Option<String>,
+    pub telefone: Option<String>,
+    pub logradouro: Option<String>,
+    pub numero: Option<String>,
+    pub complemento: Option<String>,
+    pub bairro: Option<String>,
+    pub codigo_municipio: Option<String>,
+    pub municipio: Option<String>,
+    pub uf: Option<String>,
+    pub cep: Option<String>,
+    pub codigo_pais: Option<String>,
+    pub pais: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NewNfagDestDto {
     pub nfag_id: i32,
     pub identifier: TaxIdentifierDto,
-    pub xnome: Option<String>,
+    pub xnome: String,
+    pub ie: Option<String>,
+    pub im: Option<String>,
+    pub email: Option<String>,
+    pub telefone: Option<String>,
+    pub logradouro: Option<String>,
+    pub numero: Option<String>,
+    pub complemento: Option<String>,
+    pub bairro: Option<String>,
+    pub codigo_municipio: Option<String>,
+    pub municipio: Option<String>,
+    pub uf: Option<String>,
+    pub cep: Option<String>,
+    pub codigo_pais: Option<String>,
+    pub pais: Option<String>,
 }
 
 impl TryFrom<NewNfagDestDto> for NewNfagDest {
@@ -117,12 +164,29 @@ impl TryFrom<NewNfagDestDto> for NewNfagDest {
             "idestrangeiro" => (None, None, Some(dto.identifier.value)),
             invalid_type => return Err(NfagDestConversionError::InvalidIdentifierType(invalid_type.to_string())),
         };
+        let now = Utc::now();
         Ok(NewNfagDest {
             nfag_id: dto.nfag_id,
             cnpj,
             cpf,
             idestrangeiro,
-            xnome: dto.xnome,
+            xnome: Some(dto.xnome),
+            ie: dto.ie,
+            im: dto.im,
+            email: dto.email,
+            telefone: dto.telefone,
+            logradouro: dto.logradouro,
+            numero: dto.numero,
+            complemento: dto.complemento,
+            bairro: dto.bairro,
+            codigo_municipio: dto.codigo_municipio,
+            municipio: dto.municipio,
+            uf: dto.uf,
+            cep: dto.cep,
+            codigo_pais: dto.codigo_pais,
+            pais: dto.pais,
+            created_at: now,
+            updated_at: now,
         })
     }
 }

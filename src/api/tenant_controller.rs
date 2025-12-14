@@ -595,24 +595,19 @@ pub async fn delete(
             .with_metadata("tenant_id", id.to_string())
     })?;
 
-    match Tenant::delete(&id, &mut conn) {
-        Ok(_) => (),
-        Err(diesel::result::Error::NotFound) => {
-            return Err(ServiceError::not_found(format!("Tenant not found: {}", id))
-                .with_tag("tenant")
-                .with_metadata("operation", "delete")
-                .with_metadata("tenant_id", id.to_string()))
-        }
-        Err(e) => {
-            return Err(ServiceError::internal_server_error(format!(
-                "Failed to delete tenant: {}",
-                e
-            ))
+    let deleted_count = Tenant::delete(&id, &mut conn).map_err(|e| {
+        ServiceError::internal_server_error(format!("Failed to delete tenant: {}", e))
             .with_tag("tenant")
             .with_metadata("operation", "delete")
-            .with_metadata("tenant_id", id.to_string()))
-        }
-    };
+            .with_metadata("tenant_id", id.to_string())
+    })?;
+
+    if deleted_count == 0 {
+        return Err(ServiceError::not_found(format!("Tenant not found: {}", id))
+            .with_tag("tenant")
+            .with_metadata("operation", "delete")
+            .with_metadata("tenant_id", id.to_string()));
+    }
 
     Ok(HttpResponse::Ok().json(ResponseBody::new(constants::MESSAGE_OK, constants::EMPTY)))
 }

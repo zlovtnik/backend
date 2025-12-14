@@ -160,6 +160,7 @@ Testing with 100 concurrent users making 10 requests each:
 
 ## Last Updated
 
-**Date**: October 23, 2024
+**Date**: October 23, 2024 (baseline benchmarks)
 **Version**: 0.1.0
 **Tested With**: rcs v0.1.0
+**Status**: ⚠️ These are historical baseline benchmarks. Since significant features have been added (NFAg integration, functional programming infrastructure, WebSocket support, etc.), these benchmarks should be re-run and validated with the current codebase as of December 2025.

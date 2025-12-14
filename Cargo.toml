@@ -54,6 +54,13 @@ async-trait = "0.1.89"
 aes-gcm = "0.10"
 validator = { version = "0.16", features = ["derive"] }
 
+# XML parsing (well-formedness checks for xml_content payloads)
+quick-xml = "0.38"
+
+# OpenAPI/Swagger documentation
+utoipa = { version = "4", features = ["actix_extras", "chrono", "uuid"] }
+utoipa-swagger-ui = { version = "7", features = ["actix-web"] }
+
 [dependencies.diesel]
 version = "2.2.0"
 features = ["postgres", "r2d2"]

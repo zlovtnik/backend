@@ -29,6 +29,7 @@ diesel::table! {
         cstat -> Nullable<Int4>,
         xmotivo -> Nullable<Text>,
         created_at -> Nullable<Timestamptz>,
+        updated_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -47,6 +48,7 @@ diesel::table! {
         cstat -> Nullable<Int4>,
         xmotivo -> Nullable<Text>,
         created_at -> Nullable<Timestamptz>,
+        updated_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -65,6 +67,7 @@ diesel::table! {
         #[max_length = 20]
         status -> Nullable<Varchar>,
         created_at -> Nullable<Timestamptz>,
+        updated_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -105,6 +108,36 @@ diesel::table! {
         idestrangeiro -> Nullable<Varchar>,
         #[max_length = 60]
         xnome -> Nullable<Varchar>,
+        #[max_length = 14]
+        ie -> Nullable<Varchar>,
+        #[max_length = 15]
+        im -> Nullable<Varchar>,
+        #[max_length = 60]
+        email -> Nullable<Varchar>,
+        #[max_length = 14]
+        telefone -> Nullable<Varchar>,
+        #[max_length = 125]
+        logradouro -> Nullable<Varchar>,
+        #[max_length = 10]
+        numero -> Nullable<Varchar>,
+        #[max_length = 60]
+        complemento -> Nullable<Varchar>,
+        #[max_length = 60]
+        bairro -> Nullable<Varchar>,
+        #[max_length = 7]
+        codigo_municipio -> Nullable<Varchar>,
+        #[max_length = 60]
+        municipio -> Nullable<Varchar>,
+        #[max_length = 2]
+        uf -> Nullable<Varchar>,
+        #[max_length = 8]
+        cep -> Nullable<Varchar>,
+        #[max_length = 4]
+        codigo_pais -> Nullable<Varchar>,
+        #[max_length = 60]
+        pais -> Nullable<Varchar>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
     }
 }
 
@@ -120,6 +153,34 @@ diesel::table! {
         xnome -> Varchar,
         #[max_length = 60]
         xfant -> Nullable<Varchar>,
+        #[max_length = 60]
+        email -> Nullable<Varchar>,
+        #[max_length = 14]
+        telefone -> Nullable<Varchar>,
+        #[max_length = 125]
+        logradouro -> Nullable<Varchar>,
+        #[max_length = 10]
+        numero -> Nullable<Varchar>,
+        #[max_length = 60]
+        complemento -> Nullable<Varchar>,
+        #[max_length = 60]
+        bairro -> Nullable<Varchar>,
+        #[max_length = 7]
+        codigo_municipio -> Nullable<Varchar>,
+        #[max_length = 60]
+        municipio -> Nullable<Varchar>,
+        #[max_length = 2]
+        uf -> Nullable<Varchar>,
+        #[max_length = 8]
+        cep -> Nullable<Varchar>,
+        #[max_length = 4]
+        codigo_pais -> Nullable<Varchar>,
+        #[max_length = 60]
+        pais -> Nullable<Varchar>,
+        #[max_length = 1]
+        tipo_emitente -> Nullable<Varchar>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
     }
 }
 
@@ -653,6 +714,7 @@ diesel::table! {
         versao -> Nullable<Varchar>,
         xml_content -> Nullable<Text>,
         created_at -> Nullable<Timestamptz>,
+        updated_at -> Nullable<Timestamptz>,
     }
 }
 

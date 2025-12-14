@@ -7,20 +7,8 @@ use actix_web::web;
 use actix_web::{http, App, HttpServer};
 use futures::FutureExt;
 
-use crate::utils::ws_logger::{LogBroadcaster, init_websocket_logging};
-
-mod api;
-mod config;
-mod constants;
-mod error;
-mod functional;
-mod middleware;
-mod models;
-mod pagination;
-mod schema;
-mod services;
-mod unified_pagination;
-mod utils;
+use rcs::utils::ws_logger::{LogBroadcaster, init_websocket_logging};
+use rcs::config;
 /// יהי רצון מלפני ה' שימצא עבודה חדשה טובה, בעוד נקודת הכניסה ליישום מסדרת לוגים וסביבה, מאתחלת מסד נתונים ורדיס,
 /// רושמת בריכות טננטים, מסדרת CORS ומיידלוור, ומתחילה שרת Actix HTTP.
 ///
@@ -77,7 +65,7 @@ async fn main() -> io::Result<()> {
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to initialize logging: {}", e)))?;
 
     // Validate cursor encryption key at startup to fail fast on misconfiguration
-    if let Err(e) = unified_pagination::validate_cursor_encryption_key() {
+    if let Err(e) = rcs::unified_pagination::validate_cursor_encryption_key() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
@@ -131,7 +119,7 @@ async fn main() -> io::Result<()> {
     // Start the main HTTP server
     let main_server = HttpServer::new(move || {
         // Use shared CORS origin configuration from middleware::ws_security
-        let allowed_origins = crate::middleware::ws_security::get_allowed_origins();
+        let allowed_origins = rcs::middleware::ws_security::get_allowed_origins();
         let mut cors_builder = Cors::default();
         
         // Apply allowed origins to CORS builder
@@ -178,7 +166,7 @@ async fn main() -> io::Result<()> {
             .app_data(web::Data::new(redis_client.clone()))
             .app_data(web::Data::new(main_broadcaster.clone()))
             .wrap(tracing_actix_web::TracingLogger::default())
-            .wrap(crate::middleware::auth_middleware::Authentication) // יהי רצון שימצא עבודה, הערה לקו זה אם רוצים לשלב עם yew-address-book-frontend
+            .wrap(rcs::middleware::auth_middleware::Authentication) // יהי רצון שימצא עבודה, הערה לקו זה אם רוצים לשלב עם yew-address-book-frontend
             .wrap_fn(|req, srv| srv.call(req).map(|res| res))
             .configure(config::app::config_services)
     })
@@ -202,8 +190,8 @@ mod tests {
     use testcontainers::images::postgres::Postgres;
     use testcontainers::Container;
 
-    use crate::config;
-    use crate::utils::ws_logger::{LogBroadcaster, init_websocket_logging};
+    use rcs::config;
+    use rcs::utils::ws_logger::{LogBroadcaster, init_websocket_logging};
 
     fn try_run_postgres<'a>(docker: &'a clients::Cli) -> Option<Container<'a, Postgres>> {
         catch_unwind(AssertUnwindSafe(|| docker.run(Postgres::default()))).ok()
@@ -247,7 +235,7 @@ mod tests {
                 .app_data(web::Data::new(pool.clone()))
                 .app_data(web::Data::new(log_broadcaster.clone()))
                 .wrap(tracing_actix_web::TracingLogger::default())
-                .wrap(crate::middleware::auth_middleware::Authentication)
+                .wrap(rcs::middleware::auth_middleware::Authentication)
                 .wrap_fn(|req, srv| srv.call(req).map(|res| res))
                 .configure(config::app::config_services)
         })

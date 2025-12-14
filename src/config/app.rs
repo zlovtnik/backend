@@ -2,6 +2,80 @@ use crate::api::*;
 use crate::config::functional_config::RouteBuilder;
 use actix_web::web;
 
+/// Macro to generate CRUD route configuration functions.
+///
+/// This macro eliminates boilerplate by generating the standard pattern for CRUD endpoints.
+/// It creates two route resources: one for the collection (list/create) and one for individual items (get/update/delete).
+///
+/// The generated function follows this pattern:
+/// - GET `/` → list handler
+/// - POST `/` → create handler
+/// - GET `/{id}` → get by id handler
+/// - PUT `/{id}` → update handler
+/// - DELETE `/{id}` → delete handler
+///
+/// # Example
+///
+/// ```ignore
+/// configure_crud_routes!(
+///     configure_nfag_routes,
+///     nfag_controller,
+///     find_all,
+///     create,
+///     find_by_id,
+///     update,
+///     delete
+/// );
+/// ```
+macro_rules! configure_crud_routes {
+    (
+        $fn_name:ident,
+        $controller:ident,
+        $list:ident,
+        $create:ident,
+        $get:ident,
+        $update:ident,
+        $delete:ident,
+        $scope:expr,
+        $doc_prefix:expr
+    ) => {
+        #[doc = concat!(
+            "Register ", $doc_prefix, " HTTP routes using functional composition patterns.\n\n",
+            "Uses RouteBuilder to compose endpoints functionally:\n",
+            "- GET `/` → `", stringify!($controller), "::", stringify!($list), "`\n",
+            "- POST `/` → `", stringify!($controller), "::", stringify!($create), "`\n",
+            "- GET `/{id}` → `", stringify!($controller), "::", stringify!($get), "`\n",
+            "- PUT `/{id}` → `", stringify!($controller), "::", stringify!($update), "`\n",
+            "- DELETE `/{id}` → `", stringify!($controller), "::", stringify!($delete), "`\n\n",
+            "# Examples\n\n",
+            "```\n",
+            "use actix_web::web;\n\n",
+            "// Mount the ", $doc_prefix, " routes under `/", $scope, "`\n",
+            "let scope = web::scope(\"/", $scope, "\").configure(", stringify!($fn_name), ");\n",
+            "```"
+        )]
+        fn $fn_name(cfg: &mut web::ServiceConfig) {
+            RouteBuilder::new()
+                .add_route(|cfg| {
+                    cfg.service(
+                        web::resource("")
+                            .route(web::get().to($controller::$list))
+                            .route(web::post().to($controller::$create)),
+                    );
+                })
+                .add_route(|cfg| {
+                    cfg.service(
+                        web::resource("/{id}")
+                            .route(web::get().to($controller::$get))
+                            .route(web::put().to($controller::$update))
+                            .route(web::delete().to($controller::$delete)),
+                    );
+                })
+                .build(cfg);
+        }
+    };
+}
+
 /// Configure application HTTP routes using functional composition patterns.
 ///
 /// This function uses the RouteBuilder pattern to compose route configurations
@@ -21,6 +95,19 @@ pub fn config_services(cfg: &mut web::ServiceConfig) {
     let route_builder: RouteBuilder = RouteBuilder::new()
         .add_route(|cfg| {
             cfg.service(health_controller::health);
+        })
+        .add_route(|cfg| {
+            cfg.service(web::resource("/api-doc").route(web::get().to(openapi::api_doc_redirect)));
+            cfg.service(
+                web::resource("/api-doc/openapi.json").route(web::get().to(openapi::openapi_json)),
+            );
+            cfg.service(
+                utoipa_swagger_ui::SwaggerUi::new("/swagger-ui/{_:.*}")
+                    .url(
+                        "/api-doc/openapi.json",
+                        <openapi::ApiDoc as utoipa::OpenApi>::openapi(),
+                    ),
+            );
         })
         .add_route(|cfg| {
             cfg.service(web::scope("/api").configure(configure_api_routes));
@@ -75,6 +162,21 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
         })
         .add_route(|cfg| {
             cfg.service(web::scope("/users").configure(configure_user_routes));
+        })
+        .add_route(|cfg| {
+            cfg.service(web::scope("/nfag").configure(configure_nfag_routes));
+        })
+        .add_route(|cfg| {
+            cfg.service(web::scope("/cons-sit-nfag").configure(configure_cons_sit_nfag_routes));
+        })
+        .add_route(|cfg| {
+            cfg.service(web::scope("/cons-stat-serv-nfag").configure(configure_cons_stat_serv_nfag_routes));
+        })
+        .add_route(|cfg| {
+            cfg.service(web::scope("/evento-nfag").configure(configure_evento_nfag_routes));
+        })
+        .add_route(|cfg| {
+            cfg.service(web::scope("/ret-nfag").configure(configure_ret_nfag_routes));
         })
         .build(cfg);
 }
@@ -320,3 +422,64 @@ fn configure_user_routes(cfg: &mut web::ServiceConfig) {
         })
         .build(cfg);
 }
+
+// Generate CRUD route configuration functions using the macro
+configure_crud_routes!(
+    configure_nfag_routes,
+    nfag_controller,
+    find_all,
+    create,
+    find_by_id,
+    update,
+    delete,
+    "nfag",
+    "NFAg"
+);
+
+configure_crud_routes!(
+    configure_cons_sit_nfag_routes,
+    cons_sit_nfag_controller,
+    find_all,
+    create,
+    find_by_id,
+    update,
+    delete,
+    "cons-sit-nfag",
+    "ConsSitNfag"
+);
+
+configure_crud_routes!(
+    configure_cons_stat_serv_nfag_routes,
+    cons_stat_serv_nfag_controller,
+    find_all,
+    create,
+    find_by_id,
+    update,
+    delete,
+    "cons-stat-serv-nfag",
+    "ConsStatServNfag"
+);
+
+configure_crud_routes!(
+    configure_evento_nfag_routes,
+    evento_nfag_controller,
+    find_all_eventos_nfag,
+    create_evento_nfag,
+    find_evento_nfag_by_id,
+    update_evento_nfag,
+    delete_evento_nfag,
+    "evento-nfag",
+    "EventoNfag"
+);
+
+configure_crud_routes!(
+    configure_ret_nfag_routes,
+    ret_nfag_controller,
+    find_all_ret_nfag,
+    create_ret_nfag,
+    find_ret_nfag_by_id,
+    update_ret_nfag,
+    delete_ret_nfag,
+    "ret-nfag",
+    "RetNfag"
+);

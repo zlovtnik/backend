@@ -118,7 +118,11 @@ CREATE TABLE nfag_dest (
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
 
   -- Constraints
-  CHECK ((CNPJ IS NOT NULL) OR (CPF IS NOT NULL) OR (idEstrangeiro IS NOT NULL)), -- At least one tax ID required
+  CHECK (
+    (CASE WHEN CNPJ IS NOT NULL THEN 1 ELSE 0 END) +
+    (CASE WHEN CPF IS NOT NULL THEN 1 ELSE 0 END) +
+    (CASE WHEN idEstrangeiro IS NOT NULL THEN 1 ELSE 0 END) = 1
+  ), -- Exactly one tax ID required
   CHECK (xNome IS NOT NULL), -- Legal name always required
   CHECK (CNPJ IS NULL OR LENGTH(CNPJ) = 14), -- CNPJ must be exactly 14 digits if provided
   CHECK (CPF IS NULL OR LENGTH(CPF) = 11), -- CPF must be exactly 11 digits if provided

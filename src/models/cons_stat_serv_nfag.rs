@@ -1,15 +1,17 @@
 use crate::schema::*;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
 use validator::Validate;
 use diesel::deserialize::FromSql;
 use diesel::serialize::{ToSql, Output};
 use diesel::sql_types::Integer;
 use std::io::Write;
+use utoipa::ToSchema;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, diesel::AsExpression, diesel::FromSqlRow)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, diesel::AsExpression, diesel::FromSqlRow, ToSchema)]
 #[diesel(sql_type = diesel::sql_types::Integer)]
+#[schema(as = i32, example = 1)]
 pub enum Tpamb {
     Production = 1,
     Staging = 2,
@@ -80,7 +82,7 @@ where
     Tpamb::try_from(value).map_err(serde::de::Error::custom)
 }
 
-#[derive(Queryable, Identifiable, Serialize, Deserialize, Debug)]
+#[derive(Queryable, Identifiable, Serialize, Deserialize, Debug, ToSchema)]
 #[diesel(table_name = cons_stat_serv_nfag)]
 pub struct ConsStatServNfag {
     pub id: i32,
@@ -93,7 +95,8 @@ pub struct ConsStatServNfag {
     pub xml_response: Option<String>,
     pub cstat: Option<i32>,
     pub xmotivo: Option<String>,
-    pub created_at: Option<NaiveDateTime>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Insertable, Serialize, Deserialize, Debug)]
@@ -116,9 +119,10 @@ pub struct UpdateConsStatServNfag {
     pub xml_response: Option<String>,
     pub cstat: Option<i32>,
     pub xmotivo: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Serialize, Deserialize, Validate, Debug)]
+#[derive(Serialize, Deserialize, Validate, Debug, ToSchema)]
 pub struct CreateConsStatServNfagRequest {
     pub tpamb: Tpamb,
     #[validate(length(min = 1))]
@@ -128,7 +132,7 @@ pub struct CreateConsStatServNfagRequest {
     pub xml_request: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Validate, Debug)]
+#[derive(Serialize, Deserialize, Validate, Debug, ToSchema)]
 pub struct UpdateConsStatServNfagRequest {
     pub xml_response: Option<String>,
     #[validate(range(min = 100, max = 999))]

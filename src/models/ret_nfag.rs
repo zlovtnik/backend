@@ -1,10 +1,11 @@
 use crate::schema::*;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
+use utoipa::ToSchema;
 use validator::Validate;
 
-#[derive(Queryable, Identifiable, Serialize, Deserialize, Debug)]
+#[derive(Queryable, Identifiable, Serialize, Deserialize, Debug, ToSchema)]
 #[diesel(table_name = ret_nfag)]
 pub struct RetNfag {
     pub id: i32,
@@ -14,7 +15,8 @@ pub struct RetNfag {
     pub xmotivo: Option<String>,
     pub versao: Option<String>,
     pub xml_content: Option<String>,
-    pub created_at: Option<NaiveDateTime>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Insertable, Serialize, Deserialize, Debug)]
@@ -34,7 +36,7 @@ pub struct UpdateRetNfag {
     pub xml_content: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Validate, Debug)]
+#[derive(Serialize, Deserialize, Validate, Debug, ToSchema)]
 pub struct CreateRetNfagRequest {
     #[validate(range(min = 1, max = 2))]
     pub tpamb: i32,
@@ -43,14 +45,48 @@ pub struct CreateRetNfagRequest {
     pub xmotivo: Option<String>,
     #[validate(length(min = 1))]
     pub versao: Option<String>,
-    #[validate(length(min = 1, max = 10000))]
+    #[validate(length(min = 1, max = 10000), custom = "crate::models::validation::validate_xml")]
     pub xml_content: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Validate, Debug)]
+#[derive(Serialize, Deserialize, Validate, Debug, ToSchema)]
 pub struct UpdateRetNfagRequest {
-    #[validate(length(min = 1, max = 10000))]
+    #[validate(length(min = 1, max = 10000), custom = "crate::models::validation::validate_xml")]
     pub xml_content: Option<String>,
+}
+
+impl From<(CreateRetNfagRequest, String)> for NewRetNfag {
+    fn from((req, tenant_id): (CreateRetNfagRequest, String)) -> Self {
+        NewRetNfag {
+            tenant_id,
+            tpamb: req.tpamb,
+            cstat: req.cstat,
+            xmotivo: req.xmotivo,
+            versao: req.versao,
+            xml_content: req.xml_content,
+        }
+    }
+}
+
+impl From<(CreateRetNfagRequest, crate::types::TenantId)> for NewRetNfag {
+    fn from((req, tenant_id): (CreateRetNfagRequest, crate::types::TenantId)) -> Self {
+        NewRetNfag {
+            tenant_id: tenant_id.into_inner(),
+            tpamb: req.tpamb,
+            cstat: req.cstat,
+            xmotivo: req.xmotivo,
+            versao: req.versao,
+            xml_content: req.xml_content,
+        }
+    }
+}
+
+impl From<UpdateRetNfagRequest> for UpdateRetNfag {
+    fn from(req: UpdateRetNfagRequest) -> Self {
+        UpdateRetNfag {
+            xml_content: req.xml_content,
+        }
+    }
 }
 
 impl RetNfag {

@@ -1,10 +1,11 @@
 use crate::schema::*;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
+use utoipa::ToSchema;
 use validator::Validate;
 
-#[derive(Queryable, Identifiable, Serialize, Deserialize, Debug)]
+#[derive(Queryable, Identifiable, Serialize, Deserialize, Debug, ToSchema)]
 #[diesel(table_name = nfag)]
 pub struct Nfag {
     pub id: i32,
@@ -13,8 +14,8 @@ pub struct Nfag {
     pub versao: Option<String>,
     pub xml_content: Option<String>,
     pub status: Option<String>,
-    pub created_at: Option<NaiveDateTime>,
-    pub updated_at: Option<NaiveDateTime>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Insertable, Serialize, Deserialize, Debug)]
@@ -33,25 +34,25 @@ pub struct UpdateNfag {
     pub versao: Option<String>,
     pub xml_content: Option<String>,
     pub status: Option<String>,
-    pub updated_at: Option<NaiveDateTime>,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Serialize, Deserialize, Validate, Debug)]
+#[derive(Serialize, Deserialize, Validate, Debug, ToSchema)]
 pub struct CreateNfagRequest {
     #[validate(length(min = 44, max = 44))]
     pub chave: String,
     #[validate(length(min = 1))]
     pub versao: Option<String>,
-    #[validate(length(min = 1))]
+    #[validate(length(min = 1), custom = "crate::models::validation::validate_xml")]
     pub xml_content: Option<String>,
     pub status: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Validate, Debug)]
+#[derive(Serialize, Deserialize, Validate, Debug, ToSchema)]
 pub struct UpdateNfagRequest {
     #[validate(length(min = 1))]
     pub versao: Option<String>,
-    #[validate(length(min = 1))]
+    #[validate(length(min = 1), custom = "crate::models::validation::validate_xml")]
     pub xml_content: Option<String>,
     pub status: Option<String>,
 }

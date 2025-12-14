@@ -33,30 +33,41 @@ Built to solve real-world SaaS and managed platform pain points—compliance, sc
 
 ### Multi-Tenant Architecture
 
-Each tenant gets their own database. Tenant context is derived server-side from trusted sources (host/subdomain, mTLS client certificates, organization slug lookup, or other server-controlled mappings). APIs must validate that any tenant identifier in requests matches the server-derived context before routing to databases or minting tokens.
+Tenants share a single PostgreSQL database with per-tenant schemas for isolation. Tenant context is derived server-side from trusted sources (host/subdomain, mTLS client certificates, organization slug lookup, or other server-controlled mappings). APIs must validate that any tenant identifier in requests matches the server-derived context before routing to schemas or minting tokens.
 
 ```text
-┌─────────────────────┐    ┌─────────────────────┐
-│   Main Database     │    │ Tenant Database     │
-│  (Configuration)    │    │  (Isolated Data)    │
-│  ┌────────────────┐ │    │  ┌────────────────┐ │
-│  │ Tenants Config │ │    │  │ User Data      │ │
-│  │ Database URLs  │ │    │  │ Business Logic │ │
-│  │ Security Keys  │ │    │  │ Application    │ │
-│  └────────────────┘ │    │  │ State          │ │
-└─────────────────────┘    │  └────────────────┘ │
-         │                 └─────────────────────┘
-         │                           │
-         └─────────JWT Token─────────┘
-              (includes tenant_id)
+┌─────────────────────────────────────────────────┐
+│           Shared PostgreSQL Database            │
+│  ┌────────────────────────────────────────────┐ │
+│  │         Main Schema (public)               │ │
+│  │  ┌────────────────┐ ┌────────────────────┐ │ │
+│  │  │ Tenants Config │ │ Security Keys       │ │ │
+│  │  │ Schema URLs    │ │ JWT Secrets         │ │ │
+│  │  └────────────────┘ └────────────────────┘ │ │
+│  └────────────────────────────────────────────┘ │
+│                                                 │
+│  ┌────────────────────────────────────────────┐ │
+│  │       Tenant Schema (tenant_123)           │ │
+│  │  ┌────────────────┐ ┌────────────────────┐ │ │
+│  │  │ User Data      │ │ Business Logic      │ │ │
+│  │  │ Application    │ │ Application State   │ │ │
+│  │  │ State          │ │ Tenant-specific     │ │ │
+│  │  └────────────────┘ │ Data                │ │ │
+│  │                     └────────────────────┘ │ │
+│  └────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────┘
+                 │
+                 │
+           JWT Token
+        (includes tenant_id)
 ```
 
 **Why This Matters:**
 
-- **Strong Data Isolation**: Designed to prevent cross-tenant data access through strict isolation and access controls
-- **Compliance Ready**: Meets strict data isolation requirements
-- **Performance**: Each tenant gets optimized database connections
-- **Simple**: JWT tokens handle routing automatically
+- **Strong Data Isolation**: Schema-level isolation prevents cross-tenant data access through PostgreSQL's built-in security
+- **Compliance Ready**: Meets strict data isolation requirements with shared infrastructure
+- **Performance**: Single database connection pool with schema routing
+- **Simple**: JWT tokens handle schema routing automatically
 
 ## Current Status
 
@@ -194,7 +205,7 @@ curl -X GET http://localhost:8000/api/address-book \
 ## Security Features
 
 - **JWT Authentication**: Secure token-based auth with tenant context
-- **Database Isolation**: Each tenant has their own database
+- **Schema-Based Isolation**: Shared PostgreSQL database with per-tenant schemas for strong data isolation
 - **CORS Protection**: Configurable origin validation
 - **Input Validation**: Comprehensive request validation
 - **Password Security**: bcrypt hashing with configurable cost

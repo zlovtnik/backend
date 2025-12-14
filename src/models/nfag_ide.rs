@@ -2,7 +2,7 @@ use crate::models::nfag::Nfag;
 use crate::schema::*;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
 
 #[derive(Queryable, Identifiable, Associations, Serialize, Deserialize, Debug)]
 #[diesel(belongs_to(Nfag))]
@@ -17,14 +17,14 @@ pub struct NfagIde {
     pub nnf: i64,
     pub cnf: String,
     pub cdv: String,
-    pub dhemi: NaiveDateTime,
+    pub dhemi: DateTime<Utc>,
     pub tpemis: i32,
     pub nsiteautoriz: i32,
     pub cmunfg: i32,
     pub finnfag: i32,
     pub tpfat: i32,
     pub verproc: String,
-    pub dhcont: Option<NaiveDateTime>,
+    pub dhcont: Option<DateTime<Utc>>,
     pub xjust: Option<String>,
 }
 
@@ -39,13 +39,13 @@ pub struct NewNfagIde {
     pub nnf: i64,
     pub cnf: String,
     pub cdv: String,
-    pub dhemi: NaiveDateTime,
+    pub dhemi: DateTime<Utc>,
     pub tpemis: i32,
     pub nsiteautoriz: i32,
     pub cmunfg: i32,
     pub finnfag: i32,
     pub tpfat: i32,
     pub verproc: String,
-    pub dhcont: Option<NaiveDateTime>,
+    pub dhcont: Option<DateTime<Utc>>,
     pub xjust: Option<String>,
 }

@@ -1,10 +1,11 @@
 use crate::schema::*;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
+use utoipa::ToSchema;
 use validator::Validate;
 
-#[derive(Queryable, Identifiable, Serialize, Deserialize, Debug)]
+#[derive(Queryable, Identifiable, Serialize, Deserialize, Debug, ToSchema)]
 #[diesel(table_name = cons_sit_nfag)]
 pub struct ConsSitNfag {
     pub id: i32,
@@ -17,7 +18,8 @@ pub struct ConsSitNfag {
     pub xml_response: Option<String>,
     pub cstat: Option<i32>,
     pub xmotivo: Option<String>,
-    pub created_at: Option<NaiveDateTime>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Insertable, Serialize, Deserialize, Debug)]
@@ -40,9 +42,10 @@ pub struct UpdateConsSitNfag {
     pub xml_response: Option<String>,
     pub cstat: Option<i32>,
     pub xmotivo: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Serialize, Deserialize, Validate, Debug)]
+#[derive(Serialize, Deserialize, Validate, Debug, ToSchema)]
 pub struct CreateConsSitNfagRequest {
     #[validate(range(min = 1, max = 2))]
     pub tpamb: i32,
@@ -55,7 +58,7 @@ pub struct CreateConsSitNfagRequest {
     pub xml_request: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Validate, Debug)]
+#[derive(Serialize, Deserialize, Validate, Debug, ToSchema)]
 pub struct UpdateConsSitNfagRequest {
     pub xml_response: Option<String>,
     #[validate(range(min = 100, max = 999))]
@@ -69,6 +72,7 @@ impl From<UpdateConsSitNfagRequest> for UpdateConsSitNfag {
             xml_response: request.xml_response.map(|s| s.trim().to_string()),
             cstat: request.cstat,
             xmotivo: request.xmotivo.map(|s| s.trim().to_string()),
+            updated_at: Some(Utc::now()),
         }
     }
 }

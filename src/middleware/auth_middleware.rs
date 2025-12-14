@@ -12,6 +12,7 @@ use log::{debug, error, info};
 use crate::config::db::TenantPoolManager;
 use crate::constants;
 use crate::models::response::ResponseBody;
+use crate::types::TenantId;
 use crate::utils::token_utils;
 
 pub struct Authentication;
@@ -111,7 +112,7 @@ where
                                             info!("Successful authentication - tenant: {}, user: {}, route: {}", token_data.claims.tenant_id, token_data.claims.user, req.path());
                                             req.extensions_mut().insert(tenant_pool.clone());
                                             // Store tenant_id in extensions for later retrieval by controllers
-                                            req.extensions_mut().insert(token_data.claims.tenant_id.clone());
+                                            req.extensions_mut().insert(TenantId(token_data.claims.tenant_id.clone()));
                                             authenticate_pass = true;
                                         } else {
                                             error!("Token verification failed");
@@ -334,7 +335,7 @@ mod functional_auth {
 
             req.extensions_mut().insert(tenant_pool);
             // Store tenant_id in extensions for later retrieval by controllers
-            req.extensions_mut().insert(tenant_id.clone());
+            req.extensions_mut().insert(TenantId(tenant_id.clone()));
             info!(
                 "Authentication successful for tenant: {}, user: {}",
                 tenant_id, user_id
