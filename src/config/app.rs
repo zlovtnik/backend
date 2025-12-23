@@ -175,9 +175,6 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
         .add_route(|cfg| {
             cfg.service(web::scope("/evento-nfag").configure(configure_evento_nfag_routes));
         })
-        .add_route(|cfg| {
-            cfg.service(web::scope("/ret-nfag").configure(configure_ret_nfag_routes));
-        })
         .build(cfg);
 }
 
@@ -472,14 +469,3 @@ configure_crud_routes!(
     "EventoNfag"
 );
 
-configure_crud_routes!(
-    configure_ret_nfag_routes,
-    ret_nfag_controller,
-    find_all_ret_nfag,
-    create_ret_nfag,
-    find_ret_nfag_by_id,
-    update_ret_nfag,
-    delete_ret_nfag,
-    "ret-nfag",
-    "RetNfag"
-);
