@@ -8,13 +8,15 @@ FROM rust:1.86-slim AS backend-builder
 ARG APP_NAME=rcs
 WORKDIR /app
 
-# install build dependencies required by Diesel
+# install build dependencies required by Diesel and tools used by build.rs
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libpq-dev=15.14-0+deb12u1 \
         libssl-dev=3.0.17-1~deb12u3 \
         pkg-config=1.8.1-1 \
         ca-certificates=20230311+deb12u1 \
+        curl \
+        unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # leverage Docker layer caching by copying manifests first
