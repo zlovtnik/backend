@@ -12,7 +12,7 @@ Built to solve real-world SaaS and managed platform pain points—compliance, sc
 
 ### What You Get Out of the Box
 
-- **🔒 Strong Data Isolation**: One PostgreSQL database per tenant (not per-schema) to minimize cross-tenant risk
+- **🔒 Strong Data Isolation**: Tenants share a single PostgreSQL database (one DATABASE_URL) with per-tenant schemas for isolation (see src/main.rs for shared pool, src/config/db.rs for schema provisioning)
 - **⚡ High Performance**: Rust backend designed for low-latency APIs; see benchmarks for your workload.
 - **🛡️ Security First**: JWT authentication, CORS protection, input validation
 - **🎨 Modern Frontend**: React + TypeScript with Ant Design components
@@ -33,30 +33,41 @@ Built to solve real-world SaaS and managed platform pain points—compliance, sc
 
 ### Multi-Tenant Architecture
 
-Each tenant gets their own database. Tenant context is derived server-side from trusted sources (host/subdomain, mTLS client certificates, organization slug lookup, or other server-controlled mappings). APIs must validate that any tenant identifier in requests matches the server-derived context before routing to databases or minting tokens.
+Tenants share a single PostgreSQL database with per-tenant schemas for isolation. Tenant context is derived server-side from trusted sources (host/subdomain, mTLS client certificates, organization slug lookup, or other server-controlled mappings). APIs must validate that any tenant identifier in requests matches the server-derived context before routing to schemas or minting tokens.
 
 ```text
-┌─────────────────────┐    ┌─────────────────────┐
-│   Main Database     │    │ Tenant Database     │
-│  (Configuration)    │    │  (Isolated Data)    │
-│  ┌────────────────┐ │    │  ┌────────────────┐ │
-│  │ Tenants Config │ │    │  │ User Data      │ │
-│  │ Database URLs  │ │    │  │ Business Logic │ │
-│  │ Security Keys  │ │    │  │ Application    │ │
-│  └────────────────┘ │    │  │ State          │ │
-└─────────────────────┘    │  └────────────────┘ │
-         │                 └─────────────────────┘
-         │                           │
-         └─────────JWT Token─────────┘
-              (includes tenant_id)
+┌─────────────────────────────────────────────────┐
+│           Shared PostgreSQL Database            │
+│  ┌────────────────────────────────────────────┐ │
+│  │         Main Schema (public)               │ │
+│  │  ┌────────────────┐ ┌────────────────────┐ │ │
+│  │  │ Tenants Config │ │ Security Keys       │ │ │
+│  │  │ Schema URLs    │ │ JWT Secrets         │ │ │
+│  │  └────────────────┘ └────────────────────┘ │ │
+│  └────────────────────────────────────────────┘ │
+│                                                 │
+│  ┌────────────────────────────────────────────┐ │
+│  │       Tenant Schema (tenant_123)           │ │
+│  │  ┌────────────────┐ ┌────────────────────┐ │ │
+│  │  │ User Data      │ │ Business Logic      │ │ │
+│  │  │ Application    │ │ Application State   │ │ │
+│  │  │ State          │ │ Tenant-specific     │ │ │
+│  │  └────────────────┘ │ Data                │ │ │
+│  │                     └────────────────────┘ │ │
+│  └────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────┘
+                 │
+                 │
+           JWT Token
+        (includes tenant_id)
 ```
 
 **Why This Matters:**
 
-- **Strong Data Isolation**: Designed to prevent cross-tenant data access through strict isolation and access controls
-- **Compliance Ready**: Meets strict data isolation requirements
-- **Performance**: Each tenant gets optimized database connections
-- **Simple**: JWT tokens handle routing automatically
+- **Strong Data Isolation**: Schema-level isolation prevents cross-tenant data access through PostgreSQL's built-in security
+- **Compliance Ready**: Meets strict data isolation requirements with shared infrastructure
+- **Performance**: Single database connection pool with schema routing
+- **Simple**: JWT tokens handle schema routing automatically
 
 ## Current Status
 
@@ -194,7 +205,7 @@ curl -X GET http://localhost:8000/api/address-book \
 ## Security Features
 
 - **JWT Authentication**: Secure token-based auth with tenant context
-- **Database Isolation**: Each tenant has their own database
+- **Schema-Based Isolation**: Shared PostgreSQL database with per-tenant schemas for strong data isolation
 - **CORS Protection**: Configurable origin validation
 - **Input Validation**: Comprehensive request validation
 - **Password Security**: bcrypt hashing with configurable cost
@@ -630,6 +641,50 @@ We welcome contributions! Here's how to get started:
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## Using this Repo as a Base Component
+
+If you want to use this project as a reusable base web component for your services, follow these minimal steps.
+
+### Environment
+
+- Copy `.env.example` to `.env` and fill values for `DATABASE_URL`, `REDIS_URL`, and `JWT_SECRET`.
+
+### Tenancy model
+
+- The codebase supports **per-tenant schemas** with a `TenantPoolManager` by default.
+- Optionally you can adopt a **shared-database + RLS** approach; see `src/config/db.rs` for helpers (e.g., `set_session_tenant`).
+
+### Functional mode
+
+- The project includes a `PureFunctionRegistry` and functional middleware. The app defaults to using the functional authentication middleware.
+  - The `main` server registers a shared `PureFunctionRegistry` and passes it to `FunctionalAuthentication`.
+  - Prefer the `functional` modules (for example, `functional::pure_function_registry`, `functional::query_composition`, `middleware::functional_middleware`) when adding new features to favor a functional style.
+
+### Quick checklist to adopt as a base
+
+- Copy `.env.example` to `.env` and set required values.
+- Run DB migrations: `diesel migration run` (or let the app run migrations at startup).
+- Start server: `cargo run` (development) or `cargo run --release` (production).
+- To enforce functional usage in your codebase, register pure functions in `PureFunctionRegistry` and use the provided functional helpers.
+
+### RLS and session variables
+
+- If you move to a shared-database model with PostgreSQL Row-Level Security, use the helper `set_session_tenant(conn, tenant_id)` in `src/config/db.rs` to set `app.tenant_id` on the connection before executing tenant-scoped queries.
+- RLS policies can reference `current_setting('app.tenant_id')` to enforce tenant isolation at the database level.
+
+### Example `.env` values
+
+Use `.env.example` as the starting point. Required keys include:
+
+- `DATABASE_URL` — postgres connection string
+- `REDIS_URL` — redis connection string
+- `JWT_SECRET` — secret used to sign JWTs
+
+### Optional next steps
+
+- Add a migration that creates example RLS policies for tenant-scoped tables.
+- Replace one service to use `FunctionalQueryComposer` end-to-end as a demonstration.
+- Add CI tests that assert the functional registry is exercised.
 
 ## Acknowledgments
 
@@ -639,8 +694,6 @@ Thanks to the amazing open-source community:
 - **Diesel** - Type-safe ORM for Rust
 - **PostgreSQL** - The world's most advanced open-source database
 - **Redis** - In-memory data structure store
-
----
 
 ## Built with ❤️ using [Rust](https://www.rust-lang.org), [Actix Web](https://actix.rs), and modern DevOps practices
 

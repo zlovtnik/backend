@@ -11,8 +11,16 @@
 //! - Pure function registries for data transformations
 //! - Performance monitoring for database operations
 
+pub mod cons_sit_nfag;
+pub mod cons_stat_serv_nfag;
+pub mod evento_nfag;
 pub mod filters;
 pub mod login_history;
+pub mod nfag;
+pub mod nfag_dest;
+pub mod nfag_emit;
+pub mod nfag_ide;
+pub mod nfag_total;
 pub mod nfe_cofins;
 pub mod nfe_document;
 pub mod nfe_emitter;
@@ -26,15 +34,17 @@ pub mod pagination;
 pub mod person;
 pub mod refresh_token;
 pub mod response;
+pub mod ret_nfag;
 pub mod tenant;
 pub mod user;
 pub mod user_token;
+pub mod validation;
 
 // Re-export functional programming utilities for model operations
 pub use crate::functional::{
     query_builder::Column,
     validation_engine::{ValidationConfig, ValidationEngine},
-    validation_rules::{Custom, Email, Length, Phone, Range, ValidationError},
+    validation_rules::{Custom, ValidationError},
 };
 
 // Re-export commonly used functional traits

@@ -6,7 +6,7 @@ use actix_web::{
 };
 use chrono::{DateTime, Utc};
 use derive_more::{Display, Error};
-use log::{debug, error as log_error, info as log_info, warn as log_warn, Level};
+use log::Level;
 use serde::Serialize;
 use serde_json::to_string as to_json_string;
 use std::collections::{BTreeMap, BTreeSet};

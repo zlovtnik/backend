@@ -23,7 +23,7 @@ pub const AUTHORIZATION: &str = "Authorization";
 pub const EMPTY: &str = "";
 
 // ignore routes
-pub const IGNORE_ROUTES: [&str; 9] = [
+pub const IGNORE_ROUTES: [&str; 10] = [
     "/api/ping",
     "/api/auth/signup",
     "/api/auth/login",
@@ -33,6 +33,7 @@ pub const IGNORE_ROUTES: [&str; 9] = [
     "/api/health",
     "/api/logs",
     "/api-doc",
+    "/swagger-ui",
 ];
 
 // Default number of items per page

@@ -13,10 +13,231 @@ diesel::table! {
 }
 
 diesel::table! {
+    cons_sit_nfag (id) {
+        id -> Int4,
+        #[max_length = 36]
+        tenant_id -> Varchar,
+        tpamb -> Int4,
+        #[max_length = 20]
+        xserv -> Varchar,
+        #[max_length = 44]
+        chnfag -> Varchar,
+        #[max_length = 4]
+        versao -> Nullable<Varchar>,
+        xml_request -> Nullable<Text>,
+        xml_response -> Nullable<Text>,
+        cstat -> Nullable<Int4>,
+        xmotivo -> Nullable<Text>,
+        created_at -> Nullable<Timestamptz>,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    cons_stat_serv_nfag (id) {
+        id -> Int4,
+        #[max_length = 36]
+        tenant_id -> Varchar,
+        tpamb -> Int4,
+        #[max_length = 20]
+        xserv -> Varchar,
+        #[max_length = 4]
+        versao -> Nullable<Varchar>,
+        xml_request -> Nullable<Text>,
+        xml_response -> Nullable<Text>,
+        cstat -> Nullable<Int4>,
+        xmotivo -> Nullable<Text>,
+        created_at -> Nullable<Timestamptz>,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    evento_nfag (id) {
+        id -> Int4,
+        #[max_length = 36]
+        tenant_id -> Varchar,
+        #[max_length = 44]
+        chnfag -> Varchar,
+        tpevento -> Int4,
+        nseqevento -> Int4,
+        #[max_length = 4]
+        versao -> Nullable<Varchar>,
+        xml_content -> Nullable<Text>,
+        #[max_length = 20]
+        status -> Nullable<Varchar>,
+        created_at -> Nullable<Timestamptz>,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     login_history (id) {
         id -> Int4,
         user_id -> Int4,
         login_timestamp -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    nfag (id) {
+        id -> Int4,
+        #[max_length = 44]
+        chave -> Varchar,
+        #[max_length = 36]
+        tenant_id -> Varchar,
+        #[max_length = 4]
+        versao -> Nullable<Varchar>,
+        xml_content -> Nullable<Text>,
+        #[max_length = 20]
+        status -> Nullable<Varchar>,
+        created_at -> Nullable<Timestamptz>,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    nfag_dest (id) {
+        id -> Int4,
+        nfag_id -> Int4,
+        #[max_length = 14]
+        cnpj -> Nullable<Varchar>,
+        #[max_length = 11]
+        cpf -> Nullable<Varchar>,
+        #[max_length = 20]
+        idestrangeiro -> Nullable<Varchar>,
+        #[max_length = 60]
+        xnome -> Nullable<Varchar>,
+        #[max_length = 14]
+        ie -> Nullable<Varchar>,
+        #[max_length = 15]
+        im -> Nullable<Varchar>,
+        #[max_length = 60]
+        email -> Nullable<Varchar>,
+        #[max_length = 14]
+        telefone -> Nullable<Varchar>,
+        #[max_length = 125]
+        logradouro -> Nullable<Varchar>,
+        #[max_length = 10]
+        numero -> Nullable<Varchar>,
+        #[max_length = 60]
+        complemento -> Nullable<Varchar>,
+        #[max_length = 60]
+        bairro -> Nullable<Varchar>,
+        #[max_length = 7]
+        codigo_municipio -> Nullable<Varchar>,
+        #[max_length = 60]
+        municipio -> Nullable<Varchar>,
+        #[max_length = 2]
+        uf -> Nullable<Varchar>,
+        #[max_length = 8]
+        cep -> Nullable<Varchar>,
+        #[max_length = 4]
+        codigo_pais -> Nullable<Varchar>,
+        #[max_length = 60]
+        pais -> Nullable<Varchar>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    nfag_emit (id) {
+        id -> Int4,
+        nfag_id -> Int4,
+        #[max_length = 14]
+        cnpj -> Varchar,
+        #[max_length = 14]
+        ie -> Nullable<Varchar>,
+        #[max_length = 60]
+        xnome -> Varchar,
+        #[max_length = 60]
+        xfant -> Nullable<Varchar>,
+        #[max_length = 60]
+        email -> Nullable<Varchar>,
+        #[max_length = 14]
+        telefone -> Nullable<Varchar>,
+        #[max_length = 125]
+        logradouro -> Nullable<Varchar>,
+        #[max_length = 10]
+        numero -> Nullable<Varchar>,
+        #[max_length = 60]
+        complemento -> Nullable<Varchar>,
+        #[max_length = 60]
+        bairro -> Nullable<Varchar>,
+        #[max_length = 7]
+        codigo_municipio -> Nullable<Varchar>,
+        #[max_length = 60]
+        municipio -> Nullable<Varchar>,
+        #[max_length = 2]
+        uf -> Nullable<Varchar>,
+        #[max_length = 8]
+        cep -> Nullable<Varchar>,
+        #[max_length = 4]
+        codigo_pais -> Nullable<Varchar>,
+        #[max_length = 60]
+        pais -> Nullable<Varchar>,
+        #[max_length = 1]
+        tipo_emitente -> Nullable<Varchar>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    nfag_ide (id) {
+        id -> Int4,
+        nfag_id -> Int4,
+        cuf -> Int4,
+        tpamb -> Int4,
+        #[sql_name = "mod"]
+        mod_ -> Int4,
+        serie -> Int4,
+        nnf -> Int8,
+        #[max_length = 8]
+        cnf -> Varchar,
+        #[max_length = 1]
+        cdv -> Varchar,
+        dhemi -> Timestamptz,
+        tpemis -> Int4,
+        nsiteautoriz -> Int4,
+        cmunfg -> Int4,
+        finnfag -> Int4,
+        tpfat -> Int4,
+        #[max_length = 20]
+        verproc -> Varchar,
+        dhcont -> Nullable<Timestamptz>,
+        xjust -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    nfag_total (id) {
+        id -> Int4,
+        nfag_id -> Int4,
+        vbc -> Nullable<Numeric>,
+        vicms -> Nullable<Numeric>,
+        vicmsdeson -> Nullable<Numeric>,
+        vfcpufdest -> Nullable<Numeric>,
+        vicmsufdest -> Nullable<Numeric>,
+        vicmsufremet -> Nullable<Numeric>,
+        vfcp -> Nullable<Numeric>,
+        vbcst -> Nullable<Numeric>,
+        vst -> Nullable<Numeric>,
+        vfcpst -> Nullable<Numeric>,
+        vfcpstret -> Nullable<Numeric>,
+        vprod -> Nullable<Numeric>,
+        vfrete -> Nullable<Numeric>,
+        vseg -> Nullable<Numeric>,
+        vdesc -> Nullable<Numeric>,
+        vii -> Nullable<Numeric>,
+        vipi -> Nullable<Numeric>,
+        vipidevol -> Nullable<Numeric>,
+        vpis -> Nullable<Numeric>,
+        vcofins -> Nullable<Numeric>,
+        voutro -> Nullable<Numeric>,
+        vnf -> Nullable<Numeric>,
+        vtottrib -> Nullable<Numeric>,
     }
 }
 
@@ -482,6 +703,22 @@ diesel::table! {
 }
 
 diesel::table! {
+    ret_nfag (id) {
+        id -> Int4,
+        #[max_length = 36]
+        tenant_id -> Varchar,
+        tpamb -> Int4,
+        cstat -> Int4,
+        xmotivo -> Nullable<Text>,
+        #[max_length = 4]
+        versao -> Nullable<Varchar>,
+        xml_content -> Nullable<Text>,
+        created_at -> Nullable<Timestamptz>,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     sessions (session_id) {
         #[max_length = 255]
         session_id -> Varchar,
@@ -514,7 +751,15 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(cons_sit_nfag -> tenants (tenant_id));
+diesel::joinable!(cons_stat_serv_nfag -> tenants (tenant_id));
+diesel::joinable!(evento_nfag -> tenants (tenant_id));
 diesel::joinable!(login_history -> users (user_id));
+diesel::joinable!(nfag -> tenants (tenant_id));
+diesel::joinable!(nfag_dest -> nfag (nfag_id));
+diesel::joinable!(nfag_emit -> nfag (nfag_id));
+diesel::joinable!(nfag_ide -> nfag (nfag_id));
+diesel::joinable!(nfag_total -> nfag (nfag_id));
 diesel::joinable!(nfe_cofins -> nfe_items (nfe_item_id));
 diesel::joinable!(nfe_fiscal_info -> nfe_documents (nfe_document_id));
 diesel::joinable!(nfe_icms -> nfe_items (nfe_item_id));
@@ -527,10 +772,19 @@ diesel::joinable!(nfe_references -> nfe_documents (nfe_document_id));
 diesel::joinable!(nfe_transport -> nfe_documents (nfe_document_id));
 diesel::joinable!(nfe_transport_volumes -> nfe_transport (nfe_transport_id));
 diesel::joinable!(refresh_tokens -> users (user_id));
+diesel::joinable!(ret_nfag -> tenants (tenant_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     configuration,
+    cons_sit_nfag,
+    cons_stat_serv_nfag,
+    evento_nfag,
     login_history,
+    nfag,
+    nfag_dest,
+    nfag_emit,
+    nfag_ide,
+    nfag_total,
     nfe_cofins,
     nfe_documents,
     nfe_emitters,
@@ -547,6 +801,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     nfe_transport_volumes,
     people,
     refresh_tokens,
+    ret_nfag,
     sessions,
     tenants,
     users,

@@ -1,10 +1,8 @@
 use std::fmt;
-use chrono::Local;
 use tokio::sync::broadcast;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
-use serde_json::json;
 
 /// Log output format types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

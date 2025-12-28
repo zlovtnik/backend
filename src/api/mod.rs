@@ -1,8 +1,14 @@
 pub mod account_controller;
 pub mod address_book_controller;
+pub mod cons_sit_nfag_controller;
+pub mod cons_stat_serv_nfag_controller;
 pub mod controller_context;
+pub mod evento_nfag_controller;
 pub mod health_controller;
+pub mod nfag_controller;
 pub mod ping_controller;
+pub mod ret_nfag_controller;
+pub mod openapi;
 pub mod tenant_controller;
 pub mod user_controller;
 pub mod ws_controller;
