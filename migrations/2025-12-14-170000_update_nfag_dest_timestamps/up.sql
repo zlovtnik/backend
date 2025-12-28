@@ -18,7 +18,7 @@ DECLARE
 BEGIN
     SELECT COUNT(*) INTO null_rows FROM nfag_dest WHERE created_at IS NULL OR updated_at IS NULL;
     IF null_rows > 0 THEN
-        RAISE EXCEPTION 'nfag_dest timestamps still contain %% NULL rows; aborting NOT NULL alteration', null_rows;
+        RAISE EXCEPTION 'nfag_dest timestamps still contain % NULL rows; aborting NOT NULL alteration', null_rows;
     END IF;
 END$$;
 
