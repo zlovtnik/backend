@@ -25,7 +25,7 @@ fn extract_tenant_id(req: &HttpRequest) -> Result<String, ServiceError> {
         .get::<TenantId>()
         .map(|t| t.0.clone())
         .ok_or_else(|| {
-            ServiceError::internal_server_error("Tenant ID not found")
+            ServiceError::unauthorized("Tenant not found")
                 .with_detail("Missing tenant ID in request extensions")
                 .with_tag("tenant")
         })

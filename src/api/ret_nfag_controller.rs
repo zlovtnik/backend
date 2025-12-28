@@ -6,7 +6,9 @@ use validator::Validate;
 use crate::{
     config::db::Pool,
     error::ServiceError,
-    models::ret_nfag::{RetNfag, NewRetNfag},    types::TenantId,};
+    models::ret_nfag::{RetNfag, NewRetNfag},
+    types::TenantId,
+};
 
 // Constants for pagination validation
 const MAX_LIMIT: i64 = 1000;
@@ -232,10 +234,21 @@ pub async fn update_ret_nfag(
                 .with_tag("database")
         })?;
 
-    let updated_ret = RetNfag::update_by_id_and_tenant(ret_id, tenant_id.as_str(), update_request.into(), &mut conn).map_err(|e| {
-        ServiceError::internal_server_error("Failed to update Ret NFAg")
-            .with_detail(e.to_string())
-            .with_tag("database")
+    let updated_ret = RetNfag::update_by_id_and_tenant(
+        ret_id,
+        tenant_id.as_str(),
+        update_request.into(),
+        &mut conn,
+    )
+    .map_err(|e| {
+        match e {
+            diesel::result::Error::NotFound => {
+                ServiceError::not_found("Ret NFAg not found").with_tag("database")
+            }
+            _ => ServiceError::internal_server_error("Failed to update Ret NFAg")
+                .with_detail(e.to_string())
+                .with_tag("database"),
+        }
     })?;
 
     Ok(HttpResponse::Ok().json(updated_ret))
