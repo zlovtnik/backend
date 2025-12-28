@@ -152,7 +152,7 @@ where
 // ===== FUNCTIONAL AUTHENTICATION MIDDLEWARE =====
 
 #[cfg(feature = "functional")]
-mod functional_auth {
+pub mod functional_auth {
     use super::*;
 
     use crate::functional::pure_function_registry::PureFunctionRegistry;

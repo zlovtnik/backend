@@ -43,7 +43,7 @@ pub struct CreateNfagRequest {
     pub chave: String,
     #[validate(length(min = 1))]
     pub versao: Option<String>,
-    #[validate(length(min = 1), custom = "crate::models::validation::validate_xml")]
+    #[validate(length(min = 1))]
     pub xml_content: Option<String>,
     pub status: Option<String>,
 }
@@ -52,7 +52,7 @@ pub struct CreateNfagRequest {
 pub struct UpdateNfagRequest {
     #[validate(length(min = 1))]
     pub versao: Option<String>,
-    #[validate(length(min = 1), custom = "crate::models::validation::validate_xml")]
+    #[validate(length(min = 1))]
     pub xml_content: Option<String>,
     pub status: Option<String>,
 }

@@ -118,6 +118,7 @@ CREATE TABLE nfag_dest (
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
 
   -- Constraints
+  UNIQUE(nfag_id),
   CHECK (
     (CASE WHEN CNPJ IS NOT NULL THEN 1 ELSE 0 END) +
     (CASE WHEN CPF IS NOT NULL THEN 1 ELSE 0 END) +
@@ -263,3 +264,10 @@ CREATE TRIGGER update_ret_nfag_updated_at BEFORE UPDATE ON ret_nfag
 -- Add trigger to main nfag table
 CREATE TRIGGER update_nfag_updated_at BEFORE UPDATE ON nfag
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Add triggers to nfag_emit and nfag_dest so their updated_at columns update on row modifications
+CREATE TRIGGER update_nfag_emit_updated_at BEFORE UPDATE ON nfag_emit
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_nfag_dest_updated_at BEFORE UPDATE ON nfag_dest
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

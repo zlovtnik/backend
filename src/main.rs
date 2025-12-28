@@ -6,6 +6,7 @@ use actix_web::dev::Service;
 use actix_web::web;
 use actix_web::{http, App, HttpServer};
 use futures::FutureExt;
+use std::sync::Arc;
 
 use rcs::utils::ws_logger::{LogBroadcaster, init_websocket_logging};
 use rcs::config;
@@ -116,6 +117,9 @@ async fn main() -> io::Result<()> {
     // Clone log_broadcaster for use in main server
     let main_broadcaster = log_broadcaster.clone();
 
+    // Create and share a PureFunctionRegistry to encourage functional usage across middleware
+    let pure_registry = Arc::new(rcs::functional::pure_function_registry::PureFunctionRegistry::new());
+
     // Start the main HTTP server
     let main_server = HttpServer::new(move || {
         // Use shared CORS origin configuration from middleware::ws_security
@@ -166,7 +170,7 @@ async fn main() -> io::Result<()> {
             .app_data(web::Data::new(redis_client.clone()))
             .app_data(web::Data::new(main_broadcaster.clone()))
             .wrap(tracing_actix_web::TracingLogger::default())
-            .wrap(rcs::middleware::auth_middleware::Authentication) // יהי רצון שימצא עבודה, הערה לקו זה אם רוצים לשלב עם yew-address-book-frontend
+            .wrap(rcs::middleware::auth_middleware::functional_auth::FunctionalAuthentication::with_registry(pure_registry.clone())) // Use functional authentication middleware with registry
             .wrap_fn(|req, srv| srv.call(req).map(|res| res))
             .configure(config::app::config_services)
     })
@@ -221,6 +225,8 @@ mod tests {
         init_websocket_logging(log_broadcaster.clone())
             .expect("failed to initialize websocket logging in test_startup_ok");
 
+        let test_registry = Arc::new(rcs::functional::pure_function_registry::PureFunctionRegistry::new());
+
         HttpServer::new(move || {
             App::new()
                 .wrap(
@@ -235,7 +241,7 @@ mod tests {
                 .app_data(web::Data::new(pool.clone()))
                 .app_data(web::Data::new(log_broadcaster.clone()))
                 .wrap(tracing_actix_web::TracingLogger::default())
-                .wrap(rcs::middleware::auth_middleware::Authentication)
+                .wrap(rcs::middleware::auth_middleware::functional_auth::FunctionalAuthentication::with_registry(test_registry.clone()))
                 .wrap_fn(|req, srv| srv.call(req).map(|res| res))
                 .configure(config::app::config_services)
         })

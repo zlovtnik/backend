@@ -641,6 +641,50 @@ We welcome contributions! Here's how to get started:
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## Using this Repo as a Base Component
+
+If you want to use this project as a reusable base web component for your services, follow these minimal steps.
+
+### Environment
+
+- Copy `.env.example` to `.env` and fill values for `DATABASE_URL`, `REDIS_URL`, and `JWT_SECRET`.
+
+### Tenancy model
+
+- The codebase supports **per-tenant schemas** with a `TenantPoolManager` by default.
+- Optionally you can adopt a **shared-database + RLS** approach; see `src/config/db.rs` for helpers (e.g., `set_session_tenant`).
+
+### Functional mode
+
+- The project includes a `PureFunctionRegistry` and functional middleware. The app defaults to using the functional authentication middleware.
+  - The `main` server registers a shared `PureFunctionRegistry` and passes it to `FunctionalAuthentication`.
+  - Prefer the `functional` modules (for example, `functional::pure_function_registry`, `functional::query_composition`, `middleware::functional_middleware`) when adding new features to favor a functional style.
+
+### Quick checklist to adopt as a base
+
+- Copy `.env.example` to `.env` and set required values.
+- Run DB migrations: `diesel migration run` (or let the app run migrations at startup).
+- Start server: `cargo run` (development) or `cargo run --release` (production).
+- To enforce functional usage in your codebase, register pure functions in `PureFunctionRegistry` and use the provided functional helpers.
+
+### RLS and session variables
+
+- If you move to a shared-database model with PostgreSQL Row-Level Security, use the helper `set_session_tenant(conn, tenant_id)` in `src/config/db.rs` to set `app.tenant_id` on the connection before executing tenant-scoped queries.
+- RLS policies can reference `current_setting('app.tenant_id')` to enforce tenant isolation at the database level.
+
+### Example `.env` values
+
+Use `.env.example` as the starting point. Required keys include:
+
+- `DATABASE_URL` — postgres connection string
+- `REDIS_URL` — redis connection string
+- `JWT_SECRET` — secret used to sign JWTs
+
+### Optional next steps
+
+- Add a migration that creates example RLS policies for tenant-scoped tables.
+- Replace one service to use `FunctionalQueryComposer` end-to-end as a demonstration.
+- Add CI tests that assert the functional registry is exercised.
 
 ## Acknowledgments
 
@@ -650,8 +694,6 @@ Thanks to the amazing open-source community:
 - **Diesel** - Type-safe ORM for Rust
 - **PostgreSQL** - The world's most advanced open-source database
 - **Redis** - In-memory data structure store
-
----
 
 ## Built with ❤️ using [Rust](https://www.rust-lang.org), [Actix Web](https://actix.rs), and modern DevOps practices
 

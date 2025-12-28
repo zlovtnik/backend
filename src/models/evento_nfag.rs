@@ -50,15 +50,15 @@ pub struct CreateEventoNfagRequest {
     pub nseqevento: i32,
     #[validate(length(min = 1))]
     pub versao: Option<String>,
-    #[validate(length(min = 1), custom = "crate::models::validation::validate_xml")]
+    #[validate(length(min = 1))]
     pub xml_content: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Validate, Debug, ToSchema)]
 pub struct UpdateEventoNfagRequest {
-    #[validate(length(min = 1), custom = "crate::models::validation::validate_xml")]
+    #[validate(length(min = 1))]
     pub xml_content: Option<String>,
-    #[validate(custom = "validate_evento_status")]
+    
     pub status: Option<String>,
 }
 

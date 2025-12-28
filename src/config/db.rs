@@ -122,6 +122,39 @@ pub fn run_migration(conn: &mut PgConnection) -> Result<(), ServiceError> {
     Ok(())
 }
 
+/// Set a session variable `app.tenant_id` on the provided Postgres connection.
+///
+/// **Important**: this function uses `SET LOCAL` behaviour via `set_config(..., is_local=true)`
+/// which requires an active transaction. Calling it outside of a transaction will not have
+/// the intended effect or may fail. The setting will revert when the transaction commits
+/// or rolls back.
+///
+/// This helper is intended for use when running with a shared-database + RLS policy that
+/// reads `current_setting('app.tenant_id')`. It sets the variable locally on the provided
+/// `PgConnection` so it affects subsequent statements in the same transaction.
+///
+/// # Errors
+///
+/// Returns `ServiceError::InternalServerError` if the parameter binding or the SQL
+/// execution fails.
+pub fn set_session_tenant(conn: &mut PgConnection, tenant_id: &str) -> Result<(), ServiceError> {
+    // Basic validation: reject empty tenant IDs and overly long values.
+    if tenant_id.is_empty() || tenant_id.len() > 255 {
+        return Err(ServiceError::internal_server_error(
+            format!("Invalid tenant_id provided: '{}'", tenant_id),
+        ));
+    }
+
+    // Use `set_config` with `is_local = true` and parameter binding to avoid manual SQL
+    // string interpolation and reduce risk of SQL maintenance issues.
+    diesel::sql_query("SELECT set_config('app.tenant_id', $1, true)")
+        .bind::<diesel::sql_types::Text, _>(tenant_id)
+        .execute(conn)
+        .map_err(|e| ServiceError::internal_server_error(format!("Failed to set session tenant: {}", e)))?;
+
+    Ok(())
+}
+
 /// Manages database connection pools for tenants, using an RwLock for concurrency.
 /// On lock poisoning (when a thread panics while holding the lock), operations that return Results
 /// (like `add_tenant_pool` and `remove_tenant_pool`) will return an `InternalServerError`.

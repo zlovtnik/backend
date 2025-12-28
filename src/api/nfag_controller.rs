@@ -1,6 +1,7 @@
 use actix_web::{web, HttpMessage, HttpRequest, HttpResponse, Result};
 use serde_json::json;
 use validator::Validate;
+use diesel::result::Error as DieselError;
 
 use crate::{
     config::db::Pool,
@@ -171,9 +172,12 @@ pub async fn find_by_id(
     })?;
 
     let nfag = Nfag::find_by_id_and_tenant(nfag_id, &tenant_id, &mut conn).map_err(|e| {
-        ServiceError::not_found("NFAg not found")
-            .with_detail(e.to_string())
-            .with_tag("database")
+        match e {
+            DieselError::NotFound => ServiceError::not_found("NFAg not found"),
+            other => ServiceError::internal_server_error("NFAg fetch failed")
+                .with_detail(other.to_string())
+                .with_tag("database"),
+        }
     })?;
 
     Ok(HttpResponse::Ok().json(json!({
@@ -225,9 +229,12 @@ pub async fn update(
     };
 
     let nfag = Nfag::update_by_id_and_tenant(nfag_id, &tenant_id, update_dto, &mut conn).map_err(|e| {
-        ServiceError::not_found("NFAg not found or update failed")
-            .with_detail(e.to_string())
-            .with_tag("database")
+        match e {
+            DieselError::NotFound => ServiceError::not_found("NFAg not found"),
+            other => ServiceError::internal_server_error("NFAg update failed")
+                .with_detail(other.to_string())
+                .with_tag("database"),
+        }
     })?;
 
     Ok(HttpResponse::Ok().json(json!({

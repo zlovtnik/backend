@@ -34,6 +34,7 @@ pub struct NewRetNfag {
 #[diesel(table_name = ret_nfag)]
 pub struct UpdateRetNfag {
     pub xml_content: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize, Deserialize, Validate, Debug, ToSchema)]
@@ -45,13 +46,13 @@ pub struct CreateRetNfagRequest {
     pub xmotivo: Option<String>,
     #[validate(length(min = 1))]
     pub versao: Option<String>,
-    #[validate(length(min = 1, max = 10000), custom = "crate::models::validation::validate_xml")]
+    #[validate(length(min = 1, max = 10000))]
     pub xml_content: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Validate, Debug, ToSchema)]
 pub struct UpdateRetNfagRequest {
-    #[validate(length(min = 1, max = 10000), custom = "crate::models::validation::validate_xml")]
+    #[validate(length(min = 1, max = 10000))]
     pub xml_content: Option<String>,
 }
 
@@ -85,6 +86,7 @@ impl From<UpdateRetNfagRequest> for UpdateRetNfag {
     fn from(req: UpdateRetNfagRequest) -> Self {
         UpdateRetNfag {
             xml_content: req.xml_content,
+            updated_at: Some(Utc::now()),
         }
     }
 }
