@@ -6,7 +6,7 @@ use validator::Validate;
 use crate::{
     config::db::Pool,
     error::ServiceError,
-    models::ret_nfag::{RetNfag, NewRetNfag, UpdateRetNfag},    types::TenantId,};
+    models::ret_nfag::{RetNfag, NewRetNfag},    types::TenantId,};
 
 // Constants for pagination validation
 const MAX_LIMIT: i64 = 1000;

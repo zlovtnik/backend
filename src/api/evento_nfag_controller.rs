@@ -6,7 +6,7 @@ use validator::Validate;
 use crate::{
     config::db::Pool,
     error::ServiceError,
-    models::evento_nfag::{EventoNfag, NewEventoNfag, UpdateEventoNfag},
+    models::evento_nfag::{EventoNfag, NewEventoNfag},
     types::TenantId,
 };
 
