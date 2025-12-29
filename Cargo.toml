@@ -59,7 +59,8 @@ quick-xml = "0.38"
 
 # OpenAPI/Swagger documentation
 utoipa = { version = "4", features = ["actix_extras", "chrono", "uuid"] }
-utoipa-swagger-ui = { version = "7", features = ["actix-web"] }
+# Enable `reqwest` feature so the build script can download Swagger UI using Rust instead of system `curl`
+utoipa-swagger-ui = { version = "7", features = ["actix-web", "reqwest"] }
 
 [dependencies.diesel]
 version = "2.2.0"
