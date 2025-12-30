@@ -8,7 +8,8 @@ pub mod api;
 pub mod config;
 pub mod constants;
 pub mod error;
-pub mod functional;
+#[cfg(feature = "functional")]
+pub use rcs_functional as functional;
 pub mod middleware;
 pub mod models;
 pub mod pagination;

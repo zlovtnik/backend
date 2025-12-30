@@ -6,6 +6,9 @@ edition = "2021"
 rust-version = "1.86"
 build = "build.rs"
 
+[workspace]
+members = ["functional_lib"]
+
 [lib]
 name = "rcs"
 path = "src/lib.rs"
@@ -15,7 +18,7 @@ doctest = false
 actix-web = "4.3.1"
 actix-rt = "2.8.0"
 actix-service = "2.0.2"
-actix-cors = "0.7.1"
+actix-cors = "0.6.4"
 actix-ws = "0.3"
 awc = "3.8.1"
 log = "0.4.18"
@@ -24,7 +27,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-log = "0.2"
 tracing-actix-web = "0.7"
 diesel_migrations = "2.1.0"
-serde = { version = "1.0.163", features = ["derive"] }
+serde = "1.0.163"
+serde_derive = "1.0.163"
 serde_json = "1.0.96"
 dotenv = "0.15.0"
 futures = "0.3.28"
@@ -35,12 +39,25 @@ base64 = "0.21.2"
 redis = "0.32.7"
 r2d2 = "0.8.10"
 tokio = { version = "1.35.0", features = ["rt", "rt-multi-thread", "fs", "io-util", "sync", "time", "macros"] }
+notify = "6.1"
+tokio-stream = "0.1"
 url = "2.4"
 itertools = "0.14"
+rayon = { version = "1.11", optional = true }
+im = "15.1"
+thiserror = "2.0.17"
+regex = "1.10"
+once_cell = "1.18"
+num_cpus = "1.17"
+rand = "0.8"
+argon2 = "0.5"
+rust_decimal = { version = "1.38", features = ["serde", "db-diesel-postgres"] }
+bigdecimal = { version = "0.4.8", features = ["serde"] }
 async-trait = "0.1.89"
 aes-gcm = "0.10"
 validator = { version = "0.20", features = ["derive"] }
-rayon = { version = "1.7", optional = true }
+
+rcs-functional = { path = "functional_lib", optional = true }
 
 # XML parsing (well-formedness checks for xml_content payloads)
 quick-xml = "0.38"
@@ -65,12 +82,13 @@ features = ["v4"]
 
 [features]
 default = ["functional", "performance_monitoring", "datetime"]  # Enable functional features by default to support refactoring
-functional = ["dep:rayon"]
+functional = ["rcs-functional"]
 performance_monitoring = []
 datetime = ["dep:chrono", "diesel/chrono"]
 
 [dev-dependencies]
 testcontainers = "0.14.0"
+tempfile = "3.8"
 criterion = { version = "0.5", features = ["html_reports"] }
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 
@@ -88,7 +106,7 @@ incremental = true      # Enable incremental compilation
 opt-level = 3           # Maximum optimization
 lto = "fat"            # Link-time optimization across all crates
 codegen-units = 1      # Single codegen unit = better optimization
-strip = true            # Strip symbols
+strip = true           # Strip symbols
 panic = "abort"        # Smaller binary, faster panics
 
 [profile.release.package."*"]

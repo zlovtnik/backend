@@ -198,7 +198,7 @@ impl ConcurrentProcessor {
     /// # Examples
     ///
     /// ```
-    /// use crate::functional::concurrent_processing::ConcurrentProcessor;
+    /// use crate::concurrent_processing::ConcurrentProcessor;
     ///
     /// let proc = ConcurrentProcessor::try_default().unwrap();
     /// let out = proc.map(vec![1, 2, 3], |x| x * 2).unwrap();
@@ -353,7 +353,7 @@ impl ConcurrentProcessor {
     ///
     /// ```
     /// // Run inside a Tokio runtime in tests or examples.
-    /// use crate::functional::concurrent_processing::{ConcurrentProcessor, ParallelConfig};
+    /// use crate::concurrent_processing::{ConcurrentProcessor, ParallelConfig};
     ///
     /// let rt = tokio::runtime::Runtime::new().unwrap();
     /// let proc = ConcurrentProcessor::try_default().unwrap();
@@ -398,7 +398,7 @@ impl ConcurrentProcessor {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// # use crate::functional::concurrent_processing::{ConcurrentProcessor, ParallelConfig};
+    /// // use crate::concurrent_processing::{ConcurrentProcessor, ParallelConfig};
     /// // create a runtime and a processor (adjust to your crate's public API as needed)
     /// let rt = tokio::runtime::Runtime::new().unwrap();
     /// rt.block_on(async {
@@ -592,9 +592,9 @@ impl ConcurrentProcessor {
 /// # Examples
 ///
 /// ```
-/// # use std::time::Duration;
-/// use crate::functional::parallel_iterators::ParallelMetrics;
-/// use crate::functional::concurrent_processing::aggregate_metrics;
+/// // use std::time::Duration;
+/// use crate::parallel_iterators::ParallelMetrics;
+/// use crate::concurrent_processing::aggregate_metrics;
 ///
 /// let mut a = ParallelMetrics::default();
 /// a.total_time = Duration::from_millis(10);

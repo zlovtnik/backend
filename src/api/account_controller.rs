@@ -11,13 +11,21 @@ use crate::{
     error::ServiceError,
     functional::performance_monitoring::OperationType,
     functional::response_transformers::{ResponseTransformError, ResponseTransformer},
-    measure_operation,
     models::user::{validators, LoginDTO, SignupDTO, UserDTO},
     services::{
         account_service::{self, RefreshTokenRequest},
         functional_service_base::FunctionalErrorHandling,
     },
 };
+#[cfg(feature = "functional")]
+use rcs_functional::measure_operation;
+
+#[cfg(not(feature = "functional"))]
+macro_rules! measure_operation {
+    ($operation:expr, $body:expr) => {
+        $body
+    };
+}
 
 fn response_composition_error(err: ResponseTransformError) -> ServiceError {
     ServiceError::internal_server_error(constants::MESSAGE_INTERNAL_SERVER_ERROR)

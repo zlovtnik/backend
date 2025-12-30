@@ -141,7 +141,7 @@ impl<T: Clone> PersistentVector<T> {
     /// # Examples
     ///
     /// ```
-    /// let vec: crate::functional::immutable_state::PersistentVector<i32> = PersistentVector::new();
+    /// let vec: crate::immutable_state::PersistentVector<i32> = PersistentVector::new();
     /// assert!(vec.is_empty());
     /// assert_eq!(vec.len(), 0);
     /// ```
@@ -164,7 +164,7 @@ impl<T: Clone> PersistentVector<T> {
     /// assert!(!v2.is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
-        self.root.is_none()
+        self.len() == 0
     }
 }
 
@@ -369,7 +369,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// let map: crate::functional::immutable_state::PersistentHashMap<String, i32> = PersistentHashMap::new();
+    /// let map: crate::immutable_state::PersistentHashMap<String, i32> = PersistentHashMap::new();
     /// assert!(map.is_empty());
     /// assert_eq!(map.len(), 0);
     /// ```
@@ -691,6 +691,8 @@ impl SnapshotHistory {
                     true
                 }
             });
+            // Rebuild named_snapshots index after potential removals
+            self.rebuild_named_index();
         }
 
         // Remove oldest named snapshots if over limit (keep newest ones)
@@ -862,10 +864,10 @@ impl ImmutableStateManager {
     /// # Examples
     ///
     /// ```
-    /// # use std::sync::Arc;
+    /// // use std::sync::Arc;
     /// # // Assume `Tenant` implements Default and has a public `id: String` field for this example.
-    /// # use crate::functional::immutable_state::ImmutableStateManager;
-    /// # use crate::functional::immutable_state::Tenant;
+    /// // use crate::immutable_state::ImmutableStateManager;
+    /// // use crate::immutable_state::Tenant;
     /// let manager = ImmutableStateManager::new(100);
     /// let tenant = Tenant { id: "tenant1".to_string(), ..Default::default() };
     /// manager.initialize_tenant(tenant).expect("initialization failed");
@@ -926,7 +928,9 @@ impl ImmutableStateManager {
     /// ```
     pub fn remove_tenant(&self, tenant_id: &str) -> Result<(), String> {
         let mut states = self.tenant_states.write().map_err(|_| "Lock poisoned")?;
+        let mut histories = self.snapshot_histories.write().map_err(|_| "Lock poisoned")?;
         states.remove(tenant_id);
+        histories.remove(tenant_id);
         Ok(())
     }
 
@@ -957,9 +961,9 @@ impl ImmutableStateManager {
     /// # Examples
     ///
     /// ```
-    /// # use std::sync::Arc;
-    /// # use crate::functional::immutable_state::ImmutableStateManager;
-    /// # use crate::functional::immutable_state::TenantApplicationState;
+    /// // use std::sync::Arc;
+    /// // use crate::immutable_state::ImmutableStateManager;
+    /// // use crate::immutable_state::TenantApplicationState;
     /// let mgr = ImmutableStateManager::new(100);
     /// // assume tenant "tenant_a" has been initialized
     /// let result = mgr.apply_transition("tenant_a", |state: &TenantApplicationState| {
@@ -975,7 +979,7 @@ impl ImmutableStateManager {
             &TenantApplicationState,
         ) -> Result<
             TenantApplicationState,
-            crate::functional::state_transitions::TransitionError,
+            crate::state_transitions::TransitionError,
         >,
     {
         let start = Instant::now();
@@ -995,10 +999,6 @@ impl ImmutableStateManager {
         // Capture the previous entry before mutating the map
         let previous = states.insert(tenant_id.to_string(), new_state_arc);
 
-        // Update metrics and enforce memory limit
-        let duration = start.elapsed();
-        self.update_metrics(duration)?;
-        
         // Check if memory limit is exceeded
         if !self.check_memory_limits()? {
             // Restore the previous state if the memory check fails
@@ -1015,6 +1015,10 @@ impl ImmutableStateManager {
                 self.max_memory_mb
             ));
         }
+
+        // Update metrics after successful memory check
+        let duration = start.elapsed();
+        self.update_metrics(duration)?;
 
         Ok(())
     }
@@ -1036,8 +1040,8 @@ impl ImmutableStateManager {
     /// # Examples
     ///
     /// ```
-    /// # use std::sync::Arc;
-    /// # use chrono::Utc;
+    /// // use std::sync::Arc;
+    /// // use chrono::Utc;
     /// # // Setup omitted: create manager and initialize tenant "t1"
     /// // Apply two simple no-op-ish transitions (clone and update timestamp)
     /// let transitions = vec![
@@ -1081,6 +1085,15 @@ impl ImmutableStateManager {
         }
 
         let new_state_arc = Arc::new(current_state);
+
+        // Check memory limits before inserting the new state
+        if !self.check_memory_limits()? {
+            return Err(format!(
+                "Memory limit exceeded: {} MB limit configured",
+                self.max_memory_mb
+            ));
+        }
+
         states.insert(tenant_id.to_string(), new_state_arc);
 
         // Update metrics (weighted by number of transitions)
@@ -1451,7 +1464,7 @@ impl ImmutableStateManager {
             &TenantApplicationState,
         ) -> Result<
             TenantApplicationState,
-            crate::functional::state_transitions::TransitionError,
+            crate::state_transitions::TransitionError,
         >,
     {
         // Create snapshot before transition
@@ -1476,7 +1489,7 @@ impl Default for ImmutableStateManager {
     /// # Examples
     ///
     /// ```
-    /// use crate::functional::immutable_state::ImmutableStateManager;
+    /// use crate::immutable_state::ImmutableStateManager;
     ///
     /// let _mgr = ImmutableStateManager::default();
     /// ```
@@ -1773,11 +1786,12 @@ mod tests {
     #[test]
     fn test_tenant_isolation_comprehensive() {
         let manager = ImmutableStateManager::new(100);
-        let tenant1 = create_test_tenant("tenant1");
-        let tenant2 = create_test_tenant("tenant2");
-
-        manager.initialize_tenant(tenant1).unwrap();
-        manager.initialize_tenant(tenant2).unwrap();
+        
+        // Initialize all tenants that will be used
+        for i in 0..5 {
+            let tenant = create_test_tenant(&format!("tenant_{}", i));
+            manager.initialize_tenant(tenant).unwrap();
+        }
 
         // Apply isolation-breaking operations to verify boundaries
         for i in 0..5 {
@@ -2270,9 +2284,10 @@ mod tests {
                     vec!["auto".to_string()],
                 )
                 .unwrap();
-        }
-
-        // Should not exceed the limit (though current implementation needs refinement)
+        // Verify auto snapshot retention limit is enforced
+        let count = manager.snapshot_count("retention_test").unwrap();
+        assert!(count <= 3, "Snapshot count {} exceeds max_auto_snapshots limit of 3", count);
+    }
         let count = manager.snapshot_count("retention_test").unwrap();
         assert!(count <= 10); // Verify snapshots were created
     }

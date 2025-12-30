@@ -4,22 +4,18 @@
 //! including chunk_by, kmerge, join operations and requires Rust 1.63.0 or later.
 //! This engine serves as the foundation for all data transformation operations.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
+use std::collections::HashMap;
 
-#[cfg(feature = "functional")]
 use itertools::Itertools;
 
-#[cfg(feature = "performance_monitoring")]
-use crate::functional::performance_monitoring::{
+use crate::performance_monitoring::{
     get_performance_monitor, Measurable, OperationType,
 };
 
-#[cfg(feature = "functional")]
-use std::panic::{self, AssertUnwindSafe};
+use std::panic::{self, AssertUnwindSafe, UnwindSafe};
 
-#[cfg(feature = "functional")]
 struct SafeIterator<I>
 where
     I: Iterator,
@@ -28,7 +24,6 @@ where
     terminated: bool,
 }
 
-#[cfg(feature = "functional")]
 impl<I> SafeIterator<I>
 where
     I: Iterator,
@@ -45,7 +40,6 @@ where
     }
 }
 
-#[cfg(feature = "functional")]
 impl<I> Iterator for SafeIterator<I>
 where
     I: Iterator,
@@ -67,7 +61,6 @@ where
     }
 }
 
-#[cfg(feature = "functional")]
 struct LockstepZipIterator<I, J>
 where
     I: Iterator,
@@ -77,7 +70,6 @@ where
     others: Vec<SafeIterator<J>>,
 }
 
-#[cfg(feature = "functional")]
 impl<I, J> LockstepZipIterator<I, J>
 where
     I: Iterator,
@@ -88,7 +80,6 @@ where
     }
 }
 
-#[cfg(feature = "functional")]
 impl<I, J> Iterator for LockstepZipIterator<I, J>
 where
     I: Iterator,
@@ -132,7 +123,7 @@ pub trait IntoIteratorChain<T>: Iterator<Item = T> + 'static + Sized {
     /// # Examples
     ///
     /// ```
-    /// use crate::functional::iterator_engine::{IteratorChain, IntoIteratorChain};
+    /// use crate::iterator_engine::{IteratorChain, IntoIteratorChain};
     ///
     /// let data1 = vec![1, 3, 5];
     /// let data2 = vec![2, 4, 6];
@@ -159,9 +150,9 @@ impl<T, I> IntoIteratorChain<T> for I where I: Iterator<Item = T> + 'static {}
 pub struct IteratorConfig {
     /// Enable parallel processing for large datasets
     pub enable_parallel: bool,
-    /// Buffer size for chunked operations
+    /// Buffer size for chunked operations (reserved for future use)
     pub buffer_size: usize,
-    /// Memory limit for lazy evaluation
+    /// Memory limit for lazy evaluation (reserved for future use)
     pub memory_limit: usize,
 }
 
@@ -211,9 +202,9 @@ where
     }
 }
 
-impl<T, I> IteratorChain<T, I>
+impl<T: 'static, I> IteratorChain<T, I>
 where
-    I: Iterator<Item = T>,
+    I: Iterator<Item = T> + 'static,
 {
     /// Creates a new IteratorChain with default configuration
     pub fn new(iterator: I) -> Self {
@@ -364,35 +355,34 @@ where
     /// let groups: Vec<(i32, Vec<i32>)> = chain.chunk_by(|&x| x).collect();
     /// assert_eq!(groups, vec![(1, vec![1, 1]), (2, vec![2, 2, 2]), (3, vec![3])]);
     /// ```
-    #[cfg(feature = "functional")]
     pub fn chunk_by<K, F>(
         self,
         f: F,
     ) -> IteratorChain<(K, Vec<T>), impl Iterator<Item = (K, Vec<T>)>>
     where
-        F: FnMut(&T) -> K,
-        K: PartialEq,
-        T: Clone,
+        F: FnMut(&T) -> K + 'static,
+        K: PartialEq + 'static,
+        T: Clone + 'static,
     {
         let mut operations = self.operations;
         operations.push("chunk_by".to_string());
 
-        let chunks: Vec<(K, Vec<T>)> = self
+        let iterator = self
             .iterator
             .chunk_by(f)
             .into_iter()
             .map(|(key, group)| (key, group.collect()))
-            .collect();
+            .collect::<Vec<_>>()
+            .into_iter();
 
         IteratorChain {
-            iterator: chunks.into_iter(),
+            iterator,
             config: self.config,
             operations,
         }
     }
 
     /// K-way merge sorted iterators using itertools two-way merge
-    #[cfg(feature = "functional")]
     pub fn kmerge<J>(self, other: J) -> IteratorChain<T, impl Iterator<Item = T>>
     where
         T: Ord,
@@ -417,7 +407,6 @@ where
     }
 
     /// Lockstep iteration over multiple iterators (zip all with equal lengths)
-    #[cfg(feature = "functional")]
     pub fn lockstep_zip<J>(
         self,
         others: impl IntoIterator<Item = J>,
@@ -509,7 +498,6 @@ where
     }
 
     /// Cartesian product with another iterator
-    #[cfg(feature = "functional")]
     pub fn cartesian_product<U>(
         self,
         other: U,
@@ -592,13 +580,12 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use crate::functional::iterator_engine::IteratorChain;
+    /// // use crate::iterator_engine::IteratorChain;
     /// let chain = IteratorChain::new(vec![1, 2, 3].into_iter());
     /// let v = chain.collect();
     /// assert_eq!(v, vec![1, 2, 3]);
     /// ```
     pub fn collect(self) -> Vec<T> {
-        #[cfg(feature = "performance_monitoring")]
         {
             let start = std::time::Instant::now();
 
@@ -616,10 +603,6 @@ where
 
             result
         }
-        #[cfg(not(feature = "performance_monitoring"))]
-        {
-            self.iterator.collect()
-        }
     }
 
     /// Group items by a key function, returning a vector of (key, group) pairs
@@ -634,7 +617,6 @@ where
     /// let groups: Vec<(i32, Vec<i32>)> = chain.group_by(|&x| x % 2).collect();
     /// // Groups items by their remainder when divided by 2
     /// ```
-    #[cfg(feature = "functional")]
     pub fn group_by<K, F>(
         self,
         key_fn: F,
@@ -859,7 +841,6 @@ where
     }
 }
 
-#[cfg(feature = "performance_monitoring")]
 impl<T, I> Measurable for IteratorChain<T, I>
 where
     I: Iterator<Item = T>,
@@ -873,7 +854,6 @@ where
 /// Core iterator processing engine
 pub struct IteratorEngine {
     config: IteratorConfig,
-    performance_metrics: HashMap<String, u64>,
 }
 
 impl IteratorEngine {
@@ -883,19 +863,16 @@ impl IteratorEngine {
     ///
     /// ```
     /// let engine = IteratorEngine::new();
-    /// assert!(engine.metrics().is_empty());
     /// ```
     pub fn new() -> Self {
         Self {
             config: IteratorConfig::default(),
-            performance_metrics: HashMap::new(),
         }
     }
 
     /// Constructs an IteratorEngine configured with the given settings.
     ///
-    /// The returned engine uses `config` for its behavior and initializes an empty
-    /// performance metrics map.
+    /// The returned engine uses `config` for its behavior.
     ///
     /// # Examples
     ///
@@ -906,12 +883,10 @@ impl IteratorEngine {
     ///     memory_limit: 16 * 1024 * 1024,
     /// };
     /// let engine = IteratorEngine::with_config(cfg);
-    /// assert_eq!(engine.metrics().len(), 0);
     /// ```
     pub fn with_config(config: IteratorConfig) -> Self {
         Self {
             config,
-            performance_metrics: HashMap::new(),
         }
     }
 
@@ -925,9 +900,9 @@ impl IteratorEngine {
     /// let collected = chain.collect();
     /// assert_eq!(collected, vec![1, 2, 3]);
     /// ```
-    pub fn from_iter<T, I>(&self, iterator: I) -> IteratorChain<T, I>
+    pub fn from_iter<T: 'static, I>(&self, iterator: I) -> IteratorChain<T, I>
     where
-        I: Iterator<Item = T>,
+        I: Iterator<Item = T> + 'static,
     {
         IteratorChain::new(iterator).with_config(self.config.clone())
     }
@@ -942,7 +917,7 @@ impl IteratorEngine {
     /// let collected: Vec<_> = chain.collect();
     /// assert_eq!(collected, vec![1, 2, 3]);
     /// ```
-    pub fn from_vec<T>(&self, vec: Vec<T>) -> IteratorChain<T, std::vec::IntoIter<T>> {
+    pub fn from_vec<T: 'static>(&self, vec: Vec<T>) -> IteratorChain<T, std::vec::IntoIter<T>> {
         self.from_iter(vec.into_iter())
     }
 
@@ -978,45 +953,12 @@ impl IteratorEngine {
         // Sequential processing
         data.iter().map(transform).collect()
     }
-
-    /// Access the current performance metrics collected by the engine.
-    ///
-    /// The returned map associates metric names with their recorded numeric values.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let engine = IteratorEngine::new();
-    /// let metrics = engine.metrics();
-    /// // newly created engine has no metrics recorded
-    /// assert!(metrics.is_empty());
-    /// ```
-    pub fn metrics(&self) -> &HashMap<String, u64> {
-        &self.performance_metrics
-    }
-
-    /// Clears all recorded performance metrics from the engine.
-    ///
-    /// This removes every entry from the engine's internal metrics map so subsequent
-    /// calls to `metrics()` will return an empty collection.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let mut engine = IteratorEngine::new();
-    /// // metrics start empty by default; calling reset_metrics ensures they are empty
-    /// engine.reset_metrics();
-    /// assert!(engine.metrics().is_empty());
-    /// ```
-    pub fn reset_metrics(&mut self) {
-        self.performance_metrics.clear();
-    }
 }
 
 impl Default for IteratorEngine {
     /// Creates a default IteratorEngine configured with the library's standard settings.
     ///
-    /// The created engine uses the default `IteratorConfig` and starts with empty performance metrics.
+    /// The created engine uses the default `IteratorConfig`.
     ///
     /// # Examples
     ///
@@ -1083,7 +1025,6 @@ mod tests {
         assert_eq!(result, vec![2, 4, 6, 8, 10]);
     }
 
-    #[cfg(feature = "functional")]
     mod functional_more_tests {
         use super::*;
 
@@ -1593,7 +1534,7 @@ mod tests {
 
     #[test]
     fn test_method_resolution_pitfall_solution() {
-        use crate::functional::iterator_engine::IntoIteratorChain;
+        use crate::iterator_engine::IntoIteratorChain;
 
         let engine = IteratorEngine::new();
         let data1 = vec![1, 3, 5];

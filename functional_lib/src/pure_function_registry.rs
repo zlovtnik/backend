@@ -194,8 +194,8 @@ impl PureFunctionRegistry {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use crate::functional::prelude::create_standard_registry;
-    /// use crate::functional::pure_function_registry::FunctionCategory;
+    /// use crate::prelude::create_standard_registry;
+    /// use crate::pure_function_registry::FunctionCategory;
     ///
     /// let registry = create_standard_registry().unwrap();
     /// let info = registry.lookup(FunctionCategory::Transformation, "identity").unwrap();
@@ -348,9 +348,9 @@ impl PureFunctionRegistry {
     ///
     /// ```
     /// // Assumes the standard prelude registers an "identity" transformation that returns its input.
-    /// let registry = crate::functional::prelude::create_standard_registry().unwrap();
+    /// let registry = crate::prelude::create_standard_registry().unwrap();
     /// let out = registry
-    ///     .execute(crate::functional::pure_function_registry::FunctionCategory::Transformation, "identity", 42)
+    ///     .execute(crate::pure_function_registry::FunctionCategory::Transformation, "identity", 42)
     ///     .unwrap();
     /// assert_eq!(out, Some(42));
     /// ```
@@ -405,11 +405,11 @@ impl PureFunctionRegistry {
     ///
     /// ```
     /// // Create a registry with standard functions (identity, double, string_length)
-    /// let registry = crate::functional::prelude::create_standard_registry().unwrap();
+    /// let registry = crate::prelude::create_standard_registry().unwrap();
     ///
     /// // Validate purity of the pre-registered "identity" transformation for integers
     /// let is_pure = registry.validate_purity(
-    ///     crate::functional::pure_function_registry::FunctionCategory::Transformation,
+    ///     crate::pure_function_registry::FunctionCategory::Transformation,
     ///     "identity",
     ///     42i32,
     ///     Some(10),
@@ -588,7 +588,7 @@ impl PureFunctionRegistry {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use crate::functional::pure_function_registry::PureFunctionRegistry;
+    /// use crate::pure_function_registry::PureFunctionRegistry;
     ///
     /// let registry = PureFunctionRegistry::shared();
     /// let registry_clone = registry.clone();
@@ -653,7 +653,7 @@ pub mod prelude {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::functional::function_traits::{FunctionCategory, FunctionWrapper};
+    use crate::function_traits::{FunctionCategory, FunctionWrapper};
 
     #[test]
     fn test_registry_creation() {

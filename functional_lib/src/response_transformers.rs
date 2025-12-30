@@ -23,7 +23,7 @@
 //! use actix_web::http::StatusCode;
 //! use actix_web::test::TestRequest;
 //! use actix_web::Responder;
-//! use crate::functional::response_transformers::ResponseTransformer;
+//! use crate::response_transformers::ResponseTransformer;
 //!
 //! # actix_rt::System::new().block_on(async {
 //! let response = ResponseTransformer::new(vec![1, 2, 3])
@@ -38,6 +38,8 @@
 use std::borrow::Cow;
 use std::str::FromStr;
 
+use crate::constants;
+
 #[cfg_attr(not(test), allow(unused_imports))]
 use actix_web::body::BoxBody;
 use actix_web::http::header::{
@@ -49,7 +51,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{self, json, Value as JsonValue};
 use thiserror::Error;
 
-use crate::constants;
+// use crate::constants;
 use crate::models::response::ResponseBody;
 
 /// Supported output formats handled by the response transformer.
@@ -291,7 +293,7 @@ impl<T> ResponseTransformer<T> {
     /// # Examples
     ///
     /// ```
-    /// use crate::functional::response_transformers::ResponseTransformer;
+    /// use crate::response_transformers::ResponseTransformer;
     ///
     /// let t = ResponseTransformer::new("payload");
     /// let _ = t.try_insert_header("x-custom", "42").unwrap();
@@ -357,7 +359,7 @@ impl<T> ResponseTransformer<T> {
     /// # Examples
     ///
     /// ```
-    /// use crate::functional::response_transformers::{ResponseTransformer, ResponseFormat};
+    /// use crate::response_transformers::{ResponseTransformer, ResponseFormat};
     ///
     /// let transformer = ResponseTransformer::new("payload").force_format(ResponseFormat::Text);
     /// ```
@@ -435,9 +437,9 @@ impl<T> ResponseTransformer<T> {
     /// # Examples
     ///
     /// ```
-    /// # use std::borrow::Cow;
-    /// # use serde::Serialize;
-    /// # use crate::functional::response_transformers::{ResponseTransformer, ResponseEnvelope};
+    /// // use std::borrow::Cow;
+    /// // use serde::Serialize;
+    /// // use crate::response_transformers::{ResponseTransformer, ResponseEnvelope};
     /// // transform numeric data into a string and update the message
     /// let t = ResponseTransformer::new(42)
     ///     .compose(|env: ResponseEnvelope<i32>| ResponseEnvelope {
@@ -672,23 +674,17 @@ where
             Ok(builder.body(csv_payload))
         }
         ResponseFormat::MessagePack => {
-            // MessagePack binary format - compact and efficient
-            // For production, use rmp-serde crate for proper MessagePack serialization
-            // For now, fall back to JSON with appropriate content type
-            let payload = serde_json::to_vec(&envelope)?;
-            // Validate response size to prevent DoS from large responses
-            if payload.len() > MAX_RESPONSE_SIZE_BYTES {
-                return Err(serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::Other, format!("Response size {} exceeds maximum of {} bytes", payload.len(), MAX_RESPONSE_SIZE_BYTES))));
-            }
-            // Use exact content-type for MessagePack format
-            builder.insert_header((header::CONTENT_TYPE, "application/msgpack"));
-            Ok(builder.body(payload))
+            // MessagePack not yet implemented - return error to avoid misleading clients
+            return Err(serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "MessagePack format is not yet implemented",
+            )));
         }
     }
 }
 
 fn serialization_error(err: serde_json::Error) -> HttpResponse {
-    let body = ResponseBody::new(
+    let body = ResponseBody::with_data(
         constants::MESSAGE_INTERNAL_SERVER_ERROR,
         json!({ "error": err.to_string() }),
     );
@@ -820,7 +816,7 @@ fn parse_media_type(media_type: &str) -> Option<ResponseFormat> {
 /// ```
 /// use actix_web::test::TestRequest;
 /// let req = TestRequest::with_uri("/?pretty=true").to_http_request();
-/// assert!(crate::functional::response_transformers::prefers_pretty_json(&req));
+/// assert!(crate::response_transformers::prefers_pretty_json(&req));
 /// ```
 fn prefers_pretty_json(req: &HttpRequest) -> bool {
     #[derive(Deserialize)]

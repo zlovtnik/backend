@@ -277,20 +277,18 @@ impl Default for LazyConfig {
 }
 
 /// Lazy operation types for deferred computation
-pub enum LazyOp<I> {
+pub enum LazyOp<I, O> {
     /// Map operation with deferred execution
-    Map(Box<dyn Fn(I) -> I + Send + Sync>),
+    Map(Box<dyn Fn(I) -> O + Send + Sync>),
     /// Filter operation with deferred execution
     Filter(Box<dyn Fn(&I) -> bool + Send + Sync>),
-    /// Chunk by operation for grouping
-    ChunkBy(Box<dyn Fn(&I) -> I + Send + Sync>),
     /// Take first N items
     Take(usize),
     /// Skip first N items
     Skip(usize),
 }
 
-impl<I> LazyOp<I> {
+impl<I, O> LazyOp<I, O> {
     #[inline(never)]
     fn panic_on_closure_clone(variant: &'static str) -> ! {
         panic!(
@@ -305,7 +303,6 @@ impl<I> fmt::Debug for LazyOp<I> {
         match self {
             LazyOp::Map(_) => write!(f, "Map(_)"),
             LazyOp::Filter(_) => write!(f, "Filter(_)"),
-            LazyOp::ChunkBy(_) => write!(f, "ChunkBy(_)"),
             LazyOp::Take(n) => write!(f, "Take({})", n),
             LazyOp::Skip(n) => write!(f, "Skip({})", n),
         }
@@ -317,7 +314,6 @@ impl<I> Clone for LazyOp<I> {
         match self {
             LazyOp::Map(_) => Self::panic_on_closure_clone("Map"),
             LazyOp::Filter(_) => Self::panic_on_closure_clone("Filter"),
-            LazyOp::ChunkBy(_) => Self::panic_on_closure_clone("ChunkBy"),
             LazyOp::Take(n) => LazyOp::Take(*n),
             LazyOp::Skip(n) => LazyOp::Skip(*n),
         }
@@ -325,26 +321,29 @@ impl<I> Clone for LazyOp<I> {
 }
 
 /// Core lazy evaluation pipeline
-pub struct LazyPipeline<T, I>
+pub struct LazyPipeline<I, O, Iter>
 where
-    I: Iterator<Item = T>,
+    Iter: Iterator<Item = I>,
 {
     /// Source iterator (lazy)
-    source: I,
+    source: Iter,
     /// Deferred operations chain
-    operations: Vec<LazyOp<T>>,
+    operations: Vec<LazyOp<I, O>>,
     /// Configuration
     config: LazyConfig,
     /// Performance metrics
     metrics: PipelineMetrics,
-    /// Phantom data for type safety
-    _phantom: PhantomData<T>,
+    /// Take limit
+    take_remaining: usize,
+    /// Skip count
+    skip_remaining: usize,
 }
 
-impl<T, I> LazyPipeline<T, I>
+impl<I, O, Iter> LazyPipeline<I, O, Iter>
 where
-    I: Iterator<Item = T>,
-    T: Send + Sync,
+    Iter: Iterator<Item = I>,
+    I: Send + Sync,
+    O: Send + Sync,
 {
     /// Returns a reference to performance metrics
     pub fn metrics_ref(&self) -> &PipelineMetrics {
@@ -352,69 +351,63 @@ where
     }
 
     /// Creates a new lazy pipeline from an iterator
-    pub fn new(source: I) -> Self {
-        Self {
+    pub fn new(source: Iter) -> LazyPipeline<I, I, Iter> {
+        LazyPipeline {
             source,
             operations: Vec::new(),
             config: LazyConfig::default(),
             metrics: PipelineMetrics::default(),
-            _phantom: PhantomData,
+            take_remaining: usize::MAX,
+            skip_remaining: 0,
         }
     }
 
     /// Creates a lazy pipeline with custom configuration
-    pub fn with_config(source: I, config: LazyConfig) -> Self {
-        Self {
+    pub fn with_config(source: Iter, config: LazyConfig) -> LazyPipeline<I, I, Iter> {
+        LazyPipeline {
             source,
             operations: Vec::new(),
             config,
             metrics: PipelineMetrics::default(),
-            _phantom: PhantomData,
+            take_remaining: usize::MAX,
+            skip_remaining: 0,
         }
     }
 
     /// Adds a map operation to the deferred pipeline
-    pub fn map<F>(mut self, f: F) -> Self
+    pub fn map<V, F>(self, f: F) -> LazyPipeline<O, V, Self>
     where
-        F: Fn(T) -> T + Send + Sync + 'static,
+        F: Fn(O) -> V + Send + Sync + 'static,
+        Self: Iterator<Item = O>,
     {
-        self.operations.push(LazyOp::Map(Box::new(f)));
-        self
+        LazyPipeline {
+            source: self,
+            operations: vec![LazyOp::Map(Box::new(f))],
+            config: self.config,
+            metrics: self.metrics,
+            take_remaining: usize::MAX,
+            skip_remaining: 0,
+        }
     }
 
     /// Adds a filter operation to the deferred pipeline
     pub fn filter<F>(mut self, f: F) -> Self
     where
-        F: Fn(&T) -> bool + Send + Sync + 'static,
+        F: Fn(&O) -> bool + Send + Sync + 'static,
     {
         self.operations.push(LazyOp::Filter(Box::new(f)));
         self
     }
 
-    /// Groups consecutive elements by key (lazy implementation)
-    pub fn chunk_by<F, K>(mut self, key_fn: F) -> Self
-    where
-        F: Fn(&T) -> K + Send + Sync + 'static,
-        K: Clone + Send + Sync + 'static,
-        T: From<K>,
-    {
-        let key_mapper = move |item: &T| -> T {
-            let key = key_fn(item);
-            key.into()
-        };
-        self.operations.push(LazyOp::ChunkBy(Box::new(key_mapper)));
-        self
-    }
-
     /// Takes the first n items
     pub fn take(mut self, n: usize) -> Self {
-        self.operations.push(LazyOp::Take(n));
+        self.take_remaining = n;
         self
     }
 
     /// Skips the first n items
     pub fn skip(mut self, n: usize) -> Self {
-        self.operations.push(LazyOp::Skip(n));
+        self.skip_remaining = n;
         self
     }
 
@@ -427,31 +420,38 @@ where
     /// Estimates memory usage for current pipeline
     fn estimate_memory_usage(&self) -> u64 {
         // Rough estimation based on operations and buffer size
-        let base_memory = self.config.buffer_size as u64 * std::mem::size_of::<T>() as u64;
+        let base_memory = self.config.buffer_size as u64 * std::mem::size_of::<O>() as u64;
         let operation_overhead = self.operations.len() as u64 * 128; // Estimate per operation
         base_memory + operation_overhead
     }
 
     /// Executes the lazy pipeline and collects results
-    pub fn collect(mut self) -> Result<Vec<T>, LazyPipelineError> {
+    pub fn collect(mut self) -> Result<Vec<O>, LazyPipelineError> {
         if self.config.enable_metrics {
             self.metrics.start_time = Some(Instant::now());
         }
 
         let mut result = Vec::new();
-        let mut skip_remaining = 0;
-        let mut take_remaining = usize::MAX;
+        let mut skip_remaining = self.skip_remaining;
+        let mut take_remaining = self.take_remaining;
+        let mut has_take = take_remaining != usize::MAX;
+        if !has_take {
+            take_remaining = usize::MAX;
+        }
 
         // Extract skip and take limits
         let enable_metrics = self.config.enable_metrics;
         let _max_memory_mb = self.config.max_memory_mb;
         let _operation_timeout = self.config.operation_timeout;
-        for operation in &self.operations {
-            match operation {
-                LazyOp::Skip(n) => skip_remaining = *n,
-                LazyOp::Take(n) => take_remaining = *n,
-                _ => {}
-            }
+
+        if !has_take {
+            take_remaining = usize::MAX;
+        }
+
+        // Memory check before collecting
+        let estimated_memory = self.estimate_memory_usage();
+        if estimated_memory > (self.config.max_memory_mb as u64 * 1024 * 1024) {
+            return Err(LazyPipelineError::MemoryLimitExceeded(estimated_memory));
         }
 
         // Apply operations in order
@@ -481,10 +481,6 @@ where
                             }
                         }
                     }
-                    LazyOp::ChunkBy(_) => {
-                        // For chunk_by, we'll collect until key changes
-                        // This is a simplified implementation - just pass through
-                    }
                     LazyOp::Take(_) | LazyOp::Skip(_) => {
                         // Handled by skip_remaining and take_remaining
                     }
@@ -507,6 +503,10 @@ where
                 self.metrics.items_processed += 1;
 
                 // Memory check
+                let estimated_memory = (result.len() * std::mem::size_of::<T>()) as u64;
+                if estimated_memory > (self.config.max_memory_mb as u64 * 1024 * 1024) {
+                    return Err(LazyPipelineError::MemoryLimitExceeded(estimated_memory));
+                }
 
                 // Check operation timeout
                 if let Some(start_time) = self.metrics.start_time {
@@ -533,10 +533,32 @@ where
             return Err(LazyPipelineError::MemoryLimitExceeded(memory_usage));
         }
 
+        // Calculate total skip and take limits
+        let mut skip_limit = 0;
+        let mut take_limit = 0;
+        let mut has_take = false;
+        for operation in &self.operations {
+            match operation {
+                LazyOp::Skip(n) => skip_limit += *n,
+                LazyOp::Take(n) => {
+                    take_limit += *n;
+                    has_take = true;
+                }
+                _ => {}
+            }
+        }
+        if !has_take {
+            take_limit = usize::MAX;
+        }
+
         Ok(StreamingIterator {
             pipeline: self,
             buffer: Vec::with_capacity(buffer_size),
             exhausted: false,
+            skip_limit,
+            take_limit,
+            total_items_seen: 0,
+            items_taken: 0,
         })
     }
 
@@ -606,6 +628,44 @@ where
     }
 }
 
+impl<I, O, Iter> Iterator for LazyPipeline<I, O, Iter>
+where
+    Iter: Iterator<Item = I>,
+    I: Send + Sync,
+    O: Send + Sync,
+{
+    type Item = O;
+
+    fn next(&mut self) -> Option<O> {
+        loop {
+            if self.take_remaining == 0 {
+                return None;
+            }
+            while self.skip_remaining > 0 {
+                if self.source.next().is_none() {
+                    return None;
+                }
+                self.skip_remaining -= 1;
+            }
+            if let Some(mut item) = self.source.next() {
+                let mut pass = true;
+                for op in &self.operations {
+                    match op {
+                        LazyOp::Filter(f) => if !f(&item) { pass = false; break; }
+                        LazyOp::Map(f) => item = f(item),
+                    }
+                }
+                if pass {
+                    self.take_remaining -= 1;
+                    return Some(item);
+                }
+            } else {
+                return None;
+            }
+        }
+    }
+}
+
 /// Streaming iterator for large dataset processing
 pub struct StreamingIterator<T, I>
 where
@@ -614,6 +674,10 @@ where
     pipeline: LazyPipeline<T, I>,
     buffer: Vec<T>,
     exhausted: bool,
+    skip_limit: usize,
+    take_limit: usize,
+    total_items_seen: usize,
+    items_taken: usize,
 }
 
 impl<T, I> StreamingIterator<T, I>
@@ -629,24 +693,25 @@ where
 
         self.buffer.clear();
 
-        // Extract skip and take limits for this streaming session
-        let mut skip_count = 0;
-        let mut take_count = usize::MAX;
-
-        for operation in &self.pipeline.operations {
-            match operation {
-                LazyOp::Skip(n) => skip_count = *n,
-                LazyOp::Take(n) => take_count = *n,
-                _ => {}
-            }
-        }
-
         // Execute pipeline operations in chunks
         let mut items_processed = 0;
         while items_processed < chunk_size {
             let next_item = self.pipeline.source.next();
             match next_item {
                 Some(item) => {
+                    self.total_items_seen += 1;
+
+                    // Check skip
+                    if self.total_items_seen <= self.skip_limit {
+                        continue;
+                    }
+
+                    // Check take limit
+                    if self.items_taken >= self.take_limit {
+                        self.exhausted = true;
+                        break;
+                    }
+
                     let mut current_item = Some(item);
 
                     // Apply all deferred operations
@@ -665,25 +730,16 @@ where
                                     }
                                 }
                             }
-                            LazyOp::ChunkBy(_) => {
-                                // Simplified chunking for streaming - pass through
-                            }
                             LazyOp::Take(_) | LazyOp::Skip(_) => {
-                                // Handled separately below
+                                // Handled at the top
                             }
                         }
                     }
 
-                    // Apply skip/take logic
-                    if self.buffer.len() < skip_count {
-                        // Still skipping
-                    } else if self.buffer.len() >= skip_count + take_count {
-                        // Reached take limit
-                        self.exhausted = true;
-                        break;
-                    } else if let Some(processed_item) = current_item {
-                        // Add to buffer
+                    // If item passed all filters, add to buffer
+                    if let Some(processed_item) = current_item {
                         self.buffer.push(processed_item);
+                        self.items_taken += 1;
                         items_processed += 1;
                     }
 
@@ -824,12 +880,6 @@ mod tests {
             let _ = op.clone();
         }));
         assert!(filter_clone_attempt.is_err());
-
-        let chunk_by_clone_attempt = catch_unwind(AssertUnwindSafe(|| {
-            let op: LazyOp<i32> = LazyOp::ChunkBy(Box::new(|value: &i32| *value));
-            let _ = op.clone();
-        }));
-        assert!(chunk_by_clone_attempt.is_err());
     }
 
     #[test]

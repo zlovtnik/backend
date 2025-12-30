@@ -21,16 +21,24 @@
 
 #![allow(dead_code)]
 
-use crate::config::db::Pool;
-use crate::functional::query_builder::{
-    Column, Operator, Predicate, QueryFilter, TypeSafeQueryBuilder,
-};
+use crate::query_builder::{Column, Operator, Predicate, QueryFilter, TypeSafeQueryBuilder};
 use regex::Regex;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
+
+/// Type alias for database connection pool
+pub type Pool = diesel::r2d2::Pool<diesel::r2d2::ConnectionManager<diesel::PgConnection>>;
+
+/// Represents a field filter for query composition
+#[derive(Debug, Clone)]
+pub struct FieldFilter {
+    pub field: String,
+    pub operator: String,
+    pub value: String,
+}
 
 /// Lazy evaluation configuration for large result sets.
 ///
@@ -148,7 +156,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use crate::functional::query_builder::{Predicate, PredicateMetadata, ComposablePredicate, Operator};
+    /// use crate::query_builder::{Predicate, PredicateMetadata, ComposablePredicate, Operator};
     /// use std::time::Duration;
     ///
     /// let pred = Predicate::new("users.id".into(), Operator::Equals, Some("42".into()), "id".into());
@@ -178,8 +186,8 @@ where
     /// # Examples
     ///
     /// ```no_run
-    /// use crate::functional::query_builder::Predicate;
-    /// use crate::functional::query_composition::ComposablePredicate;
+    /// use crate::query_builder::Predicate;
+    /// use crate::query_composition::ComposablePredicate;
     ///
     /// // given an existing composable predicate `cp` of type `ComposablePredicate<T>`:
     /// // let cp: ComposablePredicate<T> = ...;
@@ -231,8 +239,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// use crate::functional::query_builder::{Predicate, Operator};
-    /// use crate::functional::query_composition::ComposablePredicate;
+    /// use crate::query_builder::{Predicate, Operator};
+    /// use crate::query_composition::ComposablePredicate;
     ///
     /// let pred = Predicate::new("users.id", Operator::Equals, Some("42".to_string()), "id");
     /// let composed = ComposablePredicate::new(pred, Default::default());
@@ -389,7 +397,7 @@ where
     ///
     /// # Returns
     ///
-    /// `true` if a new chunk was loaded successfully, `false` if no more data is available.
+    /// `Ok(true)` if a new chunk was loaded successfully, `Ok(false)` if no more data is available, `Err` if query failed.
     ///
     /// # Examples
     ///
@@ -400,18 +408,18 @@ where
     /// assert_eq!(it.next(), Some(3u32));
     /// assert_eq!(it.next(), None);
     /// ```
-    fn load_next_chunk(&mut self) -> bool {
+    fn load_next_chunk(&mut self) -> Result<bool, String> {
         // For the test iterator, we don't have real database access
         if self.is_test_iterator {
             self.exhausted = true;
-            return false;
+            return Ok(false);
         }
 
         // Check if we've reached our limit
         if let Some(max_records) = self.composer.lazy_config.max_total_records {
             if self.total_processed >= max_records {
                 self.exhausted = true;
-                return false;
+                return Ok(false);
             }
         }
 
@@ -424,21 +432,16 @@ where
             Ok(chunk) => {
                 if chunk.is_empty() {
                     self.exhausted = true;
-                    false
+                    Ok(false)
                 } else {
                     self.current_chunk = chunk;
                     self.chunk_position = 0;
                     self.offset += self.current_chunk.len();
                     self.total_processed += self.current_chunk.len();
-                    true
+                    Ok(true)
                 }
             }
-            Err(_) => {
-                // In a real implementation, we would handle the error properly
-                // For now, we'll just mark the iterator as exhausted
-                self.exhausted = true;
-                false
-            }
+            Err(e) => Err(e),
         }
     }
 }
@@ -448,7 +451,7 @@ where
     T: Send + Sync + 'static,
     U: Clone + Send + Sync + 'static,
 {
-    type Item = U;
+    type Item = Result<U, String>;
 
     /// Returns the next item from the currently loaded in-memory chunk or `None` if the iterator is exhausted.
     ///
@@ -457,7 +460,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use crate::functional::query_composition::LazyQueryIterator;
+    /// use crate::query_composition::LazyQueryIterator;
     ///
     /// let data = vec![1, 2, 3];
     /// let mut iter = LazyQueryIterator::with_data(data);
@@ -481,18 +484,21 @@ where
             }
 
             // Load the next chunk
-            if !self.load_next_chunk() {
-                self.exhausted = true;
-                return None;
+            match self.load_next_chunk() {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.exhausted = true;
+                    return None;
+                }
+                Err(e) => return Some(Err(e)),
             }
         }
 
         // Return the next item from the current chunk
         let item = self.current_chunk[self.chunk_position].clone();
         self.chunk_position += 1;
-        self.total_processed += 1;
 
-        Some(item)
+        Some(Ok(item))
     }
 }
 
@@ -575,18 +581,19 @@ fn sql_keyword_regex() -> &'static Regex {
 /// # Examples
 ///
 /// ```
-/// // matches the two-hex-digit sequence in a percent-encoded string
+/// // matches percent-encoded sequences
 /// assert!(hex_sequence_regex().is_match("%20"));
-/// // matches a standalone two-digit hex sequence
-/// assert!(hex_sequence_regex().is_match("2F"));
-/// // does not match non-hex or incomplete sequences
+/// assert!(hex_sequence_regex().is_match("%AF"));
+/// // does not match standalone hex digits or incomplete sequences
+/// assert!(!hex_sequence_regex().is_match("2F"));
 /// assert!(!hex_sequence_regex().is_match("g1"));
 /// assert!(!hex_sequence_regex().is_match("A"));
+/// assert!(!hex_sequence_regex().is_match("%1"));
 /// ```
 fn hex_sequence_regex() -> &'static Regex {
     static HEX_SEQUENCE: OnceLock<Regex> = OnceLock::new();
     HEX_SEQUENCE
-        .get_or_init(|| Regex::new(r"[0-9A-Fa-f]{2}").expect("Hex sequence regex should compile"))
+        .get_or_init(|| Regex::new(r"%[0-9A-Fa-f]{2}").expect("Hex sequence regex should compile"))
 }
 
 impl ParameterSanitizer {
@@ -597,7 +604,7 @@ impl ParameterSanitizer {
     /// # Examples
     ///
     /// ```
-    /// let s = crate::functional::query_composition::ParameterSanitizer::new();
+    /// let s = crate::query_composition::ParameterSanitizer::new();
     /// assert!(s.bindings().is_empty());
     /// assert!(!s.rules.is_empty());
     /// ```
@@ -709,8 +716,7 @@ impl ParameterSanitizer {
                 }
 
                 // 3. Reject percent-encoding attempts (e.g., %27 for single quote)
-                // Check if value contains '%' followed by hex digits
-                if value.contains('%') && hex_sequence_regex().is_match(value) {
+                if hex_sequence_regex().is_match(value) {
                     return false;
                 }
 
@@ -796,7 +802,7 @@ impl std::fmt::Display for SanitizationError {
     /// # Examples
     ///
     /// ```
-    /// use crate::functional::query_composition::SanitizationError;
+    /// use crate::query_composition::SanitizationError;
     ///
     /// let v = SanitizationError::ValidationFailed {
     ///     parameter: "id".to_string(),
@@ -892,7 +898,7 @@ impl QueryOptimizationEngine {
     /// # Examples
     ///
     /// ```no_run
-    /// use crate::functional::query_composition::{QueryOptimizationEngine, FunctionalQueryComposer};
+    /// use crate::query_composition::{QueryOptimizationEngine, FunctionalQueryComposer};
     ///
     /// let engine = QueryOptimizationEngine::new();
     /// // Construct or obtain a FunctionalQueryComposer...
@@ -1021,38 +1027,8 @@ where
     /// // assert!(chunk.len() <= 100);
     /// ```
     pub fn execute_chunk_query(&self, _offset: usize, _limit: usize) -> Result<Vec<U>, String> {
-        // Check if we have a database pool
-        let pool = self.pool.as_ref().ok_or("No database pool configured")?;
-
-        // Get a connection from the pool
-        let _conn = pool
-            .get()
-            .map_err(|e| format!("Failed to get database connection: {}", e))?;
-
-        // Build the query using our query builder
-        // For now, we'll create a simple implementation that works with Diesel
-        // In a real implementation, we would use the TypeSafeQueryBuilder to construct
-        // a parameterized query with the filters, ordering, etc.
-
-        // This is a simplified implementation - in a real application, we would need
-        // to properly integrate with the TypeSafeQueryBuilder and generate actual SQL
-
-        // For demonstration purposes, let's simulate executing a query
-        // In a real implementation, this would execute an actual database query
-
-        // Record execution time
-        let start_time = Instant::now();
-
-        // Simulate query execution with a delay
-        std::thread::sleep(std::time::Duration::from_millis(10));
-
-        // Update metrics
-        let _execution_time = start_time.elapsed();
-        // In a real implementation, we would update self.metrics here
-
-        // Return an empty vector for now - in a real implementation, this would
-        // contain the actual query results
-        Ok(Vec::new())
+        // TODO: Implement actual query execution with TypeSafeQueryBuilder
+        Err("execute_chunk_query not yet implemented".to_string())
     }
 }
 
@@ -1096,8 +1072,8 @@ impl ComplexityAnalyzer {
     ///
     /// ```rust
     /// # // Example usage (ignored for doc tests): analyze a composer's complexity.
-    /// # use crate::functional::query_composition::ComplexityAnalyzer;
-    /// # use crate::functional::query_composition::FunctionalQueryComposer;
+    /// // use crate::query_composition::ComplexityAnalyzer;
+    /// // use crate::query_composition::FunctionalQueryComposer;
     /// # // let composer: FunctionalQueryComposer<_, _> = /* build composer */ unimplemented!();
     /// # let analyzer = ComplexityAnalyzer::new();
     /// # let _score = analyzer.analyze(&composer);
@@ -1130,8 +1106,8 @@ impl ComplexityAnalyzer {
 /// # Examples
 ///
 /// ```
-/// use crate::functional::query_builder::{Column, Operator};
-/// use crate::functional::query_composition::composable_predicate;
+/// use crate::query_builder::{Column, Operator};
+/// use crate::query_composition::composable_predicate;
 ///
 /// // Construct a column for demonstration — adjust to your Column constructor.
 /// let col = Column::new("users", "age");
@@ -1173,7 +1149,7 @@ where
 ///
 /// ```
 /// use crate::models::filters::FieldFilter;
-/// use crate::functional::query_composition::field_filter_to_composable;
+/// use crate::query_composition::field_filter_to_composable;
 ///
 /// let filter = FieldFilter {
 ///     field: "name".into(),
@@ -1182,13 +1158,13 @@ where
 /// };
 ///
 /// let comp = field_filter_to_composable(&filter, "users");
-/// let _: crate::functional::query_composition::ComposablePredicate<String> = comp;
+/// let _: crate::query_composition::ComposablePredicate<String> = comp;
 /// ```
 pub fn field_filter_to_composable(
-    filter: &crate::models::filters::FieldFilter,
+    filter: &FieldFilter,
     table_name: &str,
-) -> ComposablePredicate<String> {
-    use crate::functional::query_builder::Operator::*;
+) -> Result<ComposablePredicate<String>, String> {
+    use crate::query_builder::Operator::*;
 
     let operator = match filter.operator.as_str() {
         "equals" => Equals,
@@ -1197,20 +1173,20 @@ pub fn field_filter_to_composable(
         "lt" => LessThan,
         "gte" => GreaterThanEqual,
         "lte" => LessThanEqual,
-        _ => Equals, // Default fallback
+        unknown => return Err(format!("Unknown operator: {}", unknown)),
     };
 
     let field_name = filter.field.clone();
     let column_str = filter.field.clone();
     let column = Column::new(table_name.to_string(), column_str);
 
-    composable_predicate(
+    Ok(composable_predicate(
         column,
         operator,
         Some(filter.value.clone()),
         field_name,
         0.5, // Default selectivity
-    )
+    ))
 }
 
 #[cfg(test)]
@@ -1223,11 +1199,11 @@ mod tests {
         let data = vec![1, 2, 3, 4, 5];
         let mut iter: LazyQueryIterator<(), i32> = LazyQueryIterator::with_data(data);
 
-        assert_eq!(iter.next(), Some(1));
-        assert_eq!(iter.next(), Some(2));
-        assert_eq!(iter.next(), Some(3));
-        assert_eq!(iter.next(), Some(4));
-        assert_eq!(iter.next(), Some(5));
+        assert_eq!(iter.next(), Some(Ok(1)));
+        assert_eq!(iter.next(), Some(Ok(2)));
+        assert_eq!(iter.next(), Some(Ok(3)));
+        assert_eq!(iter.next(), Some(Ok(4)));
+        assert_eq!(iter.next(), Some(Ok(5)));
         assert_eq!(iter.next(), None);
         assert_eq!(iter.next(), None); // Should remain None
     }
@@ -1248,7 +1224,7 @@ mod tests {
         let data = vec![42];
         let mut iter: LazyQueryIterator<(), i32> = LazyQueryIterator::with_data(data);
 
-        assert_eq!(iter.next(), Some(42));
+        assert_eq!(iter.next(), Some(Ok(42)));
         assert_eq!(iter.next(), None);
     }
 
@@ -1258,7 +1234,7 @@ mod tests {
         let data = vec!["a", "b", "c"];
         let iter: LazyQueryIterator<(), &str> = LazyQueryIterator::with_data(data.clone());
 
-        let collected: Vec<&str> = iter.collect();
+        let collected: Vec<&str> = iter.map(|r| r.unwrap()).collect();
         assert_eq!(collected, data);
     }
 }

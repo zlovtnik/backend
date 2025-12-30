@@ -1,13 +1,13 @@
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::functional::query_builder::{contains, not_contains};
+    use crate::query_builder::{contains, not_contains};
     use diesel::query_builder::debug_query;
     
     #[test]
     fn test_contains_escaping() {
         // Test that special characters are properly escaped
-        let filter = crate::functional::query_builder::QueryFilter::new()
+        let filter = crate::query_builder::QueryFilter::new()
             .with_predicate(contains(
                 "tenants".to_string(),
                 "name".to_string(),
@@ -27,7 +27,7 @@ mod tests {
     #[test]
     fn test_not_contains_escaping() {
         // Test that special characters are properly escaped
-        let filter = crate::functional::query_builder::QueryFilter::new()
+        let filter = crate::query_builder::QueryFilter::new()
             .with_predicate(not_contains(
                 "tenants".to_string(),
                 "name".to_string(),

@@ -127,8 +127,7 @@ impl ValidationRule<String> for Length {
     /// assert!(rule.validate(&"hello".to_string(), "name").is_err()); // TOO_LONG
     /// ```
     fn validate(&self, value: &String, field_name: &str) -> ValidationResult<()> {
-        let len = value.len();
-
+        let len = value.chars().count();
         if let Some(min) = self.min {
             if len < min {
                 return Err(ValidationError::new(
@@ -791,7 +790,7 @@ impl<T, R: ValidationRule<T>> ValidationRule<T> for AllValidator<T, R> {
     /// # Examples
     ///
     /// ```
-    /// # use crate::validators::{all, Length, ValidationRule};
+    /// // use crate::validators::{all, Length, ValidationRule};
     /// let v = all(vec![Length { min: Some(3), max: Some(5) }]);
     /// let ok = v.validate(&"rust".to_string(), "username");
     /// assert!(ok.is_ok());
@@ -936,7 +935,7 @@ pub fn any<T, R: ValidationRule<T>>(rules: Vec<R>) -> AnyValidator<T, R> {
 /// # Examples
 ///
 /// ```
-/// # use your_crate::{Required, ValidationRule, ValidationResult};
+/// // use your_crate::{Required, ValidationRule, ValidationResult};
 /// let negated = not(Required);
 /// // Required fails for the default String (empty), so negated succeeds
 /// assert!(negated.validate(&String::new(), "name").is_ok());

@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use log;
+use rand;
 
 /// Performance metrics for functional operations
 #[derive(Debug, Clone)]
@@ -95,7 +97,8 @@ impl PerformanceMeasurement {
     /// Complete the measurement and record the results
     pub fn complete(self) {
         let duration = self.start_time.elapsed();
-        let memory_used = self.get_current_memory_usage() - self.initial_memory;
+        // Memory tracking not yet implemented
+        let memory_used = 0;
 
         self.monitor.record_operation(
             self.operation_type,
@@ -108,7 +111,8 @@ impl PerformanceMeasurement {
     /// Complete the measurement with an error
     pub fn complete_with_error(self) {
         let duration = self.start_time.elapsed();
-        let memory_used = self.get_current_memory_usage() - self.initial_memory;
+        // Memory tracking not yet implemented
+        let memory_used = 0;
 
         self.monitor.record_operation(
             self.operation_type,
@@ -116,13 +120,6 @@ impl PerformanceMeasurement {
             memory_used,
             true, // error occurred
         );
-    }
-
-    /// Get current memory usage (simplified - in production might use jemalloc or similar)
-    fn get_current_memory_usage(&self) -> u64 {
-        // In a real implementation, this would use a proper memory profiler
-        // For now, we'll estimate based on allocations
-        std::mem::size_of::<Self>() as u64
     }
 }
 
@@ -275,8 +272,6 @@ impl PerformanceMonitor {
 
         // Update operation count
         metric.operation_count += 1;
-
-        // Update timing statistics
         if prev_count == 0 {
             // First sample - set avg, min, and max to duration
             metric.avg_execution_time = duration;
@@ -284,8 +279,11 @@ impl PerformanceMonitor {
             metric.max_execution_time = duration;
         } else {
             // Rolling average: new_avg = (old_avg * prev_count + duration) / new_count
-            metric.avg_execution_time = (metric.avg_execution_time * prev_count as u32 + duration)
-                / metric.operation_count as u32;
+            // Use saturating cast to handle large counts gracefully
+            let prev_count_u32 = prev_count.min(u32::MAX as u64) as u32;
+            let new_count_u32 = metric.operation_count.min(u32::MAX as u64) as u32;
+            metric.avg_execution_time = (metric.avg_execution_time * prev_count_u32 + duration)
+                / new_count_u32;
 
             if duration < metric.min_execution_time {
                 metric.min_execution_time = duration;
@@ -457,10 +455,31 @@ pub fn get_performance_monitor() -> &'static Arc<PerformanceMonitor> {
 }
 
 /// Convenience macro for measuring functional operations
+///
+/// This macro measures the execution time and success/failure of an operation that returns a `Result`.
+/// It automatically completes the measurement on success or marks it as an error on failure.
+///
+/// # Parameters
+/// - `$operation_type`: The type of operation being measured (e.g., `OperationType::IteratorProcessing`)
+/// - `$block`: A block of code that returns a `Result<T, E>`
+///
+/// # Returns
+/// The `Result` returned by the block, with performance measurement side effects.
+///
+/// # Example
+/// ```
+/// use rcs_functional::measure_operation;
+/// use rcs_functional::performance_monitoring::OperationType;
+///
+/// let result: Result<i32, String> = measure_operation!(OperationType::IteratorProcessing, {
+///     // Some operation that returns Result
+///     Ok(42)
+/// });
+/// ```
 #[macro_export]
 macro_rules! measure_operation {
     ($operation_type:expr, $block:block) => {{
-        let monitor = $crate::functional::performance_monitoring::get_performance_monitor();
+        let monitor = $crate::performance_monitoring::get_performance_monitor();
         let measurement = monitor.start_measurement($operation_type);
 
         let result = $block;
@@ -503,24 +522,42 @@ pub trait Measurable {
 
         result
     }
-}
 
-// Implementation for iterator engine
-impl Measurable for crate::functional::iterator_engine::IteratorEngine {
+    /// Execute with performance monitoring for Result-returning operations
+    fn execute_with_monitoring_result<T, E, F>(&self, f: F) -> Result<T, E>
+    where
+        F: FnOnce() -> Result<T, E>,
+    {
+        let monitor = get_performance_monitor();
+        let measurement = monitor.start_measurement(self.operation_type());
+
+        let result = f();
+
+        if let Some(m) = measurement {
+            match &result {
+                Ok(_) => m.complete(),
+                Err(_) => m.complete_with_error(),
+            }
+        }
+
+        result
+    }
+}
+impl Measurable for crate::iterator_engine::IteratorEngine {
     fn operation_type(&self) -> OperationType {
         OperationType::IteratorChain
     }
 }
 
 // Implementation for pure function registry
-impl Measurable for crate::functional::pure_function_registry::PureFunctionRegistry {
+impl Measurable for crate::pure_function_registry::PureFunctionRegistry {
     fn operation_type(&self) -> OperationType {
         OperationType::PureFunctionCall
     }
 }
 
 // Implementation for validation engine
-// impl Measurable for crate::functional::validation_engine::ValidationEngine {
+// impl Measurable for crate::validation_engine::ValidationEngine {
 //     fn operation_type(&self) -> OperationType {
 //         OperationType::ValidationPipeline
 //     }
