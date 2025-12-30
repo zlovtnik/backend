@@ -3,8 +3,8 @@
 
 #![allow(dead_code)]
 
-use crate::functional::validation_engine::{ValidationEngine, ValidationOutcome};
-use crate::functional::validation_rules::{Email, Length, Phone, Range, Required};
+use crate::validation_engine::{ValidationEngine, ValidationOutcome};
+use crate::validation_rules::{Email, Length, Phone, Range, Required};
 use crate::models::person::PersonDTO;
 
 /// Validate a PersonDTO by applying field-specific rules and aggregating all validation errors.
@@ -19,7 +19,7 @@ use crate::models::person::PersonDTO;
 ///
 /// ```
 /// # use crate::models::person::PersonDTO;
-/// # use crate::functional::validation_integration::validate_person_dto;
+/// // use crate::validation_integration::validate_person_dto;
 /// let person = PersonDTO {
 ///     name: "Alice".into(),
 ///     gender: true,
@@ -70,6 +70,7 @@ pub fn validate_person_dto(person: &PersonDTO) -> ValidationOutcome<()> {
         }],
     );
 
+    let phone_required_result = engine.validate_field(&person.phone, "phone", vec![Required]);
     let phone_result = engine.validate_field(&person.phone, "phone", vec![Phone]);
 
     // Collect all errors
@@ -81,6 +82,7 @@ pub fn validate_person_dto(person: &PersonDTO) -> ValidationOutcome<()> {
     all_errors.extend(age_result.errors);
     all_errors.extend(address_result.errors);
     all_errors.extend(address_length_result.errors);
+    all_errors.extend(phone_required_result.errors);
     all_errors.extend(phone_result.errors);
 
     if all_errors.is_empty() {
@@ -102,7 +104,7 @@ pub fn validate_person_dto(person: &PersonDTO) -> ValidationOutcome<()> {
 ///
 /// ```
 /// # use crate::models::person::PersonDTO;
-/// # use crate::functional::validation_integration::validate_person_with_complex_rules;
+/// // use crate::validation_integration::validate_person_with_complex_rules;
 /// let person = PersonDTO {
 ///     name: "Alice".into(),
 ///     gender: false,
@@ -144,7 +146,7 @@ pub fn validate_person_with_complex_rules(person: &PersonDTO) -> ValidationOutco
 
     if !email_valid && !phone_valid {
         return ValidationOutcome::failure(vec![
-            crate::functional::validation_rules::ValidationError::new(
+            crate::validation_rules::ValidationError::new(
                 "contact",
                 "MISSING_CONTACT",
                 "Either a valid email or phone number must be provided",
@@ -169,7 +171,7 @@ pub fn validate_person_with_complex_rules(person: &PersonDTO) -> ValidationOutco
 ///
 /// ```
 /// # use crate::models::person::PersonDTO;
-/// # use crate::functional::validation_integration::validate_person_batch;
+/// // use crate::validation_integration::validate_person_batch;
 /// let people = vec![PersonDTO {
 ///     name: "Alice".into(),
 ///     gender: true,
@@ -215,13 +217,13 @@ mod tests {
             gender: true,
             age: 30,
             address: "".to_string(), // Invalid: empty address
-            phone: "invalid-phone".to_string(),
+            phone: "".to_string(),
             email: "invalid-email".to_string(), // Invalid: not an email
         };
 
         let result = validate_person_dto(&person);
         assert!(!result.is_valid);
-        assert!(result.errors.len() >= 3); // Should have multiple errors
+        assert!(result.errors.len() >= 4); // Should have multiple errors including Required for phone
     }
 
     #[test]

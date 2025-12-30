@@ -4,13 +4,8 @@
 //! functional programming test suite. It serves as a bridge between the test
 //! infrastructure and the actual functional programming components.
 
-#[cfg(test)]
 // Re-export test utilities for external use
-// Commented out to avoid import issues with integration tests
-// pub use crate::tests::functional_tests::*;
-
-// Re-export test utilities for external use
-pub use crate::functional::{iterator_engine::*, pure_function_registry::*, validation_engine::*};
+pub use crate::{iterator_engine::*, pure_function_registry::*, validation_engine::*};
 
 /// Test configuration constants
 pub const DEFAULT_TEST_TENANT: &str = "test_tenant";

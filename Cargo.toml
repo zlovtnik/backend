@@ -6,6 +6,9 @@ edition = "2021"
 rust-version = "1.86"
 build = "build.rs"
 
+[workspace]
+members = ["functional_lib"]
+
 [lib]
 name = "rcs"
 path = "src/lib.rs"
@@ -54,12 +57,15 @@ async-trait = "0.1.89"
 aes-gcm = "0.10"
 validator = { version = "0.20", features = ["derive"] }
 
+rcs-functional = { path = "functional_lib", optional = true }
+
 # XML parsing (well-formedness checks for xml_content payloads)
 quick-xml = "0.38"
 
 # OpenAPI/Swagger documentation
 utoipa = { version = "4", features = ["actix_extras", "chrono", "uuid"] }
-utoipa-swagger-ui = { version = "7", features = ["actix-web"] }
+# Enable `reqwest` feature so the build script can download Swagger UI using Rust instead of system `curl`
+utoipa-swagger-ui = { version = "7", features = ["actix-web", "reqwest"] }
 
 [dependencies.diesel]
 version = "2.2.0"
@@ -76,7 +82,7 @@ features = ["v4"]
 
 [features]
 default = ["functional", "performance_monitoring", "datetime"]  # Enable functional features by default to support refactoring
-functional = ["dep:rayon"]
+functional = ["rcs-functional"]
 performance_monitoring = []
 datetime = ["dep:chrono", "diesel/chrono"]
 

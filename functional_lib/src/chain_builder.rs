@@ -126,7 +126,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// let result = crate::functional::chain_builder::ChainBuilder::from_iter(vec![1, 2, 3].into_iter())
+    /// let result = crate::chain_builder::ChainBuilder::from_iter(vec![1, 2, 3].into_iter())
     ///     .take(2)
     ///     .collect::<Vec<_>>();
     /// assert_eq!(result, vec![1, 2]);
@@ -377,16 +377,7 @@ pub mod patterns {
     ///
     /// # Examples
     ///
-    /// ```
-    /// let out = sequential_process(vec![1, 2, 3], |x| x * 2);
-    /// assert_eq!(out, vec![2, 4, 6]);
-    /// ```
-    pub fn sequential_process<T, U>(data: Vec<T>, process_fn: impl Fn(T) -> U) -> Vec<U> {
-        // Sequential processing; parallel implementation (e.g., rayon) may be added later
-        ChainBuilder::from_vec(data).map(process_fn).collect()
-    }
 
-    /// Builds a memory-efficient pipeline that processes each element of the input vector and collects the results.
     ///
     /// Returns a `Vec<U>` containing the processed items in order.
     ///

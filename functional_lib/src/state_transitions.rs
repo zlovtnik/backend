@@ -74,6 +74,10 @@ pub fn create_user_session(
     ttl_seconds: u64,
 ) -> impl FnOnce(&TenantApplicationState) -> TenantApplicationState {
     move |state| {
+        if session_id.trim().is_empty() {
+            return state.clone();
+        }
+
         let mut new_state = state.clone();
         new_state.user_sessions = state.user_sessions.insert(
             session_id,
@@ -368,14 +372,14 @@ pub fn cache_query_result(
         });
     }
 
-    let expires_at = Utc::now() + Duration::seconds(ttl_seconds as i64);
-    let query_result = QueryResult {
-        query_id,
-        data,
-        expires_at,
-    };
-
     Ok(move |state: &TenantApplicationState| {
+        let expires_at = Utc::now() + Duration::seconds(ttl_seconds as i64);
+        let query_result = QueryResult {
+            query_id,
+            data,
+            expires_at,
+        };
+
         let mut new_state = state.clone();
         new_state.query_cache = state.query_cache.append(query_result);
         new_state.last_updated = Utc::now();
@@ -564,7 +568,7 @@ pub fn build_config_updates(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::functional::immutable_state::ImmutableStateManager;
+    use crate::immutable_state::ImmutableStateManager;
     use crate::models::tenant::Tenant;
     use std::collections::HashMap;
 

@@ -1,18 +1,6 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
-    configuration (key) {
-        #[max_length = 255]
-        key -> Varchar,
-        value -> Text,
-        #[max_length = 100]
-        category -> Nullable<Varchar>,
-        created_at -> Nullable<Timestamptz>,
-        updated_at -> Nullable<Timestamptz>,
-    }
-}
-
-diesel::table! {
     cons_sit_nfag (id) {
         id -> Int4,
         #[max_length = 36]
@@ -719,24 +707,13 @@ diesel::table! {
 }
 
 diesel::table! {
-    sessions (session_id) {
-        #[max_length = 255]
-        session_id -> Varchar,
-        #[max_length = 255]
-        user_id -> Varchar,
-        created_at -> Nullable<Timestamptz>,
-        expires_at -> Timestamptz,
-        is_valid -> Nullable<Bool>,
-    }
-}
-
-diesel::table! {
     tenants (id) {
+        #[max_length = 36]
         id -> Varchar,
         name -> Varchar,
         db_url -> Text,
-        created_at -> Nullable<Timestamptz>,
-        updated_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
     }
 }
 
@@ -775,7 +752,6 @@ diesel::joinable!(refresh_tokens -> users (user_id));
 diesel::joinable!(ret_nfag -> tenants (tenant_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
-    configuration,
     cons_sit_nfag,
     cons_stat_serv_nfag,
     evento_nfag,
@@ -802,7 +778,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     people,
     refresh_tokens,
     ret_nfag,
-    sessions,
     tenants,
     users,
 );

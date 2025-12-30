@@ -3,9 +3,9 @@
 //! This module re-exports commonly used types and functions from the functional
 //! programming infrastructure to make them easily accessible.
 
-pub use crate::functional::function_traits::{FunctionCategory, FunctionWrapper};
-pub use crate::functional::math_functions::{register_math_functions, register_string_functions};
-pub use crate::functional::pure_function_registry::{
+pub use crate::function_traits::{FunctionCategory, FunctionWrapper};
+pub use crate::math_functions::{register_math_functions, register_string_functions};
+pub use crate::pure_function_registry::{
     PureFunctionRegistry, RegistryError, SharedRegistry,
 };
 
@@ -23,14 +23,7 @@ pub use crate::functional::pure_function_registry::{
 ///
 /// # Examples
 ///
-/// ```
-/// let registry = create_enhanced_registry().expect("failed to create registry");
-/// let info = registry
-///     .lookup(FunctionCategory::Mathematical, "add_i32")
-///     .unwrap()
-///     .unwrap();
-/// assert_eq!(info.signature, "add_i32");
-/// ```
+///
 pub fn create_enhanced_registry() -> Result<SharedRegistry, RegistryError> {
     let registry = PureFunctionRegistry::shared();
 

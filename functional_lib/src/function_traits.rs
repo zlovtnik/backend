@@ -49,7 +49,7 @@ pub trait PureFunction<Input, Output>: Send + Sync + 'static {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// # use crate::{FunctionWrapper, FunctionCategory, PureFunction};
+    /// // use crate::{FunctionWrapper, FunctionCategory, PureFunction};
     /// let f = FunctionWrapper::new(|x: i32| x + 1, "inc", FunctionCategory::Mathematical);
     /// let g = FunctionWrapper::new(|x: i32| x * 2, "mul", FunctionCategory::Mathematical);
     /// let f_obj: &dyn PureFunction<i32, i32> = &f;
@@ -424,7 +424,7 @@ macro_rules! pure_function {
     ($name:ident, $input:ty, $output:ty, $category:expr, $body:expr) => {
         pub struct $name;
 
-        impl $crate::functional::function_traits::PureFunction<$input, $output> for $name {
+        impl $crate::function_traits::PureFunction<$input, $output> for $name {
             fn call(&self, input: $input) -> $output {
                 $body(input)
             }
@@ -433,7 +433,7 @@ macro_rules! pure_function {
                 stringify!($name)
             }
 
-            fn category(&self) -> $crate::functional::function_traits::FunctionCategory {
+            fn category(&self) -> $crate::function_traits::FunctionCategory {
                 $category
             }
         }
@@ -443,6 +443,6 @@ macro_rules! pure_function {
 #[macro_export]
 macro_rules! pure_closure {
     ($signature:expr, $category:expr, $closure:expr) => {
-        $crate::functional::function_traits::FunctionWrapper::new($closure, $signature, $category)
+        $crate::function_traits::FunctionWrapper::new($closure, $signature, $category)
     };
 }

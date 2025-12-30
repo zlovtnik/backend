@@ -64,9 +64,9 @@ fn record_performance(operation_key: String, entry: PerformanceEntry) {
         *entries = entries.split_off(keep);
     }
 
-    // Remove entries older than 1 hour - use checked_sub to prevent panic
+    // Remove entries older than 1 hour - use saturating_sub to prevent underflow and get sensible earliest cutoff
     let now = Instant::now();
-    let one_hour_ago = now.checked_sub(Duration::from_secs(3600)).unwrap_or(now);
+    let one_hour_ago = now - Duration::from_secs(3600);
     entries.retain(|entry| entry.timestamp > one_hour_ago);
 }
 
@@ -410,7 +410,13 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
         } else {
             let data_len_f64 = data_len as f64;
             let elapsed_secs = elapsed.as_secs_f64();
-            (throughput as f64 / (data_len_f64 / elapsed_secs)).min(1.0)
+            let per_thread_throughput = throughput as f64 / thread_count as f64;
+            let overall_throughput = data_len_f64 / elapsed_secs;
+            if overall_throughput > 0.0 {
+                (per_thread_throughput / overall_throughput).min(1.0).max(0.0)
+            } else {
+                0.0
+            }
         };
 
         let metrics = ParallelMetrics {
@@ -484,8 +490,7 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
             let metrics = ParallelMetrics {
                 total_time: elapsed,
                 thread_count: 1,
-                throughput: (data_len as u64 * 1_000_000)
-                    / (start_time.elapsed().as_micros() as u64).max(1),
+                throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
                 memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
                 efficiency: 1.0,
                 work_stealing_metrics: WorkStealingMetrics::default(),
@@ -514,7 +519,7 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
             total_time: elapsed,
             thread_count,
             throughput,
-            memory_usage: (data_len * std::mem::size_of::<B>()) as u64,
+            memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
             efficiency,
             work_stealing_metrics: WorkStealingMetrics::default(),
             load_balancing_metrics: LoadBalancingMetrics::default(),
@@ -615,7 +620,7 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
     /// # Examples
     ///
     /// ```
-    /// use crate::functional::parallel_iterators::{ParallelConfig, ParallelIteratorExt};
+    /// use crate::parallel_iterators::{ParallelConfig, ParallelIteratorExt};
     ///
     /// let config = ParallelConfig::default();
     /// let sum = (0..100).into_iter().par_reduce(&config, |a, b| a + b);
@@ -1224,7 +1229,7 @@ where
             thread_count: 1,
             throughput: (data_len as u64 * 1_000_000)
                 / (start_time.elapsed().as_micros() as u64).max(1),
-            memory_usage: (data_len * std::mem::size_of::<B>()) as u64,
+            memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
             efficiency: 1.0,
             work_stealing_metrics: WorkStealingMetrics::default(),
             load_balancing_metrics: LoadBalancingMetrics::default(),

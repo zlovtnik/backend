@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use crate::functional::validation_rules::{ValidationError, ValidationResult, ValidationRule};
+use crate::validation_rules::{ValidationError, ValidationResult, ValidationRule};
 
 /// Validation pipeline configuration
 #[derive(Debug, Clone)]
@@ -393,8 +393,8 @@ impl<T> ValidationEngine<T> {
 /// # Examples
 ///
 /// ```
-/// # use crate::functional::validation_rules::Custom;
-/// # use crate::functional::validation_engine::conditional_validate;
+/// // use crate::validation_rules::Custom;
+/// // use crate::validation_engine::conditional_validate;
 /// // A simple rule that fails for empty strings
 /// let non_empty_rule = Custom::new(|v: &String| !v.is_empty(), "EMPTY", "Value is empty");
 /// // Apply `non_empty_rule` only when the string starts with 'A'
@@ -412,7 +412,7 @@ where
     C: Fn(&T) -> bool,
     R: ValidationRule<T>,
 {
-    crate::functional::validation_rules::Custom::new(
+    crate::validation_rules::Custom::new(
         move |value: &T| {
             if condition(value) {
                 // Apply all rules and collect errors
@@ -447,13 +447,13 @@ where
 /// ```
 /// use std::vec::Vec;
 /// // Build a simple element rule that requires a non-empty string.
-/// let elem_rule = crate::functional::validation_rules::Custom::new(
+/// let elem_rule = crate::validation_rules::Custom::new(
 ///     |s: &String| !s.is_empty(),
 ///     "REQUIRED",
 ///     "must not be empty",
 /// );
 ///
-/// let rule = crate::functional::validation_engine::validate_collection(vec![elem_rule]);
+/// let rule = crate::validation_engine::validate_collection(vec![elem_rule]);
 ///
 /// let good = vec!["a".to_string(), "b".to_string()];
 /// assert!(rule.validate(&good, "items").is_ok());
@@ -465,7 +465,7 @@ pub fn validate_collection<T, R>(element_rules: Vec<R>) -> impl ValidationRule<V
 where
     R: ValidationRule<T> + Clone,
 {
-    crate::functional::validation_rules::Custom::new(
+    crate::validation_rules::Custom::new(
         move |collection: &Vec<T>| {
             // Use iterator to validate each element
             let has_errors = collection.iter().enumerate().any(|(index, item)| {
@@ -515,7 +515,7 @@ pub fn cross_field_validate<T, F>(
 where
     F: Fn(&HashMap<String, T>) -> bool,
 {
-    crate::functional::validation_rules::Custom::new(
+    crate::validation_rules::Custom::new(
         move |field_map: &HashMap<String, T>| {
             // Check if all required fields are present
             let all_present = fields.iter().all(|field| field_map.contains_key(field));
@@ -551,7 +551,7 @@ pub fn require_field_if_present<T>(
     let conditional_field_clone = conditional_field.clone();
     let required_field_clone = required_field.clone();
 
-    crate::functional::validation_rules::Custom::new(
+    crate::validation_rules::Custom::new(
         move |field_map: &HashMap<String, T>| {
             // If conditional field is present, required field must also be present
             if field_map.contains_key(&conditional_field)
@@ -581,7 +581,7 @@ pub fn require_field_if_present<T>(
 pub fn mutually_exclusive_fields<T>(fields: Vec<&str>) -> impl ValidationRule<HashMap<String, T>> {
     let fields: Vec<String> = fields.into_iter().map(|s| s.to_string()).collect();
 
-    crate::functional::validation_rules::Custom::new(
+    crate::validation_rules::Custom::new(
         move |field_map: &HashMap<String, T>| {
             let present_fields: Vec<_> = fields
                 .iter()
@@ -608,7 +608,7 @@ pub fn mutually_exclusive_fields<T>(fields: Vec<&str>) -> impl ValidationRule<Ha
 pub fn require_exactly_one_of<T>(fields: Vec<&str>) -> impl ValidationRule<HashMap<String, T>> {
     let fields: Vec<String> = fields.into_iter().map(|s| s.to_string()).collect();
 
-    crate::functional::validation_rules::Custom::new(
+    crate::validation_rules::Custom::new(
         move |field_map: &HashMap<String, T>| {
             let present_count = fields
                 .iter()
@@ -634,7 +634,7 @@ pub fn require_exactly_one_of<T>(fields: Vec<&str>) -> impl ValidationRule<HashM
 pub fn require_all_or_none<T>(fields: Vec<&str>) -> impl ValidationRule<HashMap<String, T>> {
     let fields: Vec<String> = fields.into_iter().map(|s| s.to_string()).collect();
 
-    crate::functional::validation_rules::Custom::new(
+    crate::validation_rules::Custom::new(
         move |field_map: &HashMap<String, T>| {
             let present_count = fields
                 .iter()
@@ -673,7 +673,7 @@ where
         field1, field2
     );
 
-    crate::functional::validation_rules::Custom::new(
+    crate::validation_rules::Custom::new(
         move |field_map: &HashMap<String, T>| {
             if let (Some(val1), Some(val2)) = (field_map.get(&field1), field_map.get(&field2)) {
                 comparator(val1, val2)
@@ -790,12 +790,6 @@ where
 
                         if self.config.fail_fast {
                             break;
-                        }
-
-                        if let Some(max) = self.config.max_errors {
-                            if total_errors >= max {
-                                break;
-                            }
                         }
                     }
                 }
@@ -1098,26 +1092,12 @@ where
 
 /// Returns a `ValidationEngine<T>` configured with the library's default `ValidationConfig`.
 
-///
-
+/// Creates a default ValidationEngine for type `T`.
+/// 
+/// Returns a `ValidationEngine<T>` configured with the library's default `ValidationConfig`.
+/// 
 /// # Examples
-
-///
-
-/// ```
-
-/// /// let engine = validator::<i32>();
-
-/// // default configuration applies (fail_fast = true, max_errors = Some(10), parallel_validation = false)
-
-/// assert!(engine.config.fail_fast);
-
-/// ```
-pub fn validator<T>() -> ValidationEngine<T> {
-    ValidationEngine::new()
-}
-
-/// Creates a ValidationEngine configured with the given ValidationConfig.
+/// 
 ///
 /// # Examples
 ///
@@ -1161,7 +1141,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::functional::validation_rules::{Email, Required};
+    use crate::validation_rules::{Email, Required};
     use std::collections::HashMap;
 
     // Tests using concrete types for validation rules

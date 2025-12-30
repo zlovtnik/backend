@@ -12,8 +12,8 @@ use super::pure_function_registry::{PureFunctionRegistry, RegistryError};
 /// # Examples
 ///
 /// ```
-/// use crate::functional::pure_function_registry::PureFunctionRegistry;
-/// use crate::functional::math_functions::register_math_functions;
+/// use crate::pure_function_registry::PureFunctionRegistry;
+/// use crate::math_functions::register_math_functions;
 ///
 /// let registry = PureFunctionRegistry::new();
 /// register_math_functions(&registry).unwrap();
@@ -56,9 +56,15 @@ pub fn register_math_functions(registry: &PureFunctionRegistry) -> Result<(), Re
         FunctionCategory::Mathematical,
     ))?;
 
-    // Power function (unsafe for negative b and may overflow)
+    // Power function (safe: returns None for negative exponents)
     registry.register(FunctionWrapper::new(
-        |(a, b): (i32, i32)| a.pow(b as u32),
+        |(a, b): (i32, i32)| {
+            if b < 0 {
+                None
+            } else {
+                a.checked_pow(b as u32)
+            }
+        },
         "power_i32",
         FunctionCategory::Mathematical,
     ))?;
@@ -81,7 +87,7 @@ pub fn register_math_functions(registry: &PureFunctionRegistry) -> Result<(), Re
 
     // Absolute value function
     registry.register(FunctionWrapper::new(
-        |a: i32| a.abs(),
+        |a: i32| a.checked_abs(),
         "abs_i32",
         FunctionCategory::Mathematical,
     ))?;
@@ -108,35 +114,35 @@ pub fn register_math_functions(registry: &PureFunctionRegistry) -> Result<(), Re
 pub fn register_string_functions(registry: &PureFunctionRegistry) -> Result<(), RegistryError> {
     // String length function
     registry.register(FunctionWrapper::new(
-        |s: String| s.len(),
+        |s: &str| s.len(),
         "string_length",
         FunctionCategory::StringProcessing,
     ))?;
 
     // String to uppercase
     registry.register(FunctionWrapper::new(
-        |s: String| s.to_uppercase(),
+        |s: &str| s.to_uppercase(),
         "to_uppercase",
         FunctionCategory::StringProcessing,
     ))?;
 
     // String to lowercase
     registry.register(FunctionWrapper::new(
-        |s: String| s.to_lowercase(),
+        |s: &str| s.to_lowercase(),
         "to_lowercase",
         FunctionCategory::StringProcessing,
     ))?;
 
     // String trim
     registry.register(FunctionWrapper::new(
-        |s: String| s.trim().to_string(),
+        |s: &str| s.trim().to_string(),
         "trim",
         FunctionCategory::StringProcessing,
     ))?;
 
     // String contains
     registry.register(FunctionWrapper::new(
-        |(s, pattern): (String, String)| s.contains(&pattern),
+        |(s, pattern): (&str, &str)| s.contains(pattern),
         "contains",
         FunctionCategory::StringProcessing,
     ))?;
@@ -146,20 +152,12 @@ pub fn register_string_functions(registry: &PureFunctionRegistry) -> Result<(), 
 
 /// Creates a set of common date/time processing functions and registers them
 /// with the provided registry.
-#[cfg(feature = "datetime")]
 pub fn register_datetime_functions(registry: &PureFunctionRegistry) -> Result<(), RegistryError> {
     use chrono::{DateTime, Duration, Utc};
 
-    // Current timestamp
+    // Add days to timestamp (safe: returns None on out-of-range)
     registry.register(FunctionWrapper::new(
-        |_: ()| Utc::now(),
-        "current_timestamp",
-        FunctionCategory::DateTimeProcessing,
-    ))?;
-
-    // Add days to timestamp
-    registry.register(FunctionWrapper::new(
-        |(dt, days): (DateTime<Utc>, i64)| dt + Duration::days(days),
+        |(dt, days): (DateTime<Utc>, i64)| dt.checked_add_signed(Duration::days(days)),
         "add_days",
         FunctionCategory::DateTimeProcessing,
     ))?;
