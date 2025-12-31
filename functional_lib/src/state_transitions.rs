@@ -64,7 +64,7 @@ pub struct TransitionContext {
 ///
 /// ```
 /// /// let state = TenantApplicationState::default();
-/// /// let transition = create_user_session("sess-123".to_string(), "user-42".to_string(), 3600);
+/// /// let transition = create_user_session("sess-123".to_string(), "user-42".to_string(), 3600).unwrap();
 /// /// let new_state = transition(&state);
 /// assert!(new_state.user_sessions.contains_key(&"sess-123".to_string()));
 /// ```
@@ -72,12 +72,14 @@ pub fn create_user_session(
     session_id: String,
     user_data: String,
     ttl_seconds: u64,
-) -> impl FnOnce(&TenantApplicationState) -> TenantApplicationState {
-    move |state| {
-        if session_id.trim().is_empty() {
-            return state.clone();
-        }
+) -> TransitionResult<impl FnOnce(&TenantApplicationState) -> TenantApplicationState> {
+    if session_id.trim().is_empty() {
+        return Err(TransitionError::InvalidParameters {
+            message: "Session ID cannot be empty".to_string(),
+        });
+    }
 
+    Ok(move |state: &TenantApplicationState| {
         let mut new_state = state.clone();
         new_state.user_sessions = state.user_sessions.insert(
             session_id,
@@ -89,7 +91,7 @@ pub fn create_user_session(
         new_state.last_updated = Utc::now();
 
         new_state
-    }
+    })
 }
 
 /// Create a transition that updates an existing user session.
@@ -468,7 +470,7 @@ pub fn build_login_transitions(
             session_id.clone(),
             session_data,
             session_ttl_seconds,
-        )),
+        )?),
         // Update user's last login timestamp in app data
         Box::new(
             transform_app_data(
@@ -605,7 +607,8 @@ mod tests {
             "session123".to_string(),
             "user_data_here".to_string(),
             3600, // 1 hour TTL
-        );
+        )
+        .unwrap();
 
         manager
             .apply_transition("test_tenant", |state| Ok(create_fn(state)))
@@ -624,7 +627,8 @@ mod tests {
         manager.initialize_tenant(tenant).unwrap();
 
         // First create a session
-        let create_fn = create_user_session("session123".to_string(), "old_data".to_string(), 3600);
+        let create_fn =
+            create_user_session("session123".to_string(), "old_data".to_string(), 3600).unwrap();
         manager
             .apply_transition("test_tenant", |state| Ok(create_fn(state)))
             .unwrap();
@@ -853,14 +857,14 @@ pub fn build_user_onboarding_transaction(
     user_id: String,
     session_ttl: u64,
     initial_config: HashMap<String, JsonValue>,
-) -> TransactionBuilder {
+) -> TransitionResult<TransactionBuilder> {
     let mut builder = TransactionBuilder::new();
 
     // Step 1: Create user session (checkpoint: "session_created")
     let session_id = format!("session_{}", user_id);
     builder = builder.add_transition_with_checkpoint(
         "session_created".to_string(),
-        create_user_session(session_id.clone(), user_id.clone(), session_ttl),
+        create_user_session(session_id.clone(), user_id.clone(), session_ttl)?,
     );
 
     // Step 2: Set initial configuration (checkpoint: "config_initialized")
@@ -884,7 +888,7 @@ pub fn build_user_onboarding_transaction(
             new_state
         });
 
-    builder
+    Ok(builder)
 }
 
 /// Creates a state diff transition that compares two states

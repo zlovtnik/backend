@@ -18,6 +18,7 @@ Built to solve real-world SaaS and managed platform pain points—compliance, sc
 - **🎨 Modern Frontend**: React + TypeScript with Ant Design components
 - **🐳 Production Ready**: Docker containers, health checks, monitoring
 - **📈 Built to Scale**: Connection pooling, caching, and tenant-aware routing
+- **🧩 Functional Core**: Advanced functional programming patterns via the `functional` feature (enabled by default), providing lazy pipelines, parallel iterators, and immutable state management.
 
 ## The Tech Stack
 
@@ -25,6 +26,7 @@ Built to solve real-world SaaS and managed platform pain points—compliance, sc
 
 - **Database**: PostgreSQL with Diesel ORM for type-safe queries
 - **Authentication**: JWT tokens with tenant context built-in
+- **Functional Programming**: `rcs-functional` library for pure functions, iterator chains, and parallel processing.
 - **Caching**: Redis for sessions and performance
 - **Connection Pooling**: r2d2 for efficient database connections
 - **Logging**: Structured logging via `tracing` with real-time WebSocket streaming and optional JSON output
@@ -68,6 +70,21 @@ Tenants share a single PostgreSQL database with per-tenant schemas for isolation
 - **Compliance Ready**: Meets strict data isolation requirements with shared infrastructure
 - **Performance**: Single database connection pool with schema routing
 - **Simple**: JWT tokens handle schema routing automatically
+
+## Features
+
+The project uses feature flags to manage optional functionality:
+
+| Feature | Description | Default |
+|---------|-------------|---------|
+| `functional` | Enables advanced functional programming capabilities (lazy pipelines, parallel iterators, etc.) | Yes |
+| `performance_monitoring` | Enables detailed metrics collection for functional pipelines | Yes |
+| `datetime` | Enables Chrono integration for date/time handling | Yes |
+
+To disable functional features for a smaller binary:
+```bash
+cargo build --no-default-features --features datetime
+```
 
 ## Current Status
 

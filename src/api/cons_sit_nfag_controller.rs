@@ -5,7 +5,10 @@ use validator::Validate;
 use crate::{
     config::db::Pool,
     error::ServiceError,
-    models::cons_sit_nfag::{ConsSitNfag, CreateConsSitNfagRequest, NewConsSitNfag, UpdateConsSitNfag, UpdateConsSitNfagRequest},
+    models::cons_sit_nfag::{
+        ConsSitNfag, CreateConsSitNfagRequest, NewConsSitNfag, UpdateConsSitNfag,
+        UpdateConsSitNfagRequest,
+    },
     types::TenantId,
 };
 
@@ -23,14 +26,11 @@ fn extract_pool(req: &HttpRequest) -> Result<Pool, ServiceError> {
 
 /// Extract tenant ID from request extensions.
 fn extract_tenant_id(req: &HttpRequest) -> Result<TenantId, ServiceError> {
-    req.extensions()
-        .get::<TenantId>()
-        .cloned()
-        .ok_or_else(|| {
-            ServiceError::unauthorized("Tenant not found")
-                .with_detail("Missing tenant ID in request extensions")
-                .with_tag("tenant")
-        })
+    req.extensions().get::<TenantId>().cloned().ok_or_else(|| {
+        ServiceError::unauthorized("Tenant not found")
+            .with_detail("Missing tenant ID in request extensions")
+            .with_tag("tenant")
+    })
 }
 
 /// Create a new ConsSitNfag
@@ -123,11 +123,14 @@ pub async fn find_all(
             .with_tag("database")
     })?;
 
-    let cons_sit_nfags = ConsSitNfag::find_all_by_tenant(tenant_id.as_str(), limit, offset, &mut conn).map_err(|e| {
-        ServiceError::internal_server_error("Failed to fetch ConsSitNfag records")
-            .with_detail(e.to_string())
-            .with_tag("database")
-    })?;
+    let cons_sit_nfags =
+        ConsSitNfag::find_all_by_tenant(tenant_id.as_str(), limit, offset, &mut conn).map_err(
+            |e| {
+                ServiceError::internal_server_error("Failed to fetch ConsSitNfag records")
+                    .with_detail(e.to_string())
+                    .with_tag("database")
+            },
+        )?;
 
     let total = ConsSitNfag::count_by_tenant(tenant_id.as_str(), &mut conn).map_err(|e| {
         ServiceError::internal_server_error("Failed to count ConsSitNfag records")
@@ -174,11 +177,12 @@ pub async fn find_by_id(
             .with_tag("database")
     })?;
 
-    let cons_sit_nfag = ConsSitNfag::find_by_id_and_tenant(id, tenant_id.as_str(), &mut conn).map_err(|e| {
-        ServiceError::not_found("ConsSitNfag not found")
-            .with_detail(e.to_string())
-            .with_tag("database")
-    })?;
+    let cons_sit_nfag = ConsSitNfag::find_by_id_and_tenant(id, tenant_id.as_str(), &mut conn)
+        .map_err(|e| {
+            ServiceError::not_found("ConsSitNfag not found")
+                .with_detail(e.to_string())
+                .with_tag("database")
+        })?;
 
     Ok(HttpResponse::Ok().json(json!({
         "message": "ConsSitNfag retrieved successfully",
@@ -223,11 +227,13 @@ pub async fn update(
 
     let update_dto: UpdateConsSitNfag = dto.into_inner().into();
 
-    let cons_sit_nfag = ConsSitNfag::update_by_id_and_tenant(id, tenant_id.as_str(), update_dto, &mut conn).map_err(|e| {
-        ServiceError::not_found("ConsSitNfag not found or update failed")
-            .with_detail(e.to_string())
-            .with_tag("database")
-    })?;
+    let cons_sit_nfag =
+        ConsSitNfag::update_by_id_and_tenant(id, tenant_id.as_str(), update_dto, &mut conn)
+            .map_err(|e| {
+                ServiceError::not_found("ConsSitNfag not found or update failed")
+                    .with_detail(e.to_string())
+                    .with_tag("database")
+            })?;
 
     Ok(HttpResponse::Ok().json(json!({
         "message": "ConsSitNfag updated successfully",
@@ -248,10 +254,7 @@ pub async fn update(
     ),
     tag = "cons-sit-nfag"
 )]
-pub async fn delete(
-    path: web::Path<i32>,
-    req: HttpRequest,
-) -> Result<HttpResponse, ServiceError> {
+pub async fn delete(path: web::Path<i32>, req: HttpRequest) -> Result<HttpResponse, ServiceError> {
     let id = path.into_inner();
     let pool = extract_pool(&req)?;
     let tenant_id = extract_tenant_id(&req)?;
@@ -262,15 +265,15 @@ pub async fn delete(
             .with_tag("database")
     })?;
 
-    let deleted_count = ConsSitNfag::delete_by_id_and_tenant(id, tenant_id.as_str(), &mut conn).map_err(|e| {
-        ServiceError::internal_server_error("Failed to delete ConsSitNfag")
-            .with_detail(e.to_string())
-            .with_tag("database")
-    })?;
+    let deleted_count = ConsSitNfag::delete_by_id_and_tenant(id, tenant_id.as_str(), &mut conn)
+        .map_err(|e| {
+            ServiceError::internal_server_error("Failed to delete ConsSitNfag")
+                .with_detail(e.to_string())
+                .with_tag("database")
+        })?;
 
     if deleted_count == 0 {
-        return Err(ServiceError::not_found("ConsSitNfag not found")
-            .with_tag("not_found"));
+        return Err(ServiceError::not_found("ConsSitNfag not found").with_tag("not_found"));
     }
 
     Ok(HttpResponse::Ok().json(json!({

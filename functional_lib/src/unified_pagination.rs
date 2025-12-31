@@ -34,17 +34,30 @@ use rand::RngCore;
 use std::fmt;
 
 static CURSOR_KEY: Lazy<Result<Key<Aes256Gcm>, CursorError>> =
-    Lazy::new(|| match std::env::var("CURSOR_ENCRYPTION_KEY") {
-        Ok(key_b64) => {
-            let key_bytes = general_purpose::STANDARD.decode(&key_b64).map_err(|e| CursorError::KeyLoad(format!("Base64 decode failed: {}", e)))?;
-            if key_bytes.len() != 32 {
-                return Err(CursorError::KeyLoad("Key must be 32 bytes".to_string()));
+    Lazy::new(|| {
+        let key_b64 = std::env::var("CURSOR_ENCRYPTION_KEY").ok();
+        
+        let final_key_b64 = match key_b64 {
+            Some(k) => k,
+            None => {
+                // Fallback for tests if env var is missing
+                if cfg!(test) {
+                    "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=".to_string()
+                } else {
+                    return Err(CursorError::KeyLoad(
+                        "CURSOR_ENCRYPTION_KEY not set".to_string(),
+                    ));
+                }
             }
-            Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes))
+        };
+
+        let key_bytes = general_purpose::STANDARD
+            .decode(&final_key_b64)
+            .map_err(|e| CursorError::KeyLoad(format!("Base64 decode failed: {}", e)))?;
+        if key_bytes.len() != 32 {
+            return Err(CursorError::KeyLoad("Key must be 32 bytes".to_string()));
         }
-        Err(_) => Err(CursorError::KeyLoad(
-            "CURSOR_ENCRYPTION_KEY not set".to_string(),
-        )),
+        Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes))
     });
 
 /// Represents a cursor that can be serialized and deserialized
@@ -143,7 +156,9 @@ pub mod cursor_encoding {
         let cipher = Aes256Gcm::new(key);
 
         // Base64 decode
-        let combined = general_purpose::URL_SAFE_NO_PAD.decode(encoded).map_err(CursorError::Base64Decode)?;
+        let combined = general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(CursorError::Base64Decode)?;
 
         if combined.len() < 12 + 16 {
             // nonce + min tag
@@ -313,11 +328,9 @@ impl<T: Into<i64> + TryFrom<i64> + Clone + fmt::Debug + Send + Sync> IdCursor<T>
     }
 }
 
-impl<T: Into<i64> + TryFrom<i64> + Clone + fmt::Debug + fmt::Display + Send + Sync> Cursor
-    for IdCursor<T>
-{
+impl<T: Into<i64> + TryFrom<i64> + Clone + fmt::Debug + Send + Sync> Cursor for IdCursor<T> {
     fn encode(&self) -> Result<String, CursorError> {
-        let data = format!("id:{}", self.id().into());
+        let data = format!("id:{}:{}", self.id().into(), self.start_value);
         cursor_encoding::encode_opaque(&data)
     }
 
@@ -325,15 +338,18 @@ impl<T: Into<i64> + TryFrom<i64> + Clone + fmt::Debug + fmt::Display + Send + Sy
         let decoded = cursor_encoding::decode_opaque(encoded)?;
 
         let parts: Vec<&str> = decoded.split(':').collect();
-        if parts.len() != 2 || parts[0] != "id" {
+        if parts.len() != 3 || parts[0] != "id" {
             return Err(CursorError::InvalidFormat(decoded));
         }
 
         let id: i64 = parts[1]
             .parse()
             .map_err(|_| CursorError::InvalidFormat(decoded.clone()))?;
+        let start_value: i64 = parts[2]
+            .parse()
+            .map_err(|_| CursorError::InvalidFormat(decoded.clone()))?;
         let id_converted = T::try_from(id).map_err(|_| CursorError::OutOfRange(decoded))?;
-        Ok(Self::with_start_value(id_converted, 0)) // Default start value is 0
+        Ok(Self::with_start_value(id_converted, start_value))
     }
 
     fn next(&self) -> Option<Self> {
@@ -506,23 +522,8 @@ mod tests {
 
     static INIT: Once = Once::new();
 
-    fn init_test_key() {
-        INIT.call_once(|| {
-            if env::var("CURSOR_ENCRYPTION_KEY").is_err() {
-                // WARNING: Test-only key - DO NOT USE IN PRODUCTION
-                // This is a base64-encoded 32-byte key for unit tests only.
-                // Production deployments must use a securely generated 32-byte key.
-                env::set_var(
-                    "CURSOR_ENCRYPTION_KEY",
-                    "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
-                );
-            }
-        });
-    }
-
     #[test]
     fn test_id_cursor_encoding() {
-        init_test_key();
         let cursor = IdCursor::new(42i32);
         let encoded = cursor.encode().unwrap();
 
@@ -536,7 +537,6 @@ mod tests {
 
     #[test]
     fn test_page_cursor_encoding() {
-        init_test_key();
         let cursor = PageCursor::new(10);
         let encoded = cursor.encode().unwrap();
 
@@ -562,7 +562,6 @@ mod tests {
 
     #[test]
     fn test_invalid_cursor_decoding() {
-        init_test_key();
         // Test invalid base64
         assert!(IdCursor::<i32>::decode("invalid-base64!").is_err());
 
@@ -576,7 +575,6 @@ mod tests {
 
     #[test]
     fn test_cursor_validation() {
-        init_test_key();
         let cursor = PageCursor::new(5);
         let encoded = cursor.encode().unwrap();
 
@@ -597,7 +595,6 @@ mod tests {
 
     #[test]
     fn test_cursor_format_validation() {
-        init_test_key();
         let valid_cursor = PageCursor::new(1).encode().unwrap();
         assert!(cursor_encoding::validate_cursor_format(&valid_cursor));
 
@@ -607,15 +604,13 @@ mod tests {
 
     #[test]
     fn test_id_cursor_with_start_value_round_trip() {
-        init_test_key();
-
         let cursor = IdCursor::with_start_value(42i32, 1);
         let encoded = cursor.encode().unwrap();
         let decoded = IdCursor::<i32>::decode(&encoded).unwrap();
 
         assert_eq!(decoded.id(), 42);
-        // Note: start_value is not preserved during encode/decode - it defaults to 0
-        assert_eq!(decoded.start_value(), 0);
+        // Note: start_value IS preserved during encode/decode
+        assert_eq!(decoded.start_value(), 1);
         assert!(!decoded.is_start());
 
         let start_cursor = IdCursor::with_start_value(1i32, 1);

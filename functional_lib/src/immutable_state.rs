@@ -928,7 +928,10 @@ impl ImmutableStateManager {
     /// ```
     pub fn remove_tenant(&self, tenant_id: &str) -> Result<(), String> {
         let mut states = self.tenant_states.write().map_err(|_| "Lock poisoned")?;
-        let mut histories = self.snapshot_histories.write().map_err(|_| "Lock poisoned")?;
+        let mut histories = self
+            .snapshot_histories
+            .write()
+            .map_err(|_| "Lock poisoned")?;
         states.remove(tenant_id);
         histories.remove(tenant_id);
         Ok(())
@@ -977,10 +980,8 @@ impl ImmutableStateManager {
     where
         F: FnOnce(
             &TenantApplicationState,
-        ) -> Result<
-            TenantApplicationState,
-            crate::state_transitions::TransitionError,
-        >,
+        )
+            -> Result<TenantApplicationState, crate::state_transitions::TransitionError>,
     {
         let start = Instant::now();
 
@@ -1462,10 +1463,8 @@ impl ImmutableStateManager {
     where
         F: FnOnce(
             &TenantApplicationState,
-        ) -> Result<
-            TenantApplicationState,
-            crate::state_transitions::TransitionError,
-        >,
+        )
+            -> Result<TenantApplicationState, crate::state_transitions::TransitionError>,
     {
         // Create snapshot before transition
         let snapshot_id = self.create_snapshot(
@@ -1786,7 +1785,7 @@ mod tests {
     #[test]
     fn test_tenant_isolation_comprehensive() {
         let manager = ImmutableStateManager::new(100);
-        
+
         // Initialize all tenants that will be used
         for i in 0..5 {
             let tenant = create_test_tenant(&format!("tenant_{}", i));
@@ -2284,12 +2283,14 @@ mod tests {
                     vec!["auto".to_string()],
                 )
                 .unwrap();
+        }
         // Verify auto snapshot retention limit is enforced
         let count = manager.snapshot_count("retention_test").unwrap();
-        assert!(count <= 3, "Snapshot count {} exceeds max_auto_snapshots limit of 3", count);
-    }
-        let count = manager.snapshot_count("retention_test").unwrap();
-        assert!(count <= 10); // Verify snapshots were created
+        assert!(
+            count <= 3,
+            "Snapshot count {} exceeds max_auto_snapshots limit of 3",
+            count
+        );
     }
 
     #[test]
@@ -2463,8 +2464,16 @@ mod tests {
         }
 
         // Count automatic snapshots (should be <= 2)
-        let auto_count = history.snapshots.iter().filter(|s| s.name.is_none()).count();
-        assert!(auto_count <= 2, "Auto snapshots count {} exceeds limit of 2", auto_count);
+        let auto_count = history
+            .snapshots
+            .iter()
+            .filter(|s| s.name.is_none())
+            .count();
+        assert!(
+            auto_count <= 2,
+            "Auto snapshots count {} exceeds limit of 2",
+            auto_count
+        );
     }
 
     #[test]
@@ -2486,8 +2495,16 @@ mod tests {
         }
 
         // Count named snapshots (should be <= 2)
-        let named_count = history.snapshots.iter().filter(|s| s.name.is_some()).count();
-        assert!(named_count <= 2, "Named snapshots count {} exceeds limit of 2", named_count);
+        let named_count = history
+            .snapshots
+            .iter()
+            .filter(|s| s.name.is_some())
+            .count();
+        assert!(
+            named_count <= 2,
+            "Named snapshots count {} exceeds limit of 2",
+            named_count
+        );
     }
 
     #[test]
@@ -2521,11 +2538,30 @@ mod tests {
         }
 
         // Verify total snapshots respect the limits
-        let auto_count = history.snapshots.iter().filter(|s| s.name.is_none()).count();
-        let named_count = history.snapshots.iter().filter(|s| s.name.is_some()).count();
+        let auto_count = history
+            .snapshots
+            .iter()
+            .filter(|s| s.name.is_none())
+            .count();
+        let named_count = history
+            .snapshots
+            .iter()
+            .filter(|s| s.name.is_some())
+            .count();
 
-        assert!(auto_count <= 2, "Auto snapshots {} exceeds limit", auto_count);
-        assert!(named_count <= 2, "Named snapshots {} exceeds limit", named_count);
-        assert!(auto_count + named_count <= 4, "Total snapshots exceeds limits");
+        assert!(
+            auto_count <= 2,
+            "Auto snapshots {} exceeds limit",
+            auto_count
+        );
+        assert!(
+            named_count <= 2,
+            "Named snapshots {} exceeds limit",
+            named_count
+        );
+        assert!(
+            auto_count + named_count <= 4,
+            "Total snapshots exceeds limits"
+        );
     }
 }

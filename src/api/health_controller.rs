@@ -44,6 +44,7 @@ struct HealthResponse {
     timestamp: String,
     components: HealthStatus,
     tenants: Option<Vec<TenantHealth>>,
+    #[cfg(feature = "functional")]
     performance: Option<PerformanceHealthSummary>,
 }
 
@@ -159,6 +160,7 @@ async fn health(
             cache: cache_status,
         },
         tenants: None,
+        #[cfg(feature = "functional")]
         performance: None,
     };
 
@@ -277,6 +279,7 @@ async fn health_detailed(
     };
 
     // Get performance monitoring health summary
+    #[cfg(feature = "functional")]
     let performance_summary = get_performance_monitor().get_health_summary();
 
     let response = HealthResponse {
@@ -287,6 +290,7 @@ async fn health_detailed(
             cache: cache_status,
         },
         tenants,
+        #[cfg(feature = "functional")]
         performance: Some(performance_summary),
     };
 
@@ -591,218 +595,6 @@ async fn performance_metrics(_req: HttpRequest) -> Result<HttpResponse, ServiceE
     )))
 }
 
-/// # Backward Compatibility Validation Endpoint
-///
-/// Runs a comprehensive backward compatibility test suite to ensure that functional programming
-/// enhancements do not break existing API functionality, JWT authentication, multi-tenant
-/// isolation, or frontend integration.
-///
-/// ## Query Parameters
-///
-/// - `run_tests`: Execute the full test suite (default: false for safety)
-/// - `test_category`: Run specific test category (api, auth, tenant, database, frontend)
-/// - `include_performance`: Include performance regression tests
-///
-/// ## Example Usage
-///
-/// ```bash
-/// # Get test configuration (safe, read-only)
-/// GET /api/health/compatibility
-///
-/// # Run specific test category
-/// GET /api/health/compatibility?run_tests=true&test_category=api
-///
-/// # Run full test suite including performance tests
-/// GET /api/health/compatibility?run_tests=true&include_performance=true
-/// ```
-///
-/// ## Response Format
-///
-/// Returns test results with pass/fail status, detailed breakdown by category,
-/// and recommendations for any issues found.
-#[get("/health/compatibility")]
-pub async fn backward_compatibility_validation(
-    _req: HttpRequest,
-    query: web::Query<std::collections::HashMap<String, String>>,
-) -> Result<HttpResponse, ServiceError> {
-    info!("Backward compatibility validation endpoint called");
-
-    #[cfg(feature = "functional")]
-    {
-        use crate::functional::backward_compatibility::{
-            BackwardCompatibilityValidator, CompatibilityTestConfig,
-        };
-
-        // Parse query parameters
-        let run_tests = query.get("run_tests").map(|s| s == "true").unwrap_or(false);
-        let test_category = query.get("test_category").cloned();
-        let include_performance = query
-            .get("include_performance")
-            .map(|s| s == "true")
-            .unwrap_or(true);
-
-        if !run_tests {
-            // Return configuration info without running tests
-            let config_info = serde_json::json!({
-                "status": "Ready to run tests",
-                "available_tests": ["api_endpoints", "jwt_authentication", "multi_tenant_isolation", "database_operations", "frontend_integration", "performance_regression"],
-                "usage": {
-                    "run_tests": "Set to 'true' to execute all tests",
-                    "test_category": "Specify category to run only that test (optional)",
-                    "include_performance": "Set to 'false' to skip performance tests (default: true)"
-                },
-                "note": "Running tests may create test data and affect performance metrics"
-            });
-
-            return Ok(
-                HttpResponse::Ok().json(ResponseBody::new(constants::MESSAGE_OK, config_info))
-            );
-        }
-
-        // Create validator with default config
-        let config = CompatibilityTestConfig::default();
-        let validator = BackwardCompatibilityValidator::new(config);
-
-        // Run appropriate tests based on parameters
-        let results = if let Some(category) = test_category {
-            match category.as_str() {
-                "api_endpoints" => {
-                    let mut results = crate::functional::backward_compatibility::CompatibilityTestResults::default();
-                    match validator.test_api_endpoints().await {
-                        Ok(_) => results.api_endpoints_passed = 5,
-                        Err(e) => {
-                            results.api_endpoints_failed = 5;
-                            results.failed_tests.push(format!("API endpoints: {}", e));
-                        }
-                    }
-                    results.overall_compatibility = validator.calculate_overall_status(&results);
-                    results
-                }
-                "jwt_authentication" => {
-                    let mut results = crate::functional::backward_compatibility::CompatibilityTestResults::default();
-                    match validator.test_jwt_authentication().await {
-                        Ok(_) => results.auth_tests_passed = 3,
-                        Err(e) => {
-                            results.auth_tests_failed = 3;
-                            results
-                                .failed_tests
-                                .push(format!("JWT authentication: {}", e));
-                        }
-                    }
-                    results.overall_compatibility = validator.calculate_overall_status(&results);
-                    results
-                }
-                "multi_tenant_isolation" => {
-                    let mut results = crate::functional::backward_compatibility::CompatibilityTestResults::default();
-                    match validator.test_multi_tenant_isolation().await {
-                        Ok(_) => results.tenant_isolation_passed = 2,
-                        Err(e) => {
-                            results.tenant_isolation_failed = 2;
-                            results
-                                .failed_tests
-                                .push(format!("Multi-tenant isolation: {}", e));
-                        }
-                    }
-                    results.overall_compatibility = validator.calculate_overall_status(&results);
-                    results
-                }
-                "database_operations" => {
-                    let mut results = crate::functional::backward_compatibility::CompatibilityTestResults::default();
-                    match validator.test_database_operations().await {
-                        Ok(_) => results.database_tests_passed = 3,
-                        Err(e) => {
-                            results.database_tests_failed = 3;
-                            results
-                                .failed_tests
-                                .push(format!("Database operations: {}", e));
-                        }
-                    }
-                    results.overall_compatibility = validator.calculate_overall_status(&results);
-                    results
-                }
-                "frontend_integration" => {
-                    let mut results = crate::functional::backward_compatibility::CompatibilityTestResults::default();
-                    match validator.test_frontend_integration().await {
-                        Ok(_) => results.frontend_compatibility_passed = 3,
-                        Err(e) => {
-                            results.frontend_compatibility_failed = 3;
-                            results
-                                .failed_tests
-                                .push(format!("Frontend integration: {}", e));
-                        }
-                    }
-                    results.overall_compatibility = validator.calculate_overall_status(&results);
-                    results
-                }
-                "performance_regression" if include_performance => {
-                    let mut results = crate::functional::backward_compatibility::CompatibilityTestResults::default();
-                    match validator.test_performance_regression().await {
-                        Ok(regressions) => results.performance_regressions = regressions,
-                        Err(e) => {
-                            results
-                                .failed_tests
-                                .push(format!("Performance regression: {}", e));
-                        }
-                    }
-                    results.overall_compatibility = validator.calculate_overall_status(&results);
-                    results
-                }
-                _ => {
-                    return Err(ServiceError::bad_request(format!(
-                        "Unknown test category: {}",
-                        category
-                    ))
-                    .with_tag("validation"));
-                }
-            }
-        } else {
-            // Run full test suite
-            let mut results = validator.run_full_compatibility_suite().await;
-            if !include_performance {
-                results.performance_regressions.clear();
-                results.overall_compatibility = validator.calculate_overall_status(&results);
-            }
-            results
-        };
-
-        // Generate report
-        let report =
-            crate::functional::backward_compatibility::generate_compatibility_report(&results);
-
-        let response_data = serde_json::json!({
-            "compatibility_status": results.overall_compatibility,
-            "test_summary": {
-                "api_endpoints": format!("{} passed, {} failed", results.api_endpoints_passed, results.api_endpoints_failed),
-                "authentication": format!("{} passed, {} failed", results.auth_tests_passed, results.auth_tests_failed),
-                "tenant_isolation": format!("{} passed, {} failed", results.tenant_isolation_passed, results.tenant_isolation_failed),
-                "database_operations": format!("{} passed, {} failed", results.database_tests_passed, results.database_tests_failed),
-                "frontend_compatibility": format!("{} passed, {} failed", results.frontend_compatibility_passed, results.frontend_compatibility_failed),
-                "performance_regressions": results.performance_regressions.len()
-            },
-            "failed_tests": results.failed_tests,
-            "performance_regressions": results.performance_regressions,
-            "full_report": report,
-            "timestamp": chrono::Utc::now().to_rfc3339()
-        });
-
-        Ok(HttpResponse::Ok().json(ResponseBody::new(constants::MESSAGE_OK, response_data)))
-    }
-
-    #[cfg(not(feature = "functional"))]
-    {
-        let error_data = serde_json::json!({
-            "error": "Backward compatibility testing not available",
-            "reason": "Functional programming features not enabled",
-            "solution": "Enable the 'functional' feature flag to access compatibility testing"
-        });
-
-        Ok(HttpResponse::ServiceUnavailable().json(ResponseBody::new(
-            "Backward compatibility testing not enabled in this build",
-            error_data,
-        )))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     //! Integration tests for health and logging endpoints.
@@ -949,9 +741,7 @@ mod tests {
             "application/json"
         );
 
-        let body_bytes = actix_web::body::to_bytes(resp.into_body())
-            .await
-            .unwrap();
+        let body_bytes = actix_web::body::to_bytes(resp.into_body()).await.unwrap();
         let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
 
         // Verify JSON contains expected fields

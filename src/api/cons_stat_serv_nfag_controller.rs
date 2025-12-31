@@ -5,7 +5,10 @@ use validator::Validate;
 use crate::{
     config::db::Pool,
     error::ServiceError,
-    models::cons_stat_serv_nfag::{ConsStatServNfag, CreateConsStatServNfagRequest, NewConsStatServNfag, UpdateConsStatServNfag, UpdateConsStatServNfagRequest},
+    models::cons_stat_serv_nfag::{
+        ConsStatServNfag, CreateConsStatServNfagRequest, NewConsStatServNfag,
+        UpdateConsStatServNfag, UpdateConsStatServNfagRequest,
+    },
     types::TenantId,
 };
 
@@ -70,11 +73,12 @@ pub async fn create(
         xmotivo: None,
     };
 
-    let cons_stat_serv_nfag = ConsStatServNfag::create(new_cons_stat_serv_nfag, &mut conn).map_err(|e| {
-        ServiceError::internal_server_error("Failed to create ConsStatServNfag")
-            .with_detail(e.to_string())
-            .with_tag("database")
-    })?;
+    let cons_stat_serv_nfag = ConsStatServNfag::create(new_cons_stat_serv_nfag, &mut conn)
+        .map_err(|e| {
+            ServiceError::internal_server_error("Failed to create ConsStatServNfag")
+                .with_detail(e.to_string())
+                .with_tag("database")
+        })?;
 
     Ok(HttpResponse::Created().json(json!({
         "message": "ConsStatServNfag created successfully",
@@ -120,7 +124,10 @@ pub async fn find_all(
             .with_tag("database")
     })?;
 
-    let cons_stat_serv_nfags = ConsStatServNfag::find_all_by_tenant(&tenant_id, limit, offset, &mut conn).map_err(|e| {
+    let cons_stat_serv_nfags = ConsStatServNfag::find_all_by_tenant(
+        &tenant_id, limit, offset, &mut conn,
+    )
+    .map_err(|e| {
         ServiceError::internal_server_error("Failed to fetch ConsStatServNfag records")
             .with_detail(e.to_string())
             .with_tag("database")
@@ -171,16 +178,17 @@ pub async fn find_by_id(
             .with_tag("database")
     })?;
 
-    let cons_stat_serv_nfag = ConsStatServNfag::find_by_id_and_tenant(id, &tenant_id, &mut conn).map_err(|e| match e {
-        diesel::result::Error::NotFound => {
-            ServiceError::not_found("ConsStatServNfag not found")
+    let cons_stat_serv_nfag = ConsStatServNfag::find_by_id_and_tenant(id, &tenant_id, &mut conn)
+        .map_err(|e| match e {
+            diesel::result::Error::NotFound => {
+                ServiceError::not_found("ConsStatServNfag not found")
+                    .with_detail(e.to_string())
+                    .with_tag("not_found")
+            }
+            _ => ServiceError::internal_server_error("Database error")
                 .with_detail(e.to_string())
-                .with_tag("not_found")
-        }
-        _ => ServiceError::internal_server_error("Database error")
-            .with_detail(e.to_string())
-            .with_tag("database")
-    })?;
+                .with_tag("database"),
+        })?;
 
     Ok(HttpResponse::Ok().json(json!({
         "message": "ConsStatServNfag retrieved successfully",
@@ -230,15 +238,16 @@ pub async fn update(
         updated_at: Some(chrono::Utc::now()),
     };
 
-    let cons_stat_serv_nfag = ConsStatServNfag::update_by_id_and_tenant(id, &tenant_id, update_dto, &mut conn).map_err(|e| match e {
-        diesel::result::Error::NotFound => {
-            ServiceError::not_found("ConsStatServNfag not found")
-                .with_detail(e.to_string())
-                .with_tag("database")
-        }
+    let cons_stat_serv_nfag = ConsStatServNfag::update_by_id_and_tenant(
+        id, &tenant_id, update_dto, &mut conn,
+    )
+    .map_err(|e| match e {
+        diesel::result::Error::NotFound => ServiceError::not_found("ConsStatServNfag not found")
+            .with_detail(e.to_string())
+            .with_tag("database"),
         _ => ServiceError::internal_server_error("Failed to update ConsStatServNfag")
             .with_detail(e.to_string())
-            .with_tag("database")
+            .with_tag("database"),
     })?;
 
     Ok(HttpResponse::Ok().json(json!({
@@ -260,10 +269,7 @@ pub async fn update(
     ),
     tag = "cons-stat-serv-nfag"
 )]
-pub async fn delete(
-    path: web::Path<i32>,
-    req: HttpRequest,
-) -> Result<HttpResponse, ServiceError> {
+pub async fn delete(path: web::Path<i32>, req: HttpRequest) -> Result<HttpResponse, ServiceError> {
     let id = path.into_inner();
     let pool = extract_pool(&req)?;
     let tenant_id = extract_tenant_id(&req)?;
@@ -274,15 +280,15 @@ pub async fn delete(
             .with_tag("database")
     })?;
 
-    let deleted_count = ConsStatServNfag::delete_by_id_and_tenant(id, &tenant_id, &mut conn).map_err(|e| {
-        ServiceError::internal_server_error("Failed to delete ConsStatServNfag")
-            .with_detail(e.to_string())
-            .with_tag("database")
-    })?;
+    let deleted_count = ConsStatServNfag::delete_by_id_and_tenant(id, &tenant_id, &mut conn)
+        .map_err(|e| {
+            ServiceError::internal_server_error("Failed to delete ConsStatServNfag")
+                .with_detail(e.to_string())
+                .with_tag("database")
+        })?;
 
     if deleted_count == 0 {
-        return Err(ServiceError::not_found("ConsStatServNfag not found")
-            .with_tag("not_found"));
+        return Err(ServiceError::not_found("ConsStatServNfag not found").with_tag("not_found"));
     }
 
     Ok(HttpResponse::Ok().json(json!({

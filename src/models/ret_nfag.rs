@@ -1,7 +1,7 @@
 use crate::schema::*;
+use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 use utoipa::ToSchema;
 use validator::Validate;
 
@@ -139,7 +139,7 @@ impl RetNfag {
         diesel::update(
             ret_nfag::table
                 .filter(ret_nfag::id.eq(id_))
-                .filter(ret_nfag::tenant_id.eq(tenant_id_))
+                .filter(ret_nfag::tenant_id.eq(tenant_id_)),
         )
         .set(&dto)
         .get_result(conn)
@@ -154,7 +154,7 @@ impl RetNfag {
         diesel::delete(
             ret_nfag::table
                 .filter(ret_nfag::id.eq(id_))
-                .filter(ret_nfag::tenant_id.eq(tenant_id_))
+                .filter(ret_nfag::tenant_id.eq(tenant_id_)),
         )
         .execute(conn)
     }

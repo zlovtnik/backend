@@ -1,8 +1,8 @@
 use crate::models::nfag::Nfag;
 use crate::schema::*;
+use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum TaxIdentifier {
@@ -93,9 +93,18 @@ impl TryFrom<NfagDest> for NfagDestDto {
 
     fn try_from(dest: NfagDest) -> Result<Self, Self::Error> {
         let identifier = match dest.identifier() {
-            Some(TaxIdentifier::Cnpj(value)) => TaxIdentifierDto { r#type: "cnpj".to_string(), value },
-            Some(TaxIdentifier::Cpf(value)) => TaxIdentifierDto { r#type: "cpf".to_string(), value },
-            Some(TaxIdentifier::Idestrangeiro(value)) => TaxIdentifierDto { r#type: "idestrangeiro".to_string(), value },
+            Some(TaxIdentifier::Cnpj(value)) => TaxIdentifierDto {
+                r#type: "cnpj".to_string(),
+                value,
+            },
+            Some(TaxIdentifier::Cpf(value)) => TaxIdentifierDto {
+                r#type: "cpf".to_string(),
+                value,
+            },
+            Some(TaxIdentifier::Idestrangeiro(value)) => TaxIdentifierDto {
+                r#type: "idestrangeiro".to_string(),
+                value,
+            },
             None => return Err(NfagDestConversionError::MissingIdentifier),
         };
         Ok(NfagDestDto {
@@ -162,7 +171,11 @@ impl TryFrom<NewNfagDestDto> for NewNfagDest {
             "cnpj" => (Some(dto.identifier.value), None, None),
             "cpf" => (None, Some(dto.identifier.value), None),
             "idestrangeiro" => (None, None, Some(dto.identifier.value)),
-            invalid_type => return Err(NfagDestConversionError::InvalidIdentifierType(invalid_type.to_string())),
+            invalid_type => {
+                return Err(NfagDestConversionError::InvalidIdentifierType(
+                    invalid_type.to_string(),
+                ))
+            }
         };
         let now = Utc::now();
         Ok(NewNfagDest {

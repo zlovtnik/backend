@@ -101,13 +101,10 @@ pub fn config_services(cfg: &mut web::ServiceConfig) {
             cfg.service(
                 web::resource("/api-doc/openapi.json").route(web::get().to(openapi::openapi_json)),
             );
-            cfg.service(
-                utoipa_swagger_ui::SwaggerUi::new("/swagger-ui/{_:.*}")
-                    .url(
-                        "/api-doc/openapi.json",
-                        <openapi::ApiDoc as utoipa::OpenApi>::openapi(),
-                    ),
-            );
+            cfg.service(utoipa_swagger_ui::SwaggerUi::new("/swagger-ui/{_:.*}").url(
+                "/api-doc/openapi.json",
+                <openapi::ApiDoc as utoipa::OpenApi>::openapi(),
+            ));
         })
         .add_route(|cfg| {
             cfg.service(web::scope("/api").configure(configure_api_routes));
@@ -142,9 +139,6 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
             cfg.service(health_controller::performance_metrics);
         })
         .add_route(|cfg| {
-            cfg.service(health_controller::backward_compatibility_validation);
-        })
-        .add_route(|cfg| {
             cfg.service(health_controller::logs);
         })
         .add_route(|cfg| {
@@ -170,7 +164,9 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
             cfg.service(web::scope("/cons-sit-nfag").configure(configure_cons_sit_nfag_routes));
         })
         .add_route(|cfg| {
-            cfg.service(web::scope("/cons-stat-serv-nfag").configure(configure_cons_stat_serv_nfag_routes));
+            cfg.service(
+                web::scope("/cons-stat-serv-nfag").configure(configure_cons_stat_serv_nfag_routes),
+            );
         })
         .add_route(|cfg| {
             cfg.service(web::scope("/evento-nfag").configure(configure_evento_nfag_routes));
@@ -468,4 +464,3 @@ configure_crud_routes!(
     "evento-nfag",
     "EventoNfag"
 );
-

@@ -5,9 +5,7 @@
 
 pub use crate::function_traits::{FunctionCategory, FunctionWrapper};
 pub use crate::math_functions::{register_math_functions, register_string_functions};
-pub use crate::pure_function_registry::{
-    PureFunctionRegistry, RegistryError, SharedRegistry,
-};
+pub use crate::pure_function_registry::{PureFunctionRegistry, RegistryError, SharedRegistry};
 
 /// Creates a shared PureFunctionRegistry populated with common pure functions
 /// including mathematical, string, and transformation functions.
@@ -38,12 +36,6 @@ pub fn create_enhanced_registry() -> Result<SharedRegistry, RegistryError> {
         |x: i32| x * 2,
         "double",
         FunctionCategory::Mathematical,
-    ))?;
-
-    registry.register(FunctionWrapper::new(
-        |s: String| s.len(),
-        "string_length",
-        FunctionCategory::StringProcessing,
     ))?;
 
     // Register mathematical functions

@@ -33,28 +33,22 @@ pub fn create_nfe_document(
                 let base_message = info.message().to_string();
 
                 let mut service_error = match kind {
-                    DatabaseErrorKind::UniqueViolation => {
-                        ServiceError::conflict(base_message)
-                    }
+                    DatabaseErrorKind::UniqueViolation => ServiceError::conflict(base_message),
                     DatabaseErrorKind::ForeignKeyViolation
                     | DatabaseErrorKind::CheckViolation
                     | DatabaseErrorKind::NotNullViolation => {
                         ServiceError::bad_request(base_message)
                     }
-                    DatabaseErrorKind::SerializationFailure => {
-                        ServiceError::internal_server_error(
-                            "Failed to create NFE document due to concurrent access"
-                                .to_string(),
-                        )
-                    }
+                    DatabaseErrorKind::SerializationFailure => ServiceError::internal_server_error(
+                        "Failed to create NFE document due to concurrent access".to_string(),
+                    ),
                     _ => ServiceError::internal_server_error(
                         "Failed to create NFE document".to_string(),
                     ),
                 };
 
                 if let Some(details) = detail {
-                    service_error =
-                        service_error.with_context(|ctx| ctx.with_detail(details));
+                    service_error = service_error.with_context(|ctx| ctx.with_detail(details));
                 }
 
                 if let Some(constraint_name) = constraint {
@@ -112,11 +106,7 @@ pub fn find_nfe_documents_by_tenant(
     conn: &mut Connection,
 ) -> Result<Vec<NfeDocument>, ServiceError> {
     // clamp pagination inputs to reasonable bounds
-    let safe_limit = if limit <= 0 {
-        50
-    } else {
-        limit.min(500)
-    };
+    let safe_limit = if limit <= 0 { 50 } else { limit.min(500) };
 
     let safe_offset = offset.max(0);
 
@@ -176,10 +166,12 @@ pub fn delete_nfe_document(document_id: i32, conn: &mut Connection) -> Result<us
             ServiceError::internal_server_error("Failed to delete NFE document".to_string())
                 .with_context(|ctx| ctx.with_tag("nfe").with_detail(err.to_string()))
         })?;
-    
+
     if deleted == 0 {
-        Err(ServiceError::not_found(format!("NFE document with id {} not found", document_id))
-            .with_context(|ctx| ctx.with_tag("nfe")))
+        Err(
+            ServiceError::not_found(format!("NFE document with id {} not found", document_id))
+                .with_context(|ctx| ctx.with_tag("nfe")),
+        )
     } else {
         Ok(deleted)
     }

@@ -140,9 +140,10 @@ pub fn run_migration(conn: &mut PgConnection) -> Result<(), ServiceError> {
 pub fn set_session_tenant(conn: &mut PgConnection, tenant_id: &str) -> Result<(), ServiceError> {
     // Basic validation: reject empty tenant IDs and overly long values.
     if tenant_id.is_empty() || tenant_id.len() > 255 {
-        return Err(ServiceError::internal_server_error(
-            format!("Invalid tenant_id provided: '{}'", tenant_id),
-        ));
+        return Err(ServiceError::internal_server_error(format!(
+            "Invalid tenant_id provided: '{}'",
+            tenant_id
+        )));
     }
 
     // Use `set_config` with `is_local = true` and parameter binding to avoid manual SQL
@@ -150,7 +151,9 @@ pub fn set_session_tenant(conn: &mut PgConnection, tenant_id: &str) -> Result<()
     diesel::sql_query("SELECT set_config('app.tenant_id', $1, true)")
         .bind::<diesel::sql_types::Text, _>(tenant_id)
         .execute(conn)
-        .map_err(|e| ServiceError::internal_server_error(format!("Failed to set session tenant: {}", e)))?;
+        .map_err(|e| {
+            ServiceError::internal_server_error(format!("Failed to set session tenant: {}", e))
+        })?;
 
     Ok(())
 }

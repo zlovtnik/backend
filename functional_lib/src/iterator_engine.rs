@@ -4,17 +4,15 @@
 //! including chunk_by, kmerge, join operations and requires Rust 1.63.0 or later.
 //! This engine serves as the foundation for all data transformation operations.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
-use std::collections::HashMap;
 
 use itertools::Itertools;
 
-use crate::performance_monitoring::{
-    get_performance_monitor, Measurable, OperationType,
-};
+use crate::performance_monitoring::{get_performance_monitor, Measurable, OperationType};
 
-use std::panic::{self, AssertUnwindSafe, UnwindSafe};
+use std::panic::{self, AssertUnwindSafe};
 
 struct SafeIterator<I>
 where
@@ -885,9 +883,7 @@ impl IteratorEngine {
     /// let engine = IteratorEngine::with_config(cfg);
     /// ```
     pub fn with_config(config: IteratorConfig) -> Self {
-        Self {
-            config,
-        }
+        Self { config }
     }
 
     /// Create an IteratorChain from an existing iterator using this engine's configuration.

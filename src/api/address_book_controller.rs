@@ -7,15 +7,16 @@ use crate::{
     config::db::Pool,
     constants,
     error::ServiceError,
-    functional::{
-        pagination::Pagination,
-        response_transformers::{ResponseTransformError, ResponseTransformer},
-    },
     models::{
         filters::PersonFilter,
         person::{Person, PersonDTO},
     },
     services::{address_book_service, functional_service_base::FunctionalErrorHandling},
+};
+
+use crate::functional::{
+    pagination::Pagination,
+    response_transformers::{ResponseTransformError, ResponseTransformer},
 };
 
 fn response_composition_error(err: ResponseTransformError) -> ServiceError {

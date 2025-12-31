@@ -101,7 +101,10 @@ where
                                 if let Ok(token_data) = token_utils::decode_token(token.to_string())
                                 {
                                     // Debug log for token decode success, logging user ID only (no sensitive token values)
-                                    debug!("Token successfully decoded for user: {}", token_data.claims.user);
+                                    debug!(
+                                        "Token successfully decoded for user: {}",
+                                        token_data.claims.user
+                                    );
                                     if let Some(tenant_pool) =
                                         manager.get_tenant_pool(&token_data.claims.tenant_id)
                                     {
@@ -112,7 +115,9 @@ where
                                             info!("Successful authentication - tenant: {}, user: {}, route: {}", token_data.claims.tenant_id, token_data.claims.user, req.path());
                                             req.extensions_mut().insert(tenant_pool.clone());
                                             // Store tenant_id in extensions for later retrieval by controllers
-                                            req.extensions_mut().insert(TenantId(token_data.claims.tenant_id.clone()));
+                                            req.extensions_mut().insert(TenantId(
+                                                token_data.claims.tenant_id.clone(),
+                                            ));
                                             authenticate_pass = true;
                                         } else {
                                             error!("Token verification failed");
@@ -122,7 +127,9 @@ where
                                     }
                                 } else {
                                     // Log token decode failure (without token value)
-                                    debug!("Token decode failed - invalid token format or signature");
+                                    debug!(
+                                        "Token decode failed - invalid token format or signature"
+                                    );
                                 }
                             }
                         }
@@ -521,8 +528,8 @@ mod tests {
         // 404 if route not registered, 405 if route registered but method not allowed, 200 if OPTIONS handler exists
         let status = resp.status();
         assert!(
-            status.is_success() 
-                || status == StatusCode::METHOD_NOT_ALLOWED 
+            status.is_success()
+                || status == StatusCode::METHOD_NOT_ALLOWED
                 || status == StatusCode::NOT_FOUND,
             "Unexpected status: {}",
             status

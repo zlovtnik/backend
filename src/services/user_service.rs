@@ -7,7 +7,9 @@ use crate::{
     config::db::Pool,
     error::{ServiceError, ServiceResult},
     models::user::{operations as user_ops, UserResponseDTO, UserUpdateDTO},
-    services::functional_patterns::{self as functional_patterns, validation_rules, QueryReader, Validator},
+    services::functional_patterns::{
+        self as functional_patterns, validation_rules, QueryReader, Validator,
+    },
 };
 
 /// Pagination parameters with functional validation
@@ -35,7 +37,7 @@ impl PaginationParams {
 }
 
 /// Validator for user update operations
-/// 
+///
 /// Currently requires all fields (username, email) to be present and valid.
 /// If UserUpdateDTO fields are made optional in the future, this validator should be
 /// updated to conditionally validate only the provided fields (see NFE update validator
@@ -62,19 +64,19 @@ pub fn list_users_reader(limit: i64, offset: i64) -> QueryReader<Vec<UserRespons
 /// Build a QueryReader for finding a user by ID
 pub fn find_user_by_id_reader(user_id: i32) -> QueryReader<UserResponseDTO> {
     QueryReader::new(move |conn| {
-        user_ops::find_user_by_id(user_id, conn).map_err(|e| match e {
-            diesel::result::Error::NotFound => ServiceError::not_found(format!(
-                "User {} not found",
-                user_id
-            ))
-            .with_context(|ctx| ctx.with_tag("user")),
-            other => {
-                log::error!("Failed to find user {}: {}", user_id, other);
-                ServiceError::internal_server_error("Failed to find user".to_string())
-                    .with_context(|ctx| ctx.with_tag("user").with_detail(other.to_string()))
-            }
-        })
-        .map(UserResponseDTO::from)
+        user_ops::find_user_by_id(user_id, conn)
+            .map_err(|e| match e {
+                diesel::result::Error::NotFound => {
+                    ServiceError::not_found(format!("User {} not found", user_id))
+                        .with_context(|ctx| ctx.with_tag("user"))
+                }
+                other => {
+                    log::error!("Failed to find user {}: {}", user_id, other);
+                    ServiceError::internal_server_error("Failed to find user".to_string())
+                        .with_context(|ctx| ctx.with_tag("user").with_detail(other.to_string()))
+                }
+            })
+            .map(UserResponseDTO::from)
     })
 }
 
@@ -89,11 +91,10 @@ pub fn update_user_reader(
     Ok(QueryReader::new(move |conn| {
         // Update the user
         user_ops::update_user(user_id, dto.clone(), conn).map_err(|e| match e {
-            diesel::result::Error::NotFound => ServiceError::not_found(format!(
-                "User {} not found",
-                user_id
-            ))
-            .with_context(|ctx| ctx.with_tag("user")),
+            diesel::result::Error::NotFound => {
+                ServiceError::not_found(format!("User {} not found", user_id))
+                    .with_context(|ctx| ctx.with_tag("user"))
+            }
             other => {
                 log::error!("Failed to update user {}: {}", user_id, other);
                 ServiceError::internal_server_error("Failed to update user".to_string())
@@ -102,19 +103,19 @@ pub fn update_user_reader(
         })?;
 
         // Fetch and return the updated user
-        user_ops::find_user_by_id(user_id, conn).map_err(|e| match e {
-            diesel::result::Error::NotFound => ServiceError::not_found(format!(
-                "User {} not found",
-                user_id
-            ))
-            .with_context(|ctx| ctx.with_tag("user")),
-            other => {
-                log::error!("Failed to fetch updated user {}: {}", user_id, other);
-                ServiceError::internal_server_error("Failed to fetch updated user".to_string())
-                    .with_context(|ctx| ctx.with_tag("user").with_detail(other.to_string()))
-            }
-        })
-        .map(UserResponseDTO::from)
+        user_ops::find_user_by_id(user_id, conn)
+            .map_err(|e| match e {
+                diesel::result::Error::NotFound => {
+                    ServiceError::not_found(format!("User {} not found", user_id))
+                        .with_context(|ctx| ctx.with_tag("user"))
+                }
+                other => {
+                    log::error!("Failed to fetch updated user {}: {}", user_id, other);
+                    ServiceError::internal_server_error("Failed to fetch updated user".to_string())
+                        .with_context(|ctx| ctx.with_tag("user").with_detail(other.to_string()))
+                }
+            })
+            .map(UserResponseDTO::from)
     }))
 }
 
@@ -128,8 +129,10 @@ pub fn delete_user_reader(user_id: i32) -> QueryReader<usize> {
             })
             .and_then(|deleted| {
                 if deleted == 0 {
-                    Err(ServiceError::not_found(format!("User {} not found", user_id))
-                        .with_context(|ctx| ctx.with_tag("user")))
+                    Err(
+                        ServiceError::not_found(format!("User {} not found", user_id))
+                            .with_context(|ctx| ctx.with_tag("user")),
+                    )
                 } else {
                     Ok(deleted)
                 }

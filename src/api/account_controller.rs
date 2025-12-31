@@ -9,14 +9,15 @@ use crate::{
     config::db::TenantPoolManager,
     constants,
     error::ServiceError,
-    functional::performance_monitoring::OperationType,
-    functional::response_transformers::{ResponseTransformError, ResponseTransformer},
     models::user::{validators, LoginDTO, SignupDTO, UserDTO},
     services::{
         account_service::{self, RefreshTokenRequest},
         functional_service_base::FunctionalErrorHandling,
     },
 };
+
+use crate::functional::performance_monitoring::OperationType;
+use crate::functional::response_transformers::{ResponseTransformError, ResponseTransformer};
 #[cfg(feature = "functional")]
 use rcs_functional::measure_operation;
 

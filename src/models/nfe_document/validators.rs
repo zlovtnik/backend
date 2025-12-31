@@ -41,18 +41,14 @@ pub fn new_nfe_validator() -> Validator<NewNfeDocument> {
 pub fn update_nfe_validator() -> Validator<UpdateNfeDocument> {
     Validator::new()
         .rule(|dto: &UpdateNfeDocument| {
-            dto.status
-                .as_ref()
-                .map_or(Ok(()), |status| {
-                    validation_rules::min_length("status", 1)(status)
-                })
+            dto.status.as_ref().map_or(Ok(()), |status| {
+                validation_rules::min_length("status", 1)(status)
+            })
         })
         .rule(|dto: &UpdateNfeDocument| {
-            dto.status
-                .as_ref()
-                .map_or(Ok(()), |status| {
-                    validation_rules::max_length("status", 20)(status)
-                })
+            dto.status.as_ref().map_or(Ok(()), |status| {
+                validation_rules::max_length("status", 20)(status)
+            })
         })
 }
 

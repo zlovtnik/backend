@@ -2,14 +2,14 @@ use actix_web::{web, Error, HttpRequest, HttpResponse};
 use actix_ws::Message;
 use futures::stream::StreamExt;
 use log::{debug, error, info};
-use tokio::sync::broadcast;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::sync::broadcast;
 
-use crate::utils::ws_logger::LogBroadcaster;
-use crate::utils::token_utils;
 use crate::middleware::ws_security::{
     get_allowed_origins, is_origin_allowed, should_enforce_origin_validation, SanitizedOrigin,
 };
+use crate::utils::token_utils;
+use crate::utils::ws_logger::LogBroadcaster;
 use std::env;
 
 /// Global connection counter for operational safeguards.
@@ -110,20 +110,21 @@ pub async fn ws_logs(
     if should_enforce_origin_validation() {
         let allowed_origins = get_allowed_origins();
 
-        let origin = req
-            .headers()
-            .get("Origin")
-            .and_then(|h| h.to_str().ok());
+        let origin = req.headers().get("Origin").and_then(|h| h.to_str().ok());
 
         match origin {
             Some(origin_str) => {
                 if !is_origin_allowed(origin_str, &allowed_origins) {
-                    let sanitized = req.headers()
+                    let sanitized = req
+                        .headers()
                         .get("Origin")
                         .and_then(SanitizedOrigin::from_header)
                         .map(|s| s.as_str().to_string())
                         .unwrap_or_else(|| "[invalid]".to_string());
-                    error!("WebSocket logs: Rejected connection from disallowed origin: {}", sanitized);
+                    error!(
+                        "WebSocket logs: Rejected connection from disallowed origin: {}",
+                        sanitized
+                    );
                     return Err(actix_web::error::ErrorForbidden(
                         "Origin not allowed for WebSocket logs",
                     ));
@@ -131,9 +132,7 @@ pub async fn ws_logs(
             }
             None => {
                 error!("WebSocket logs: Missing Origin header (required for CORS validation)");
-                return Err(actix_web::error::ErrorForbidden(
-                    "Origin header required",
-                ));
+                return Err(actix_web::error::ErrorForbidden("Origin header required"));
             }
         }
     }
@@ -294,7 +293,9 @@ async fn handle_ws_session(
                 "WebSocket log client disconnected (idle timeout after {}s)",
                 idle_timeout_secs
             );
-            let _ = session.text("[INFO] Connection closed due to inactivity.").await;
+            let _ = session
+                .text("[INFO] Connection closed due to inactivity.")
+                .await;
             let _ = session.close(None).await;
             break;
         };
@@ -314,7 +315,7 @@ async fn handle_ws_session(
                             }
                             Err(e) => {
                                 consecutive_send_errors += 1;
-                                debug!("Failed to send log message to WebSocket client (attempt {}): {}", 
+                                debug!("Failed to send log message to WebSocket client (attempt {}): {}",
                                     consecutive_send_errors, e);
 
                                 // Force disconnect after too many send errors

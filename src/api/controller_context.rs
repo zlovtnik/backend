@@ -1,14 +1,15 @@
 use std::collections::HashMap;
 
-use actix_web::{http::header::HeaderValue, HttpRequest, HttpMessage};
+use actix_web::{http::header::HeaderValue, HttpMessage, HttpRequest};
 
 use crate::{
     config::db::{Pool, TenantPoolManager},
     constants,
     error::ServiceError,
-    functional::pagination::Pagination,
     services::functional_patterns::{run_query, QueryReader},
 };
+
+use crate::functional::pagination::Pagination;
 
 #[derive(Clone)]
 pub struct DatabaseContext {
@@ -18,22 +19,15 @@ pub struct DatabaseContext {
 
 impl DatabaseContext {
     pub fn from_request(req: &HttpRequest) -> Result<Self, ServiceError> {
-        let pool = req
-            .extensions()
-            .get::<Pool>()
-            .cloned()
-            .ok_or_else(|| {
-                ServiceError::internal_server_error("Pool not found").with_context(|ctx| {
-                    ctx.with_tag("tenant")
-                        .with_detail("Missing tenant pool in request extensions")
-                })
-            })?;
+        let pool = req.extensions().get::<Pool>().cloned().ok_or_else(|| {
+            ServiceError::internal_server_error("Pool not found").with_context(|ctx| {
+                ctx.with_tag("tenant")
+                    .with_detail("Missing tenant pool in request extensions")
+            })
+        })?;
 
         // Attempt to extract tenant_id from request extensions (set by auth middleware)
-        let tenant_id = req
-            .extensions()
-            .get::<String>()
-            .cloned();
+        let tenant_id = req.extensions().get::<String>().cloned();
 
         Ok(Self { pool, tenant_id })
     }
@@ -120,8 +114,7 @@ impl PaginationContext {
             .get("limit")
             .and_then(|value| value.parse::<i64>().ok());
 
-        let limit = raw_limit
-            .map(|value| value.max(1).min(max_page_size as i64));
+        let limit = raw_limit.map(|value| value.max(1).min(max_page_size as i64));
 
         let pagination = Pagination::from_optional(cursor, limit, default_page_size);
 

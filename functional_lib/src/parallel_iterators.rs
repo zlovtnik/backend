@@ -27,7 +27,7 @@ struct PerformanceEntry {
     chunk_size: usize,
     data_size: usize,
     thread_count: usize,
-    efficiency: f64,
+    efficiency: Option<f64>,
     throughput: u64,
     timestamp: Instant,
 }
@@ -103,10 +103,13 @@ fn calculate_adaptive_chunk_size(
 
         if similar_entries.len() >= 3 {
             // Calculate weighted average of chunk sizes based on efficiency
-            let total_weight: f64 = similar_entries.iter().map(|e| e.efficiency.max(0.1)).sum();
+            let total_weight: f64 = similar_entries
+                .iter()
+                .map(|e| e.efficiency.unwrap_or(0.5).max(0.1))
+                .sum();
             let weighted_sum: f64 = similar_entries
                 .iter()
-                .map(|e| e.chunk_size as f64 * e.efficiency.max(0.1))
+                .map(|e| e.chunk_size as f64 * e.efficiency.unwrap_or(0.5).max(0.1))
                 .sum();
 
             let optimal_chunk = (weighted_sum / total_weight) as usize;
@@ -323,7 +326,7 @@ pub struct ParallelMetrics {
     /// Memory usage estimate
     pub memory_usage: u64,
     /// Parallel efficiency (0.0 - 1.0)
-    pub efficiency: f64,
+    pub efficiency: Option<f64>,
     /// Work-stealing efficiency metrics
     pub work_stealing_metrics: WorkStealingMetrics,
     /// Detailed load balancing metrics
@@ -361,14 +364,16 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
 
         if data_len < config.min_parallel_size {
             // Use sequential processing for small datasets
-            let result = data.into_iter().map(f).collect();
+            let result: Vec<U> = data.into_iter().map(f).collect();
             let elapsed = start_time.elapsed();
             let metrics = ParallelMetrics {
                 total_time: elapsed,
                 thread_count: 1,
                 throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
-                memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
-                efficiency: 1.0,
+                memory_usage: ((data_len * std::mem::size_of::<T>())
+                    + (result.len() * std::mem::size_of::<U>()))
+                    as u64,
+                efficiency: Some(1.0),
                 work_stealing_metrics: WorkStealingMetrics::default(),
                 load_balancing_metrics: LoadBalancingMetrics::default(),
             };
@@ -404,20 +409,8 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
         let thread_count = rayon::current_num_threads();
         let throughput = (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64;
 
-        // Estimate parallel efficiency (simplified heuristic)
-        let efficiency = if data_len < config.min_parallel_size {
-            0.9 // Sequential baseline efficiency
-        } else {
-            let data_len_f64 = data_len as f64;
-            let elapsed_secs = elapsed.as_secs_f64();
-            let per_thread_throughput = throughput as f64 / thread_count as f64;
-            let overall_throughput = data_len_f64 / elapsed_secs;
-            if overall_throughput > 0.0 {
-                (per_thread_throughput / overall_throughput).min(1.0).max(0.0)
-            } else {
-                0.0
-            }
-        };
+        // Parallel efficiency requires a sequential baseline which is not available here
+        let efficiency = None;
 
         let metrics = ParallelMetrics {
             total_time: elapsed,
@@ -491,8 +484,9 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
                 total_time: elapsed,
                 thread_count: 1,
                 throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
-                memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
-                efficiency: 1.0,
+                memory_usage: ((data_len * std::mem::size_of::<T>()) + std::mem::size_of::<B>())
+                    as u64,
+                efficiency: Some(1.0),
                 work_stealing_metrics: WorkStealingMetrics::default(),
                 load_balancing_metrics: LoadBalancingMetrics::default(),
             };
@@ -512,14 +506,14 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
         let thread_count = rayon::current_num_threads();
         let throughput = (data_len as u64 * 1_000_000) / (elapsed.as_micros() as u64).max(1);
 
-        // Estimate parallel efficiency (simplified heuristic)
-        let efficiency = (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0);
+        // Parallel efficiency requires a sequential baseline which is not available here
+        let efficiency = None;
 
         let metrics = ParallelMetrics {
             total_time: elapsed,
             thread_count,
             throughput,
-            memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+            memory_usage: ((data_len * std::mem::size_of::<T>()) + std::mem::size_of::<B>()) as u64,
             efficiency,
             work_stealing_metrics: WorkStealingMetrics::default(),
             load_balancing_metrics: LoadBalancingMetrics::default(),
@@ -556,14 +550,16 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
 
         if data_len < config.min_parallel_size {
             // Sequential filter for small datasets
-            let result = data.into_iter().filter(predicate).collect();
+            let result: Vec<T> = data.into_iter().filter(predicate).collect();
             let metrics = ParallelMetrics {
                 total_time: start_time.elapsed(),
                 thread_count: 1,
                 throughput: (data_len as u64 * 1_000_000)
                     / (start_time.elapsed().as_micros() as u64).max(1),
-                memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
-                efficiency: 1.0,
+                memory_usage: ((data_len * std::mem::size_of::<T>())
+                    + (result.len() * std::mem::size_of::<T>()))
+                    as u64,
+                efficiency: Some(1.0),
                 work_stealing_metrics: WorkStealingMetrics::default(),
                 load_balancing_metrics: LoadBalancingMetrics::default(),
             };
@@ -590,12 +586,16 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
         let thread_count = rayon::current_num_threads();
         let throughput = (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64;
 
+        // Parallel efficiency requires a sequential baseline which is not available here
+        let efficiency = None;
+
         let metrics = ParallelMetrics {
             total_time: elapsed,
             thread_count,
             throughput,
-            memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
-            efficiency: (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0),
+            memory_usage: ((data_len * std::mem::size_of::<T>())
+                + (result.len() * std::mem::size_of::<T>())) as u64,
+            efficiency,
             work_stealing_metrics: WorkStealingMetrics::default(),
             load_balancing_metrics: LoadBalancingMetrics::default(),
         };
@@ -649,8 +649,9 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
                 total_time: elapsed,
                 thread_count: 1,
                 throughput,
-                memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
-                efficiency: 1.0,
+                memory_usage: ((data_len * std::mem::size_of::<T>()) + std::mem::size_of::<T>())
+                    as u64,
+                efficiency: Some(1.0),
                 work_stealing_metrics: WorkStealingMetrics::default(),
                 load_balancing_metrics: LoadBalancingMetrics::default(),
             };
@@ -671,18 +672,14 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
             0
         };
 
-        // Estimate parallel efficiency
-        let efficiency = if elapsed.as_secs_f64() > 0.0 && data_len > 0 {
-            (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0)
-        } else {
-            1.0
-        };
+        // Parallel efficiency requires a sequential baseline which is not available here
+        let efficiency = None;
 
         let metrics = ParallelMetrics {
             total_time: elapsed,
             thread_count,
             throughput,
-            memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+            memory_usage: ((data_len * std::mem::size_of::<T>()) + std::mem::size_of::<T>()) as u64,
             efficiency,
             work_stealing_metrics: WorkStealingMetrics::default(),
             load_balancing_metrics: LoadBalancingMetrics::default(),
@@ -761,8 +758,8 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
                 total_time: elapsed,
                 thread_count: 1,
                 throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
-                memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
-                efficiency: 1.0,
+                memory_usage: (data_len as u64 * 2 * std::mem::size_of::<T>() as u64),
+                efficiency: Some(1.0),
                 work_stealing_metrics: WorkStealingMetrics::default(),
                 load_balancing_metrics: LoadBalancingMetrics::default(),
             };
@@ -798,13 +795,13 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
         let throughput = (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64;
 
         // Estimate parallel efficiency
-        let efficiency = (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0);
+        let efficiency = None;
 
         let metrics = ParallelMetrics {
             total_time: elapsed,
             thread_count,
             throughput,
-            memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+            memory_usage: (data_len as u64 * 2 * std::mem::size_of::<T>() as u64),
             efficiency,
             work_stealing_metrics: WorkStealingMetrics::default(),
             load_balancing_metrics: LoadBalancingMetrics::default(),
@@ -847,8 +844,8 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
                 total_time: elapsed,
                 thread_count: 1,
                 throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
-                memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
-                efficiency: 1.0,
+                memory_usage: (data_len as u64 * 2 * std::mem::size_of::<T>() as u64),
+                efficiency: Some(1.0),
                 work_stealing_metrics: WorkStealingMetrics::default(),
                 load_balancing_metrics: LoadBalancingMetrics::default(),
             };
@@ -863,13 +860,13 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
         let throughput = (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64;
 
         // Estimate parallel efficiency
-        let efficiency = (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0);
+        let efficiency = None;
 
         let metrics = ParallelMetrics {
             total_time: elapsed,
             thread_count,
             throughput,
-            memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+            memory_usage: (data_len as u64 * 2 * std::mem::size_of::<T>() as u64),
             efficiency,
             work_stealing_metrics: WorkStealingMetrics::default(),
             load_balancing_metrics: LoadBalancingMetrics::default(),
@@ -915,7 +912,7 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
                 throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
                 memory_usage: (data_len * std::mem::size_of::<T>()
                     + result.len() * std::mem::size_of::<U>()) as u64,
-                efficiency: 1.0,
+                efficiency: Some(1.0),
                 work_stealing_metrics: WorkStealingMetrics::default(),
                 load_balancing_metrics: LoadBalancingMetrics::default(),
             };
@@ -926,15 +923,12 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
         }
 
         // Parallel flat_map - flatten lazily without intermediate allocations
-        let result: Vec<U> = data
-            .into_par_iter()
-            .flat_map_iter(|item| f(item))
-            .collect();
+        let result: Vec<U> = data.into_par_iter().flat_map_iter(|item| f(item)).collect();
 
         let elapsed = start_time.elapsed();
         let thread_count = rayon::current_num_threads();
         let throughput = (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64;
-        let efficiency = (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0);
+        let efficiency = None;
 
         let metrics = ParallelMetrics {
             total_time: elapsed,
@@ -989,8 +983,8 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
                 total_time: elapsed,
                 thread_count: 1,
                 throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
-                memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
-                efficiency: 1.0,
+                memory_usage: (data_len as u64 * 2 * std::mem::size_of::<T>() as u64),
+                efficiency: Some(1.0),
                 work_stealing_metrics: WorkStealingMetrics::default(),
                 load_balancing_metrics: LoadBalancingMetrics::default(),
             };
@@ -1026,13 +1020,13 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
         let elapsed = start_time.elapsed();
         let thread_count = rayon::current_num_threads();
         let throughput = (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64;
-        let efficiency = (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0);
+        let efficiency = None;
 
         let metrics = ParallelMetrics {
             total_time: elapsed,
             thread_count,
             throughput,
-            memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+            memory_usage: (data_len as u64 * 2 * std::mem::size_of::<T>() as u64),
             efficiency,
             work_stealing_metrics: WorkStealingMetrics::default(),
             load_balancing_metrics: LoadBalancingMetrics::default(),
@@ -1075,8 +1069,8 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
                 total_time: elapsed,
                 thread_count: 1,
                 throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
-                memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
-                efficiency: 1.0,
+                memory_usage: ((data_len + 1) * std::mem::size_of::<T>()) as u64,
+                efficiency: Some(1.0),
                 work_stealing_metrics: WorkStealingMetrics::default(),
                 load_balancing_metrics: LoadBalancingMetrics::default(),
             };
@@ -1092,13 +1086,13 @@ pub trait ParallelIteratorExt<T: Send + Sync>: Iterator<Item = T> + Send + Sync 
         let elapsed = start_time.elapsed();
         let thread_count = rayon::current_num_threads();
         let throughput = (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64;
-        let efficiency = (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0);
+        let efficiency = None;
 
         let metrics = ParallelMetrics {
             total_time: elapsed,
             thread_count,
             throughput,
-            memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
+            memory_usage: ((data_len + 1) * std::mem::size_of::<T>()) as u64,
             efficiency,
             work_stealing_metrics: WorkStealingMetrics::default(),
             load_balancing_metrics: LoadBalancingMetrics::default(),
@@ -1131,16 +1125,20 @@ impl<T> ParallelResult<T> {
 
     /// Check if operation was efficient (parallel processing beneficial)
     pub fn is_efficient(&self) -> bool {
-        self.metrics.efficiency > 0.7
+        self.metrics.efficiency.unwrap_or(0.0) > 0.7
     }
 }
 
 impl fmt::Display for ParallelMetrics {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let efficiency_str = self
+            .efficiency
+            .map(|e| format!("{:.2}", e))
+            .unwrap_or_else(|| "N/A".to_string());
         write!(
             f,
-            "Parallel Metrics: time={:?}, threads={}, throughput={} ops/s, efficiency={:.2}",
-            self.total_time, self.thread_count, self.throughput, self.efficiency
+            "Parallel Metrics: time={:?}, threads={}, throughput={} ops/s, efficiency={}",
+            self.total_time, self.thread_count, self.throughput, efficiency_str
         )
     }
 }
@@ -1230,7 +1228,7 @@ where
             throughput: (data_len as u64 * 1_000_000)
                 / (start_time.elapsed().as_micros() as u64).max(1),
             memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
-            efficiency: 1.0,
+            efficiency: Some(1.0),
             work_stealing_metrics: WorkStealingMetrics::default(),
             load_balancing_metrics: LoadBalancingMetrics::default(),
         };
@@ -1251,7 +1249,7 @@ where
     let throughput = (data_len as u64 * 1_000_000) / (elapsed.as_micros() as u64).max(1);
 
     // Estimate parallel efficiency (simplified heuristic)
-    let efficiency = (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0);
+    let efficiency = None;
 
     let metrics = ParallelMetrics {
         total_time: elapsed,
@@ -1309,7 +1307,7 @@ where
             thread_count: 1,
             throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
             memory_usage: 0, // In-place, no additional allocation
-            efficiency: 1.0,
+            efficiency: Some(1.0),
             work_stealing_metrics: WorkStealingMetrics::default(),
             load_balancing_metrics: LoadBalancingMetrics::default(),
         };
@@ -1323,7 +1321,7 @@ where
     let throughput = (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64;
 
     // Estimate parallel efficiency
-    let efficiency = (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0);
+    let efficiency = None;
 
     ParallelMetrics {
         total_time: elapsed,
@@ -1363,7 +1361,7 @@ where
             thread_count: 1,
             throughput: (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64,
             memory_usage: (data_len * std::mem::size_of::<T>()) as u64,
-            efficiency: 1.0,
+            efficiency: Some(1.0),
             work_stealing_metrics: WorkStealingMetrics::default(),
             load_balancing_metrics: LoadBalancingMetrics::default(),
         };
@@ -1393,7 +1391,7 @@ where
     let throughput = (data_len as u64 * 1_000_000) / elapsed.as_micros().max(1) as u64;
 
     // Estimate parallel efficiency
-    let efficiency = (throughput as f64 / (data_len as f64 / elapsed.as_secs_f64())).min(1.0);
+    let efficiency = None;
 
     let metrics = ParallelMetrics {
         total_time: elapsed,
@@ -1654,12 +1652,17 @@ impl<T: Send + Sync + Clone + 'static> ParallelPipeline<T> {
         let total_throughput: u64 = self.metrics_history.iter().map(|m| m.throughput).sum();
         let throughput = total_throughput / (self.metrics_history.len() as u64).max(1);
         let memory_usage = self.metrics_history.iter().map(|m| m.memory_usage).sum();
-        let avg_efficiency = self
+
+        let efficiencies: Vec<f64> = self
             .metrics_history
             .iter()
-            .map(|m| m.efficiency)
-            .sum::<f64>()
-            / self.metrics_history.len() as f64;
+            .filter_map(|m| m.efficiency)
+            .collect();
+        let avg_efficiency = if !efficiencies.is_empty() {
+            Some(efficiencies.iter().sum::<f64>() / efficiencies.len() as f64)
+        } else {
+            None
+        };
 
         // Aggregate work-stealing metrics
         let tasks_stolen = self
@@ -1834,8 +1837,8 @@ mod tests {
 
         assert!(result.metrics.total_time <= duration);
         assert!(result.metrics.throughput > 0);
-        assert!(result.metrics.efficiency > 0.0);
-        assert!(result.metrics.efficiency <= 1.0);
+        assert!(result.metrics.efficiency.unwrap_or(0.0) > 0.0);
+        assert!(result.metrics.efficiency.unwrap_or(0.0) <= 1.0);
     }
 
     #[test]
@@ -1971,7 +1974,7 @@ mod tests {
         assert_eq!(summary.thread_count, 0);
         assert_eq!(summary.throughput, 0);
         assert_eq!(summary.memory_usage, 0);
-        assert_eq!(summary.efficiency, 0.0);
+        assert_eq!(summary.efficiency, None);
     }
 
     #[test]
@@ -1989,7 +1992,7 @@ mod tests {
         // Summary should aggregate metrics from both operations
         assert!(summary.total_time.as_micros() > 0);
         assert!(summary.throughput >= 0);
-        assert!(summary.efficiency > 0.0);
+        assert!(summary.efficiency.unwrap_or(0.0) >= 0.0);
         assert!(summary.memory_usage > 0);
     }
 
@@ -2069,7 +2072,7 @@ mod tests {
 
         // Summary should show aggregated values
         assert!(summary.total_time.as_micros() > 0);
-        assert!(summary.throughput > 0 || summary.efficiency >= 0.0);
+        assert!(summary.throughput > 0 || summary.efficiency.unwrap_or(0.0) >= 0.0);
     }
 
     #[test]

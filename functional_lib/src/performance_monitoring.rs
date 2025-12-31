@@ -5,13 +5,12 @@
 //! and pipeline operations. It integrates with the existing health check system to provide
 //! real-time insights into functional operation performance.
 
+use rand::random;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use log;
-use rand;
 
 /// Performance metrics for functional operations
 #[derive(Debug, Clone)]
@@ -89,7 +88,7 @@ impl fmt::Display for OperationType {
 pub struct PerformanceMeasurement {
     operation_type: OperationType,
     start_time: Instant,
-    initial_memory: u64,
+    _initial_memory: u64,
     monitor: Arc<PerformanceMonitor>,
 }
 
@@ -228,14 +227,14 @@ impl PerformanceMonitor {
         }
 
         // Apply sampling rate
-        if rand::random::<f64>() > self.config.sampling_rate {
+        if random::<f64>() > self.config.sampling_rate {
             return None;
         }
 
         Some(PerformanceMeasurement {
             operation_type,
             start_time: Instant::now(),
-            initial_memory: self.get_current_memory_usage(),
+            _initial_memory: self.get_current_memory_usage(),
             monitor: Arc::clone(self),
         })
     }
@@ -282,8 +281,8 @@ impl PerformanceMonitor {
             // Use saturating cast to handle large counts gracefully
             let prev_count_u32 = prev_count.min(u32::MAX as u64) as u32;
             let new_count_u32 = metric.operation_count.min(u32::MAX as u64) as u32;
-            metric.avg_execution_time = (metric.avg_execution_time * prev_count_u32 + duration)
-                / new_count_u32;
+            metric.avg_execution_time =
+                (metric.avg_execution_time * prev_count_u32 + duration) / new_count_u32;
 
             if duration < metric.min_execution_time {
                 metric.min_execution_time = duration;

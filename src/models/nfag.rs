@@ -1,7 +1,7 @@
 use crate::schema::*;
+use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 use utoipa::ToSchema;
 use validator::Validate;
 
@@ -86,10 +86,7 @@ impl Nfag {
     }
 
     /// Create a new NFAg
-    pub fn create(
-        dto: NewNfag,
-        conn: &mut crate::config::db::Connection,
-    ) -> QueryResult<Nfag> {
+    pub fn create(dto: NewNfag, conn: &mut crate::config::db::Connection) -> QueryResult<Nfag> {
         diesel::insert_into(nfag::table)
             .values(&dto)
             .get_result(conn)
@@ -105,7 +102,7 @@ impl Nfag {
         diesel::update(
             nfag::table
                 .filter(nfag::id.eq(nfag_id))
-                .filter(nfag::tenant_id.eq(tenant_id_))
+                .filter(nfag::tenant_id.eq(tenant_id_)),
         )
         .set(&dto)
         .get_result(conn)
@@ -120,7 +117,7 @@ impl Nfag {
         diesel::delete(
             nfag::table
                 .filter(nfag::id.eq(nfag_id))
-                .filter(nfag::tenant_id.eq(tenant_id_))
+                .filter(nfag::tenant_id.eq(tenant_id_)),
         )
         .execute(conn)
     }

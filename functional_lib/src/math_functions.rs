@@ -72,7 +72,11 @@ pub fn register_math_functions(registry: &PureFunctionRegistry) -> Result<(), Re
     // Checked power: negative exponents => None; overflow => None
     registry.register(FunctionWrapper::new(
         |(a, b): (i32, i32)| {
-            if b < 0 { None } else { i32::checked_pow(a, b as u32) }
+            if b < 0 {
+                None
+            } else {
+                i32::checked_pow(a, b as u32)
+            }
         },
         "power_i32_checked",
         FunctionCategory::Mathematical,

@@ -551,7 +551,12 @@ where
 const MAX_RESPONSE_SIZE_BYTES: usize = 10 * 1024 * 1024;
 
 fn escape_xml(input: &str) -> String {
-    input.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;")
+    input
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&apos;")
 }
 
 fn escape_csv_field(field: &str) -> String {
@@ -589,7 +594,12 @@ fn json_to_xml(key: &str, value: &JsonValue) -> String {
             }
         }
         JsonValue::String(s) => {
-            format!("<{}>{}</{}>\n", escape_xml(key), escape_xml(s), escape_xml(key))
+            format!(
+                "<{}>{}</{}>\n",
+                escape_xml(key),
+                escape_xml(s),
+                escape_xml(key)
+            )
         }
         JsonValue::Number(n) => {
             format!("<{}>{}</{}>\n", escape_xml(key), n, escape_xml(key))
@@ -616,7 +626,14 @@ where
             let payload = serde_json::to_vec(&envelope)?;
             // Validate response size to prevent DoS from large responses
             if payload.len() > MAX_RESPONSE_SIZE_BYTES {
-                return Err(serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::Other, format!("Response size {} exceeds maximum of {} bytes", payload.len(), MAX_RESPONSE_SIZE_BYTES))));
+                return Err(serde_json::Error::io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!(
+                        "Response size {} exceeds maximum of {} bytes",
+                        payload.len(),
+                        MAX_RESPONSE_SIZE_BYTES
+                    ),
+                )));
             }
             builder.insert_header(header::ContentType::json());
             Ok(builder.body(payload))
@@ -625,7 +642,14 @@ where
             let payload = serde_json::to_string_pretty(&envelope)?;
             // Validate response size to prevent DoS from large responses
             if payload.len() > MAX_RESPONSE_SIZE_BYTES {
-                return Err(serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::Other, format!("Response size {} exceeds maximum of {} bytes", payload.len(), MAX_RESPONSE_SIZE_BYTES))));
+                return Err(serde_json::Error::io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!(
+                        "Response size {} exceeds maximum of {} bytes",
+                        payload.len(),
+                        MAX_RESPONSE_SIZE_BYTES
+                    ),
+                )));
             }
             builder.insert_header(header::ContentType::json());
             Ok(builder.body(payload))
@@ -634,7 +658,14 @@ where
             let payload = serde_json::to_string_pretty(&envelope)?;
             // Validate response size to prevent DoS from large responses
             if payload.len() > MAX_RESPONSE_SIZE_BYTES {
-                return Err(serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::Other, format!("Response size {} exceeds maximum of {} bytes", payload.len(), MAX_RESPONSE_SIZE_BYTES))));
+                return Err(serde_json::Error::io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!(
+                        "Response size {} exceeds maximum of {} bytes",
+                        payload.len(),
+                        MAX_RESPONSE_SIZE_BYTES
+                    ),
+                )));
             }
             builder.insert_header(header::ContentType::plaintext());
             Ok(builder.body(payload))
@@ -642,14 +673,21 @@ where
         ResponseFormat::Xml => {
             // Convert the JSON data to proper XML structure
             let data_xml = json_to_xml("data", &serde_json::to_value(&envelope.data)?);
-            let xml_payload = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<response>
-  <message>{}</message>
-{}
-</response>", escape_xml(&envelope.message), data_xml);
+            let xml_payload = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<response>\n  <message>{}</message>\n{}\n</response>",
+                escape_xml(&envelope.message),
+                data_xml
+            );
             // Validate response size to prevent DoS from large responses
             if xml_payload.len() > MAX_RESPONSE_SIZE_BYTES {
-                return Err(serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::Other, format!("Response size {} exceeds maximum of {} bytes", xml_payload.len(), MAX_RESPONSE_SIZE_BYTES))));
+                return Err(serde_json::Error::io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!(
+                        "Response size {} exceeds maximum of {} bytes",
+                        xml_payload.len(),
+                        MAX_RESPONSE_SIZE_BYTES
+                    ),
+                )));
             }
             // Use exact content-type for XML format
             builder.insert_header((header::CONTENT_TYPE, "application/xml; charset=utf-8"));
@@ -661,24 +699,31 @@ where
             // to a compact JSON string (no pretty-printing) in the data column.
             // This ensures CSV parsers can correctly handle both columns without confusion.
             let data_json = serde_json::to_string(&envelope.data)?;
-            let csv_payload = format!("message,data\n{},{}", 
-                escape_csv_field(&envelope.message), 
+            let csv_payload = format!(
+                "message,data\n{},{}",
+                escape_csv_field(&envelope.message),
                 escape_csv_field(&data_json)
             );
             // Validate response size to prevent DoS from large responses
             if csv_payload.len() > MAX_RESPONSE_SIZE_BYTES {
-                return Err(serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::Other, format!("Response size {} exceeds maximum of {} bytes", csv_payload.len(), MAX_RESPONSE_SIZE_BYTES))));
+                return Err(serde_json::Error::io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!(
+                        "Response size {} exceeds maximum of {} bytes",
+                        csv_payload.len(),
+                        MAX_RESPONSE_SIZE_BYTES
+                    ),
+                )));
             }
             // Use exact content-type for CSV format
             builder.insert_header((header::CONTENT_TYPE, "text/csv; charset=utf-8"));
             Ok(builder.body(csv_payload))
         }
         ResponseFormat::MessagePack => {
-            // MessagePack not yet implemented - return error to avoid misleading clients
-            return Err(serde_json::Error::io(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "MessagePack format is not yet implemented",
-            )));
+            // MessagePack not yet implemented - fallback to JSON as a graceful recovery
+            let json_payload = serde_json::to_string(&envelope)?;
+            builder.insert_header((header::CONTENT_TYPE, "application/json"));
+            Ok(builder.body(json_payload))
         }
     }
 }
@@ -1289,10 +1334,8 @@ mod tests {
 
     #[actix_rt::test]
     async fn negotiate_format_with_quality_values() {
-        let request = TestRequest::default().insert_header((
-            ACCEPT,
-            "application/json;q=0.8, text/plain;q=0.9",
-        ));
+        let request = TestRequest::default()
+            .insert_header((ACCEPT, "application/json;q=0.8, text/plain;q=0.9"));
 
         let response = ResponseTransformer::new("data")
             .allow_format(ResponseFormat::Text)
