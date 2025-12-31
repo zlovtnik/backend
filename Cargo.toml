@@ -20,6 +20,7 @@ actix-rt = "2.8.0"
 actix-service = "2.0.2"
 actix-cors = "0.6.4"
 actix-ws = "0.3"
+actix-session = { version = "0.10.1", features = ["cookie-session"] }
 awc = "3.8.1"
 log = "0.4.18"
 tracing = "0.1"
@@ -38,6 +39,8 @@ bcrypt = "0.14.0"
 base64 = "0.21.2"
 redis = "0.32.7"
 r2d2 = "0.8.10"
+openidconnect = "4.0.1"
+reqwest = { version = "0.12.26", default-features = false, features = ["rustls-tls", "json"] }
 tokio = { version = "1.35.0", features = ["rt", "rt-multi-thread", "fs", "io-util", "sync", "time", "macros"] }
 notify = "6.1"
 tokio-stream = "0.1"
@@ -56,6 +59,7 @@ bigdecimal = { version = "0.4.8", features = ["serde"] }
 async-trait = "0.1.89"
 aes-gcm = "0.10"
 validator = { version = "0.20", features = ["derive"] }
+secrecy = { version = "0.10.3", features = ["serde"] }
 
 rcs-functional = { path = "functional_lib", optional = true }
 
@@ -90,7 +94,7 @@ datetime = ["dep:chrono", "diesel/chrono"]
 testcontainers = "0.14.0"
 tempfile = "3.8"
 criterion = { version = "0.5", features = ["html_reports"] }
-reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [[bench]]
 name = "functional_benchmarks"

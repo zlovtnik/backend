@@ -1,0 +1,80 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+rule_files:
+  - "rcl_alert_rules.yml"
+
+scrape_configs:
+  # The job name is added as a label `job=<job_name>` to any timeseries scraped from this config.
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8889']
+    scrape_interval: 15s
+
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    scrape_interval: 15s
+
+  - job_name: 'redis_exporter'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    scrape_interval: 15s
+
+  - job_name: 'keycloak'
+    metrics_path: '/auth/realms/master/metrics'
+    static_configs:
+      - targets: ['keycloak:8080']
+    scrape_interval: 30s
+    basic_auth:
+      username: '${KEYCLOAK_USERNAME}'
+      password: '${KEYCLOAK_PASSWORD}'
+
+  - job_name: 'minio'
+    metrics_path: '/minio/prometheus/metrics'
+    static_configs:
+      - targets: ['minio:9000']
+    scrape_interval: 30s
+    scheme: 'http'
+
+  - job_name: 'kafka'
+    static_configs:
+      - targets: ['kafka:9091']  # Adjust to your JMX exporter port
+    scrape_interval: 30s
+
+  - job_name: 'zookeeper'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['zookeeper:8080']  # AdminServer port
+    scrape_interval: 30s
+
+  - job_name: 'jaeger'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['jaeger:14269']  # Metrics port
+    scrape_interval: 30s
+
+  - job_name: 'schema-registry'
+    static_configs:
+      - targets: ['schema-registry-exporter:5556']
+    scrape_interval: 30s
+
+  # Kafka UI metrics (if available)
+  - job_name: 'kafka-ui'
+    static_configs:
+      - targets: ['kafka-ui:8080']
+    scrape_interval: 30s
+
+  # Node exporter for container metrics (if running)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s
+
+remote_write:

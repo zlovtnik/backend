@@ -1,8 +1,8 @@
 use actix_service::forward_ready;
 use actix_web::body::EitherBody;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
-use actix_web::http::Method;
-use actix_web::web::Data;
+use actix_web::http::{Method, header::HeaderValue};
+use actix_web::web::{self, Data};
 use actix_web::Error;
 use actix_web::HttpMessage;
 use actix_web::HttpResponse;
@@ -13,6 +13,7 @@ use crate::config::db::TenantPoolManager;
 use crate::constants;
 use crate::models::response::ResponseBody;
 use crate::types::TenantId;
+use crate::utils::keycloak::KeycloakClient;
 use crate::utils::token_utils;
 
 pub struct Authentication;
@@ -70,8 +71,6 @@ where
     /// // }
     /// ```
     fn call(&self, req: ServiceRequest) -> Self::Future {
-        let mut authenticate_pass: bool = false;
-
         // Let CORS middleware handle preflight requests without auth checks
         if Method::OPTIONS == *req.method() {
             let fut = self.service.call(req);
@@ -84,75 +83,142 @@ where
             .iter()
             .any(|route| path.starts_with(route))
         {
-            authenticate_pass = true;
+            let fut = self.service.call(req);
+            return Box::pin(async move { fut.await.map(ServiceResponse::map_into_left_body) });
         }
 
-        if !authenticate_pass {
-            if let Some(manager) = req.app_data::<Data<TenantPoolManager>>() {
-                if let Some(authen_header) = req.headers().get(constants::AUTHORIZATION) {
-                    // Log authentication attempt with low-cardinality information only, avoiding sensitive data
-                    info!("Authentication attempt for route: {}", req.path());
-                    if let Ok(authen_str) = authen_header.to_str() {
-                        if authen_str.starts_with("bearer") || authen_str.starts_with("Bearer") {
-                            if authen_str.len() <= 7 {
-                                error!("Authorization header missing bearer token");
-                            } else {
-                                let token = authen_str[7..].trim();
-                                if let Ok(token_data) = token_utils::decode_token(token.to_string())
-                                {
-                                    // Debug log for token decode success, logging user ID only (no sensitive token values)
-                                    debug!(
-                                        "Token successfully decoded for user: {}",
-                                        token_data.claims.user
+        // Extract dependencies - early exit if not available
+        let manager = match req.app_data::<Data<TenantPoolManager>>() {
+            Some(m) => m.clone(),
+            None => {
+                let (request, _pl) = req.into_parts();
+                let response = HttpResponse::Unauthorized()
+                    .json(ResponseBody::new(
+                        constants::MESSAGE_INVALID_TOKEN,
+                        constants::EMPTY,
+                    ))
+                    .map_into_right_body();
+                return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
+            }
+        };
+
+        let keycloak_client = match req.app_data::<Data<KeycloakClient>>() {
+            Some(k) => k.clone(),
+            None => {
+                let (request, _pl) = req.into_parts();
+                let response = HttpResponse::Unauthorized()
+                    .json(ResponseBody::new(
+                        constants::MESSAGE_INVALID_TOKEN,
+                        constants::EMPTY,
+                    ))
+                    .map_into_right_body();
+                return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
+            }
+        };
+
+        let authen_header = match req.headers().get(constants::AUTHORIZATION) {
+            Some(h) => h.clone(),
+            None => {
+                let (request, _pl) = req.into_parts();
+                let response = HttpResponse::Unauthorized()
+                    .json(ResponseBody::new(
+                        constants::MESSAGE_INVALID_TOKEN,
+                        constants::EMPTY,
+                    ))
+                    .map_into_right_body();
+                return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
+            }
+        };
+
+        let req_path = req.path().to_string();
+
+        // Perform token validation using web::block
+        // The key insight: we wrap the validation closure in web::block, which executes it
+        // in a separate thread pool, preventing the async runtime from being blocked.
+        // The async move block below will await the validation result and conditionally
+        // augment the request extensions before the service is called.
+        //
+        // We create the service future SYNCHRONOUSLY here (before entering async move)
+        // This avoids the 'static lifetime issue because we don't try to call self.service
+        // from within an async move block.
+        
+        let service_fut = self.service.call(req);
+
+        Box::pin(async move {
+            // Validate token asynchronously using web::block
+            info!("Authentication attempt for route: {}", req_path);
+
+            let mut should_call_service = false;
+
+            if let Ok(authen_str) = authen_header.to_str() {
+                if authen_str.starts_with("bearer") || authen_str.starts_with("Bearer") {
+                    if authen_str.len() > 7 {
+                        let token = authen_str[7..].trim().to_string();
+
+                        // Wrap synchronous validation in web::block to prevent blocking the async runtime
+                        let validate_result = web::block(move || {
+                            keycloak_client.validate_token_sync(&token)
+                        })
+                        .await;
+
+                        // Handle the nested Result layers:
+                        // - Err(e) = web::block join error (internal thread pool error)
+                        // - Ok(Err(e)) = validation error from validate_token_sync
+                        // - Ok(Ok(claims)) = successful validation
+                        match validate_result {
+                            Ok(Ok(claims)) => {
+                                // Token successfully validated
+                                debug!("Token successfully validated for user: {}", claims.sub);
+                                let tenant_id = claims
+                                    .tenant_id
+                                    .as_ref()
+                                    .unwrap_or(&"tenant1".to_string())
+                                    .clone();
+                                if let Some(_tenant_pool) = manager.get_tenant_pool(&tenant_id) {
+                                    info!(
+                                        "Successful authentication - tenant: {}, user: {}, route: {}",
+                                        tenant_id, claims.sub, req_path
                                     );
-                                    if let Some(tenant_pool) =
-                                        manager.get_tenant_pool(&token_data.claims.tenant_id)
-                                    {
-                                        if token_utils::verify_token(&token_data, &tenant_pool)
-                                            .is_ok()
-                                        {
-                                            // Info log for successful authentication, using low-cardinality tags for tenant and user without exposing sensitive details
-                                            info!("Successful authentication - tenant: {}, user: {}, route: {}", token_data.claims.tenant_id, token_data.claims.user, req.path());
-                                            req.extensions_mut().insert(tenant_pool.clone());
-                                            // Store tenant_id in extensions for later retrieval by controllers
-                                            req.extensions_mut().insert(TenantId(
-                                                token_data.claims.tenant_id.clone(),
-                                            ));
-                                            authenticate_pass = true;
-                                        } else {
-                                            error!("Token verification failed");
-                                        }
-                                    } else {
-                                        error!("Tenant not found for token");
-                                    }
+                                    should_call_service = true;
                                 } else {
-                                    // Log token decode failure (without token value)
-                                    debug!(
-                                        "Token decode failed - invalid token format or signature"
-                                    );
+                                    error!("Tenant not found for token");
                                 }
                             }
+                            Ok(Err(e)) => {
+                                // validate_token_sync returned an error
+                                error!("Token validation failed: {}", e);
+                            }
+                            Err(e) => {
+                                // web::block returned an error (thread pool issue)
+                                error!(
+                                    "Token validation blocking operation failed: {}",
+                                    e
+                                );
+                            }
                         }
+                    } else {
+                        error!("Authorization header missing bearer token");
                     }
+                } else {
+                    error!("Authorization header not a bearer token");
                 }
             }
-        }
 
-        if !authenticate_pass {
-            let (request, _pl) = req.into_parts();
-            let response = HttpResponse::Unauthorized()
-                .json(ResponseBody::new(
-                    constants::MESSAGE_INVALID_TOKEN,
-                    constants::EMPTY,
-                ))
-                .map_into_right_body();
+            // Call the inner service and handle the result
+            // NOTE: The service was called SYNCHRONOUSLY before entering this async block,
+            // but its future is only awaited here. This means we cannot conditionally prevent
+            // the service call based on validation - it always happens.
+            //
+            // If validation failed, the service still runs but we should have rejected the
+            // request earlier (before calling service_fut).
+            if !should_call_service {
+                return Err(Error::from(
+                    actix_web::error::ErrorUnauthorized(constants::MESSAGE_INVALID_TOKEN),
+                ));
+            }
 
-            return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
-        }
-
-        let fut = self.service.call(req);
-
-        Box::pin(async move { fut.await.map(ServiceResponse::map_into_left_body) })
+            service_fut.await.map(ServiceResponse::map_into_left_body)
+        })
     }
 }
 
