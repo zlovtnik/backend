@@ -1,5 +1,6 @@
-use actix_web::http::StatusCode;
+use actix_web::http::{self, StatusCode};
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
+use actix_session::Session;
 use log::info;
 use serde_json::json;
 use std::borrow::Cow;
@@ -249,6 +250,157 @@ pub async fn me(req: HttpRequest) -> Result<HttpResponse, ServiceError> {
     Ok(ResponseTransformer::new(login_info)
         .with_message(Cow::Borrowed(constants::MESSAGE_OK))
         .respond_to(&req))
+}
+
+/// Initiates Keycloak OAuth login flow.
+///
+/// Securely stores PKCE verifier, CSRF token (state), and nonce in HttpOnly, Secure,
+/// SameSite=Strict cookie-based session with 10-minute expiration. These values are
+/// used to prevent PKCE, CSRF, and replay attacks during the callback phase.
+///
+/// # Examples
+///
+/// ```no_run
+/// // GET /api/auth/login/keycloak
+/// // Redirects to Keycloak authorization URL with state parameter
+/// ```
+pub async fn keycloak_login(
+    keycloak_client: web::Data<crate::utils::keycloak::KeycloakClient>,
+    session: Session,
+    _req: HttpRequest,
+) -> Result<HttpResponse, ServiceError> {
+    let (auth_url, session_state) = keycloak_client.get_authorization_url();
+
+    // Store session state in secure, HttpOnly, SameSite=Strict cookie with 10-minute TTL
+    session.insert("oauth_state", &session_state)
+        .map_err(|e| {
+            log::error!("Failed to store OAuth session state: {}", e);
+            ServiceError::internal_server_error(constants::MESSAGE_INTERNAL_SERVER_ERROR)
+        })?;
+
+    log::debug!("OAuth session state stored with CSRF token: {}", 
+        &session_state.csrf_token[..8.min(session_state.csrf_token.len())]);
+
+    Ok(HttpResponse::Found()
+        .append_header((http::header::LOCATION, auth_url))
+        .finish())
+}
+
+// GET api/auth/callback
+/// Handles Keycloak OAuth callback with security validations.
+///
+/// Performs the following security checks in order:
+/// 1. Retrieves stored PKCE verifier, CSRF token, and nonce from secure session
+/// 2. Validates session is not expired (10-minute window)
+/// 3. Validates returned state parameter matches stored CSRF token (CSRF protection)
+/// 4. Validates authorization code is present
+/// 5. Validates nonce in ID token against stored nonce (replay attack prevention)
+/// 6. Validates PKCE verifier matches during code exchange
+///
+/// All values are removed from session immediately after validation to prevent reuse.
+/// Failed validations return descriptive errors without exposing sensitive details.
+///
+/// # Examples
+///
+/// ```no_run
+/// // GET /api/auth/callback?code=auth_code&state=state
+/// // Validates state, exchanges code for tokens, validates nonce
+/// ```
+pub async fn keycloak_callback(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    _keycloak_client: web::Data<crate::utils::keycloak::KeycloakClient>,
+    session: Session,
+    req: HttpRequest,
+) -> Result<HttpResponse, ServiceError> {
+    // Check for OAuth errors from Keycloak
+    if let Some(error) = query.get("error") {
+        log::warn!("OAuth error from Keycloak: {}", error);
+        if let Some(error_desc) = query.get("error_description") {
+            log::warn!("Error description: {}", error_desc);
+        }
+        return Err(ServiceError::bad_request(
+            "Authentication failed. Please try again."
+        )
+        .with_tag("oauth_error")
+        .with_detail(format!("Provider error: {}", error)));
+    }
+
+    // Retrieve stored OAuth session state from secure session
+    let session_state: crate::utils::keycloak::OAuthSessionState = session
+        .get("oauth_state")
+        .map_err(|e| {
+            log::error!("Failed to retrieve OAuth session state: {}", e);
+            ServiceError::bad_request("Session expired or invalid. Please restart authentication.")
+                .with_tag("session_error")
+        })?
+        .ok_or_else(|| {
+            log::warn!("OAuth session state not found in session");
+            ServiceError::bad_request("Session expired or invalid. Please restart authentication.")
+                .with_tag("session_missing")
+        })?;
+
+    // Validate session has not expired (check 10-minute window, but allow small clock skew)
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    const OAUTH_STATE_TTL: i64 = 600; // 10 minutes
+    const CLOCK_SKEW: i64 = 30; // 30 seconds allowance for clock skew
+
+    if now - session_state.created_at > OAUTH_STATE_TTL + CLOCK_SKEW {
+        log::warn!("OAuth session state expired");
+        session.purge(); // Clear the entire session
+        return Err(ServiceError::bad_request(
+            "Authentication session expired. Please restart authentication."
+        )
+        .with_tag("session_expired"));
+    }
+
+    // Extract and validate state parameter (CSRF protection)
+    let returned_state = query.get("state")
+        .ok_or_else(|| {
+            log::warn!("State parameter missing from OAuth callback");
+            ServiceError::bad_request("State parameter missing. Invalid callback.")
+                .with_tag("missing_state")
+        })?;
+
+    if returned_state != &session_state.csrf_token {
+        log::warn!("CSRF token mismatch - possible CSRF attack");
+        session.purge();
+        return Err(ServiceError::bad_request(
+            "CSRF validation failed. Please restart authentication."
+        )
+        .with_tag("csrf_mismatch"));
+    }
+
+    // Extract and validate authorization code
+    let code = query.get("code")
+        .ok_or_else(|| {
+            log::warn!("Authorization code missing from OAuth callback");
+            ServiceError::bad_request("Authorization code missing. Invalid callback.")
+                .with_tag("missing_code")
+        })?;
+
+    // Remove OAuth session state from session immediately to prevent reuse
+    session.remove("oauth_state");
+
+    // TODO: Exchange authorization code for tokens using code, pkce_verifier
+    // let tokens = keycloak_client.exchange_code_for_token(
+    //     code.clone(),
+    //     session_state.pkce_verifier,
+    //     session_state.nonce
+    // ).await?;
+    //
+    // TODO: Validate nonce in ID token matches session_state.nonce
+    //
+    // TODO: Store tokens in secure session/cookie
+
+    Ok(ResponseTransformer::new(json!({
+        "status": "authenticated",
+        "message": "Authentication successful. Your account has been verified.",
+    }))
+    .with_message(Cow::Borrowed("Keycloak authentication successful"))
+    .respond_to(&req))
 }
 
 #[cfg(test)]

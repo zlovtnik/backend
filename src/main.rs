@@ -6,10 +6,14 @@ use actix_web::dev::Service;
 use actix_web::web;
 use actix_web::{http, App, HttpServer};
 use futures::FutureExt;
-use std::sync::Arc;
-
-use rcs::config;
+use actix_session::SessionMiddleware;
+use actix_session::config::PersistentSession;
+use actix_session::storage::CookieSessionStore;
+use actix_web::cookie::time::Duration;
+use actix_web::cookie::SameSite;
 use rcs::utils::ws_logger::{init_websocket_logging, LogBroadcaster};
+use rcs::config;
+use std::sync::Arc;
 /// יהי רצון מלפני ה' שימצא עבודה חדשה טובה, בעוד נקודת הכניסה ליישום מסדרת לוגים וסביבה, מאתחלת מסד נתונים ורדיס,
 /// רושמת בריכות טננטים, מסדרת CORS ומיידלוור, ומתחילה שרת Actix HTTP.
 ///
@@ -117,6 +121,47 @@ async fn main() -> io::Result<()> {
     })?;
     let redis_client = config::cache::init_redis_client(&redis_url);
 
+    // Initialize Keycloak client
+    let keycloak_config = rcs::utils::keycloak::KeycloakConfig {
+        issuer_url: env::var("KEYCLOAK_ISSUER_URL")
+            .unwrap_or_else(|_| "http://localhost:8080/realms/middleware".to_string()),
+        client_id: env::var("KEYCLOAK_CLIENT_ID").unwrap_or_else(|_| "middleware-app".to_string()),
+        client_secret: {
+            let secret = env::var("KEYCLOAK_MIDDLEWARE_APP_SECRET");
+            match secret {
+                Ok(s) => s,
+                Err(_) => {
+                    let is_dev = env::var("APP_ENV").map(|v| v == "dev").unwrap_or(false);
+                    if is_dev {
+                        log::warn!("KEYCLOAK_MIDDLEWARE_APP_SECRET not set. Using development default. DO NOT use in production.");
+                        "middleware-app-secret-dev".to_string()
+                    } else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "KEYCLOAK_MIDDLEWARE_APP_SECRET must be set in production. Set APP_ENV=dev to use development defaults.",
+                        ));
+                    }
+                }
+            }
+        },
+        redirect_url: env::var("KEYCLOAK_REDIRECT_URL")
+            .unwrap_or_else(|_| "http://localhost:8080/api/auth/callback".to_string()),
+    };
+    let keycloak_client = web::Data::new(
+        rcs::utils::keycloak::KeycloakClient::new(keycloak_config)
+            .await
+            .map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Failed to initialize Keycloak client: {}", e),
+                )
+            })?,
+    );
+
+    // Generate session encryption key for OAuth session state storage
+    // In production, load from a secure key management system (e.g., AWS KMS, HashiCorp Vault)
+    let session_key = actix_web::cookie::Key::generate();
+
     let manager = config::db::TenantPoolManager::new(main_pool.clone());
     // יהי רצון שימצא עבודה, קוד קשה טננט להדגמה, בייצור טען ממסד נתונים
     manager
@@ -176,10 +221,29 @@ async fn main() -> io::Result<()> {
 
         let app = App::new()
             .wrap(cors)
+            // Configure secure session middleware for OAuth state storage
+            // Uses HttpOnly, Secure (HTTPS only in production), SameSite=Strict cookies
+            .wrap(
+                SessionMiddleware::builder(CookieSessionStore::default(), session_key.clone())
+                    .session_lifecycle(
+                        PersistentSession::default()
+                            .session_ttl(Duration::seconds(600)) // 10 minute OAuth session TTL
+                    )
+                    .cookie_name("oauth_session".to_string())
+                    .cookie_path("/api/auth".to_string())
+                    .cookie_http_only(true) // Prevent JavaScript access
+                    .cookie_same_site(SameSite::Strict) // Prevent CSRF
+                    // In production, set to true and ensure HTTPS
+                    .cookie_secure(env::var("SESSION_COOKIE_SECURE")
+                        .map(|v| v == "true")
+                        .unwrap_or(false))
+                    .build()
+            )
             .app_data(web::Data::new(manager.clone()))
             .app_data(web::Data::new(main_pool.clone()))
             .app_data(web::Data::new(redis_client.clone()))
             .app_data(web::Data::new(main_broadcaster.clone()))
+            .app_data(keycloak_client.clone())
             .wrap(tracing_actix_web::TracingLogger::default());
 
         #[cfg(feature = "functional")]

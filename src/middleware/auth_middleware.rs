@@ -13,6 +13,7 @@ use crate::config::db::TenantPoolManager;
 use crate::constants;
 use crate::models::response::ResponseBody;
 use crate::types::TenantId;
+use crate::utils::keycloak::KeycloakClient;
 use crate::utils::token_utils;
 
 pub struct Authentication;
@@ -89,47 +90,46 @@ where
 
         if !authenticate_pass {
             if let Some(manager) = req.app_data::<Data<TenantPoolManager>>() {
-                if let Some(authen_header) = req.headers().get(constants::AUTHORIZATION) {
-                    // Log authentication attempt with low-cardinality information only, avoiding sensitive data
-                    info!("Authentication attempt for route: {}", req.path());
-                    if let Ok(authen_str) = authen_header.to_str() {
-                        if authen_str.starts_with("bearer") || authen_str.starts_with("Bearer") {
-                            if authen_str.len() <= 7 {
-                                error!("Authorization header missing bearer token");
-                            } else {
-                                let token = authen_str[7..].trim();
-                                if let Ok(token_data) = token_utils::decode_token(token.to_string())
-                                {
-                                    // Debug log for token decode success, logging user ID only (no sensitive token values)
-                                    debug!(
-                                        "Token successfully decoded for user: {}",
-                                        token_data.claims.user
-                                    );
-                                    if let Some(tenant_pool) =
-                                        manager.get_tenant_pool(&token_data.claims.tenant_id)
-                                    {
-                                        if token_utils::verify_token(&token_data, &tenant_pool)
-                                            .is_ok()
-                                        {
-                                            // Info log for successful authentication, using low-cardinality tags for tenant and user without exposing sensitive details
-                                            info!("Successful authentication - tenant: {}, user: {}, route: {}", token_data.claims.tenant_id, token_data.claims.user, req.path());
-                                            req.extensions_mut().insert(tenant_pool.clone());
-                                            // Store tenant_id in extensions for later retrieval by controllers
-                                            req.extensions_mut().insert(TenantId(
-                                                token_data.claims.tenant_id.clone(),
-                                            ));
-                                            authenticate_pass = true;
-                                        } else {
-                                            error!("Token verification failed");
+                if let Some(keycloak_client) = req.app_data::<Data<KeycloakClient>>() {
+                    if let Some(authen_header) = req.headers().get(constants::AUTHORIZATION) {
+                        // Log authentication attempt with low-cardinality information only, avoiding sensitive data
+                        info!("Authentication attempt for route: {}", req.path());
+                        if let Ok(authen_str) = authen_header.to_str() {
+                            if authen_str.starts_with("bearer") || authen_str.starts_with("Bearer") {
+                                if authen_str.len() > 7 {
+                                    let token = authen_str[7..].trim();
+                                    
+                                    // TODO: For production, wrap this in web::block to prevent blocking the async runtime:
+                                    // let validate_result = web::block(|| keycloak_client.validate_token_sync(token)).await;
+                                    // match validate_result { Ok(Ok(claims)) => {...}, Ok(Err(e)) => {...}, Err(e) => {...} }
+                                    // This requires restructuring the middleware to use LocalBoxFuture for the validation result.
+                                    match keycloak_client.validate_token_sync(token) {
+                                        Ok(claims) => {
+                                            // Debug log for token decode success, logging user ID only (no sensitive token values)
+                                            debug!(
+                                                "Token successfully validated for user: {}",
+                                                claims.sub
+                                            );
+                                            let tenant_id = claims.tenant_id.as_ref().unwrap_or(&"tenant1".to_string()).clone();
+                                            if let Some(tenant_pool) = manager.get_tenant_pool(&tenant_id) {
+                                                // Info log for successful authentication, using low-cardinality tags for tenant and user without exposing sensitive details
+                                                info!("Successful authentication - tenant: {}, user: {}, route: {}", tenant_id, claims.sub, req.path());
+                                                req.extensions_mut().insert(tenant_pool.clone());
+                                                // Store tenant_id in extensions for later retrieval by controllers
+                                                req.extensions_mut().insert(TenantId(tenant_id));
+                                                // Store user claims for later use
+                                                req.extensions_mut().insert(claims);
+                                                authenticate_pass = true;
+                                            } else {
+                                                error!("Tenant not found for token");
+                                            }
                                         }
-                                    } else {
-                                        error!("Tenant not found for token");
+                                        Err(e) => {
+                                            error!("Token validation failed: {}", e);
+                                        }
                                     }
                                 } else {
-                                    // Log token decode failure (without token value)
-                                    debug!(
-                                        "Token decode failed - invalid token format or signature"
-                                    );
+                                    error!("Authorization header missing bearer token");
                                 }
                             }
                         }

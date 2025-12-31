@@ -1,0 +1,16 @@
+# JMX Exporter Configuration for Schema Registry (Development Only)
+# WARNING: This configuration uses empty credentials and disabled SSL, suitable only for local development.
+# For production environments:
+# - Replace empty username/password with strong credentials from a secure secret manager
+# - Enable SSL (ssl: true) and provide paths to keystore/truststore or TLS certificates
+# - Do not commit production credentials to this repository
+
+startDelaySeconds: 0
+hostPort: schema-registry:1099
+username: ""
+password: ""
+ssl: false
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+rules:
+  - pattern: ".*"

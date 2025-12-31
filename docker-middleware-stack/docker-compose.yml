@@ -1,0 +1,412 @@
+services:
+  # Zookeeper (Required for Kafka)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    hostname: zookeeper
+    container_name: middleware-zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+    networks:
+      - middleware
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo 'ruok' | nc localhost 2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Kafka
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    hostname: kafka
+    container_name: middleware-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - middleware
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9093"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Schema Registry
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.0
+    hostname: schema-registry
+    container_name: middleware-schema-registry
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:9093
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_JMX_PORT: 1099
+      # Disable JMX authentication for local development (authentication requires file permissions we can't reliably set in Docker)
+      # For production, use proper secret management and fix file permissions in the Dockerfile
+      SCHEMA_REGISTRY_JMX_OPTS: "-Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -Dcom.sun.management.jmxremote.local.only=false -Dcom.sun.management.jmxremote.port=1099 -Dcom.sun.management.jmxremote.rmi.port=1099"
+    networks:
+      - middleware
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081/subjects || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Schema Registry JMX Exporter
+  schema-registry-exporter:
+    image: bitnami/jmx-exporter:latest
+    hostname: schema-registry-exporter
+    container_name: middleware-schema-registry-exporter
+    depends_on:
+      - schema-registry
+    ports:
+      - "5556:5556"
+    volumes:
+      - ./configs/schema-registry/jmx_exporter_config.yml:/opt/bitnami/jmx-exporter/config.yml
+    command: ["5556", "/opt/bitnami/jmx-exporter/config.yml"]
+    networks:
+      - middleware
+
+  # Kafka Connect with Debezium
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:7.5.0
+    container_name: middleware-kafka-connect
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8084:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9093
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: connect-cluster
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: 'false'
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+    volumes:
+      - kafka-connect-plugins:/usr/share/confluent-hub-components
+    networks:
+      - middleware
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    entrypoint:
+      - bash
+      - -c
+      - |
+        echo "Installing Debezium PostgreSQL Connector..."
+        if ! confluent-hub install --no-prompt debezium/debezium-connector-postgresql:2.4.1; then
+          echo "WARNING: Failed to install Debezium connector. Proceeding anyway for dev environment."
+        fi
+        echo "Starting Kafka Connect..."
+        exec /etc/confluent/docker/run
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: middleware-postgres
+    environment:
+      POSTGRES_DB: middleware
+      POSTGRES_USER: middleware
+      POSTGRES_PASSWORD: middleware123
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./configs/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./configs/postgres/postgresql.conf:/etc/postgresql/postgresql.conf
+    command:
+      - "postgres"
+      - "-c"
+      - "config_file=/etc/postgresql/postgresql.conf"
+    networks:
+      - middleware
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U middleware -d middleware -h localhost"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+
+  # Keycloak Identity and Access Management
+  keycloak:
+    image: quay.io/keycloak/keycloak:22.0
+    container_name: middleware-keycloak
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/middleware
+      KC_DB_USERNAME: middleware
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-middleware123}
+      KC_HOSTNAME_STRICT: false
+      KC_HTTP_ENABLED: true
+      KC_HOSTNAME_STRICT_HTTPS: false
+      KC_HEALTH_ENABLED: true
+      KC_METRICS_ENABLED: true
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_SPI_THEME_CACHE_THEMES: false
+      KC_SPI_THEME_CACHE_TEMPLATES: false
+    ports:
+      - "8080:8080"
+    command: ["start-dev"]
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+      - ./configs/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
+    networks:
+      - middleware
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080;echo -e 'GET /health/ready HTTP/1.1\r\nhost: localhost\r\nConnection: close\r\n\r\n' >&3;grep -q '200 OK' <&3"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: middleware-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./configs/redis/redis.conf:/etc/redis/redis.conf
+    command: ["redis-server", "/etc/redis/redis.conf"]
+    networks:
+      - middleware
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Redis Exporter
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: middleware-redis-exporter
+    depends_on:
+      - redis
+    environment:
+      - REDIS_ADDR=redis:6379
+    ports:
+      - "9121:9121"
+    networks:
+      - middleware
+
+  # MinIO Object Storage
+  minio:
+    image: minio/minio:latest
+    container_name: middleware-minio
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      MINIO_DOMAIN: localhost
+      MINIO_BROWSER: "on"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: ["server", "/data", "--console-address", ":9001"]
+    networks:
+      - middleware
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # OpenTelemetry Collector
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    container_name: middleware-otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./configs/otel/collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "55679:55679" # Prometheus metrics
+    depends_on:
+      - jaeger
+      - prometheus
+    networks:
+      - middleware
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:13133/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Jaeger for Tracing Visualization
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: middleware-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: true
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14268:14268"  # Accept jaeger.thrift over HTTP
+      - "14250:14250"  # Accept jaeger.thrift over gRPC
+    volumes:
+      - jaeger_data:/tmp
+    networks:
+      - middleware
+
+  # Prometheus for Metrics Collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: middleware-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - middleware
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Grafana for Dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: middleware-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_USERS_ALLOW_SIGN_UP: false
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./configs/grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - middleware
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Kafka UI for Kafka Management
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: middleware-kafka-ui
+    depends_on:
+      - kafka
+      - schema-registry
+    ports:
+      - "8082:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9093
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+      KAFKA_CLUSTERS_0_KAFKAVERSION: 3.5.0
+      DYNAMIC_CONFIG_ENABLED: 'true'
+    networks:
+      - middleware
+
+  # Redis Commander for Redis Management
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: middleware-redis-commander
+    depends_on:
+      - redis
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8083:8081"
+    networks:
+      - middleware
+
+  # pgAdmin for PostgreSQL Management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: middleware-pgadmin
+    depends_on:
+      - postgres
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - middleware
+
+volumes:
+  zookeeper_data:
+  zookeeper_logs:
+  kafka_data:
+  postgres_data:
+  keycloak_data:
+  redis_data:
+  minio_data:
+  jaeger_data:
+  prometheus_data:
+  grafana_data:
+  pgadmin_data:
+  kafka-connect-plugins:
+
+networks:
+  middleware:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

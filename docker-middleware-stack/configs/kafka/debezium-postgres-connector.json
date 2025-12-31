@@ -1,0 +1,31 @@
+{
+  "name": "postgres-cdc-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "database.hostname": "postgres",
+    "database.port": 5432,
+    "database.user": "${env:DB_USER}",
+    "database.password": "${env:DB_PASSWORD}",
+    "database.dbname": "middleware",
+    "database.server.name": "postgres-cdc",
+    "plugin.name": "pgoutput",
+    "publication.name": "dbz_publication",
+    "slot.name": "dbz_slot",
+    "table.include.list": "public.staging_example",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": false,
+    "transforms": "route",
+    "transforms.route.type": "org.apache.kafka.connect.transforms.RegexRouter",
+    "transforms.route.regex": "([^.]+)\\.([^.]+)\\.([^.]+)",
+    "transforms.route.replacement": "cdc.$3",
+    "decimal.handling.mode": "string",
+    "snapshot.mode": "initial",
+    "publication.autocreate.mode": "filtered",
+    "heartbeat.interval.ms": 10000,
+    "heartbeat.action.query": "INSERT INTO heartbeat (ts) VALUES (now())",
+    "topic.prefix": "cdc",
+    "max.batch.size": 2048,
+    "poll.interval.ms": 1000
+  }
+}

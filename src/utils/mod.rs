@@ -1,3 +1,4 @@
+pub mod keycloak;
 pub mod token_utils;
 pub mod ws_logger;
 
