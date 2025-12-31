@@ -58,7 +58,7 @@ mod tests {
     fn test_body_module_import_fix() {
         // Test that the body module alias import is working
         // This conceptually tests the fix without full actix setup
-        use actix_web::body::{self, BoxBody};
+        use actix_web::body::BoxBody;
 
         // If this compiles, the import fix is working
         let _test: Option<BoxBody> = None;

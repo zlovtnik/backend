@@ -65,6 +65,7 @@ pub struct UpdateEventoNfagRequest {
 /// Custom validator for evento status values.
 /// Validates that the status is one of the allowed values (case-insensitive).
 /// Note: Normalization to lowercase is handled in the From<UpdateEventoNfagRequest> impl.
+#[allow(dead_code)]
 fn validate_evento_status(status: &str) -> Result<(), ValidationError> {
     let valid_statuses = [
         "pending",

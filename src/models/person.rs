@@ -45,6 +45,7 @@ impl PersonDTO {
     /// assert!(!crate::models::person::PersonDTO::is_not_blank(&"   ".to_string()));
     /// assert!(!crate::models::person::PersonDTO::is_not_blank(&"".to_string()));
     /// ```
+    #[allow(dead_code)]
     fn is_not_blank(value: &String) -> bool {
         !value.trim().is_empty()
     }

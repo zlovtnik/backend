@@ -45,6 +45,7 @@ Each `TransformationStep` contains:
 Returns a list of all available functional demonstrations and their parameters.
 
 **Response Example**:
+
 ```json
 {
   "operations": [
@@ -83,6 +84,7 @@ Returns a list of all available functional demonstrations and their parameters.
 Demonstrates filtering data based on a predicate condition.
 
 **Request**:
+
 ```json
 {
   "data": [1, 2, 3, 4, 5, 6],
@@ -91,12 +93,14 @@ Demonstrates filtering data based on a predicate condition.
 ```
 
 **Conditions Available**:
+
 - `even` - Keep even numbers
 - `odd` - Keep odd numbers
 - `greater_than_5` - Keep numbers > 5
 - `less_than_10` - Keep numbers < 10
 
 **Response Example**:
+
 ```json
 {
   "pipeline_id": "550e8400-e29b-41d4-a716-446655440000",
@@ -124,6 +128,7 @@ Demonstrates filtering data based on a predicate condition.
 Demonstrates transforming each element using a mapping function.
 
 **Request**:
+
 ```json
 {
   "data": [1, 2, 3, 4, 5],
@@ -132,6 +137,7 @@ Demonstrates transforming each element using a mapping function.
 ```
 
 **Transformations Available**:
+
 - `double` - Multiply by 2
 - `square` - Multiply by itself
 - `increment` - Add 1
@@ -139,6 +145,7 @@ Demonstrates transforming each element using a mapping function.
 - `absolute` - Absolute value
 
 **Response Example**:
+
 ```json
 {
   "pipeline_id": "550e8400-e29b-41d4-a716-446655440001",
@@ -166,6 +173,7 @@ Demonstrates transforming each element using a mapping function.
 Demonstrates composing multiple operations in sequence, showing each step separately.
 
 **Request**:
+
 ```json
 {
   "data": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
@@ -178,12 +186,14 @@ Demonstrates composing multiple operations in sequence, showing each step separa
 ```
 
 **Operations Available**:
+
 - `filter` (param: `even`, `odd`)
 - `map` (param: `double`, `square`, `increment`)
 - `take` (param: number of elements to take)
 - `skip` (param: number of elements to skip)
 
 **Response Example**:
+
 ```json
 {
   "pipeline_id": "550e8400-e29b-41d4-a716-446655440002",
@@ -225,6 +235,7 @@ Demonstrates composing multiple operations in sequence, showing each step separa
 Demonstrates immutable state transitions, showing how state evolves through mutations.
 
 **Request**:
+
 ```json
 {
   "initial_value": 10,
@@ -237,6 +248,7 @@ Demonstrates immutable state transitions, showing how state evolves through muta
 ```
 
 **Mutations Available**:
+
 - `increment` - Add value
 - `decrement` - Subtract value
 - `multiply` - Multiply by value
@@ -244,6 +256,7 @@ Demonstrates immutable state transitions, showing how state evolves through muta
 - `set` - Set to value
 
 **Response Example**:
+
 ```json
 {
   "pipeline_id": "550e8400-e29b-41d4-a716-446655440003",
@@ -377,6 +390,7 @@ export default useFunctionalDemo;
 ```
 
 **Key Improvements:**
+
 1. **Generic `runDemo` helper**: All operations use a single fetch-with-error-handling pattern
 2. **Explicit TypeScript types**: Interfaces for `PipelineVisualization`, `TransformationStep`, and `DemoRequest`
 3. **Complete API coverage**: All 4 operations (filter, map, chain, state-transitions) exposed
@@ -460,20 +474,25 @@ export const PipelineAnimator: React.FC<{ steps: TransformationStep[] }> = ({ st
 ## Use Cases
 
 ### 1. Educational - Teach Functional Programming
+
 Animate how pure functions transform data without side effects.
 
 ### 2. Data Flow Visualization
+
 Show how data moves through filtering, mapping, and composition operations.
 
 ### 3. Performance Analysis
+
 Display `duration_ms` per step to visualize which operations are expensive.
 
 ### 4. State Management Pattern Learning
+
 Demonstrate immutable state transitions instead of in-place mutations.
 
 ## Error Handling
 
 All endpoints return appropriate HTTP status codes:
+
 - `200 OK` - Successful operation
 - `400 Bad Request` - Invalid input (malformed request or unknown operation)
 - `500 Internal Server Error` - Server-side error

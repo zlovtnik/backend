@@ -1,0 +1,97 @@
+# Production-grade Keycloak Dockerfile for cloud deployment (e.g., Render)
+# with secure JMX monitoring and proper authentication/SSL configuration
+#
+# SECURITY WARNING: 
+# This Dockerfile supports two modes:
+# 1. PRODUCTION (recommended): JMX auth + SSL enabled - requires proper secret management
+# 2. DEVELOPMENT ONLY: JMX auth/SSL disabled - USE ONLY IN ISOLATED DEV/TEST ENVIRONMENTS
+#
+# To use development mode, build with: --build-arg JMX_SECURE=false
+# Default is production mode (JMX_SECURE=true)
+
+FROM quay.io/keycloak/keycloak:23.0.0
+
+LABEL maintainer="Your Name <your.email@example.com>"
+LABEL description="Production Keycloak with secure JMX monitoring"
+
+# Build arguments for security configuration
+ARG JMX_SECURE=true
+
+# Set environment variables with production defaults
+ENV KEYCLOAK_HOME=/opt/keycloak \
+    KEYCLOAK_ADMIN=admin \
+    KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-changeme} \
+    KC_HOSTNAME=localhost \
+    KC_PROXY=edge \
+    KC_DB=postgres \
+    KC_DB_URL_HOST=postgres \
+    KC_DB_URL_PORT=5432 \
+    KC_DB_USERNAME=keycloak \
+    KC_DB_PASSWORD=${KC_DB_PASSWORD:-keycloak} \
+    KC_DB_URL_DATABASE=keycloak \
+    JAVA_OPTS_APPEND="-Xms1G -Xmx1G -XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35 -XX:+DisableExplicitGC" \
+    KEYCLOAK_JMX_PORT=9999 \
+    JMX_SECURE=${JMX_SECURE}
+
+# Create required directories for secure JMX files
+RUN mkdir -p /opt/keycloak/data /var/log/keycloak /etc/secrets && \
+    chmod -R 755 /opt/keycloak/data /var/log/keycloak && \
+    chmod 700 /etc/secrets
+
+# Create JMX configuration based on security mode
+RUN if [ "${JMX_SECURE}" = "true" ]; then \
+        echo "=== Configuring SECURE JMX (Production Mode) ===" && \
+        mkdir -p /etc/keycloak/jmx && \
+        chmod 700 /etc/keycloak/jmx; \
+    else \
+        echo "=== WARNING: Configuring INSECURE JMX (Development Mode Only) ===" && \
+        echo "    ⚠️  JMX authentication and SSL are DISABLED" && \
+        echo "    ⚠️  DO NOT use this configuration in production" && \
+        echo "    ⚠️  ONLY for isolated development/test environments"; \
+    fi
+
+# Create startup wrapper script that configures JMX based on security mode
+RUN mkdir -p /etc/keycloak/scripts && chmod 755 /etc/keycloak/scripts
+
+RUN cat > /opt/keycloak/start-keycloak-secure.sh << 'EOF' && chmod +x /opt/keycloak/start-keycloak-secure.sh
+#!/bin/bash
+set -e
+
+if [ "${JMX_SECURE}" = "true" ]; then
+    echo "Starting Keycloak with SECURE JMX (auth + SSL enabled)"
+    
+    # Verify secure files exist
+    if [ ! -f /etc/secrets/jmxremote.password ]; then
+        echo "ERROR: JMX password file not found at /etc/secrets/jmxremote.password"
+        exit 1
+    fi
+    
+    if [ ! -f /etc/secrets/keycloak.server.keystore.jks ]; then
+        echo "ERROR: JMX keystore file not found at /etc/secrets/keycloak.server.keystore.jks"
+        exit 1
+    fi
+    
+    # Set secure JMX options
+    export JAVA_OPTS="${JAVA_OPTS_APPEND} -Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.authenticate=true -Dcom.sun.management.jmxremote.ssl=true -Dcom.sun.management.jmxremote.port=9999 -Dcom.sun.management.jmxremote.rmi.port=9999 -Dcom.sun.management.jmxremote.password.file=/etc/secrets/jmxremote.password -Dcom.sun.management.jmxremote.access.file=/etc/secrets/jmxremote.access -Dcom.sun.management.jmxremote.registry.ssl=true -Dcom.sun.management.jmxremote.ssl.need.client.auth=false -Djavax.net.ssl.keyStore=/etc/secrets/keycloak.server.keystore.jks -Djavax.net.ssl.keyStorePassword=${KEYSTORE_PASSWORD:-changeit} -Djavax.net.ssl.trustStore=/etc/secrets/keycloak.server.truststore.jks -Djavax.net.ssl.trustStorePassword=${TRUSTSTORE_PASSWORD:-changeit}"
+    
+else
+    echo "⚠️  Starting Keycloak with INSECURE JMX (development mode only)"
+    export JAVA_OPTS="${JAVA_OPTS_APPEND} -Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -Dcom.sun.management.jmxremote.port=9999 -Dcom.sun.management.jmxremote.rmi.port=9999 -Dcom.sun.management.jmxremote.local.only=false"
+fi
+
+# Start Keycloak in production mode
+exec /opt/keycloak/bin/kc.sh start
+EOF
+
+# Expose ports
+# 8080: HTTP (application)
+# 8443: HTTPS (application, requires SSL cert)
+# 9999: JMX metrics
+EXPOSE 8080 8443 9999
+
+# Health check - validates Keycloak is responding
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8080/health/ready || exit 1
+
+# Run Keycloak with secure JMX configuration
+CMD ["/opt/keycloak/start-keycloak-secure.sh"]

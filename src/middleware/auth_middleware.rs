@@ -1,7 +1,7 @@
 use actix_service::forward_ready;
 use actix_web::body::EitherBody;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
-use actix_web::http::{header::HeaderValue, Method};
+use actix_web::http::Method;
 use actix_web::web::{self, Data};
 use actix_web::Error;
 use actix_web::HttpMessage;
@@ -528,6 +528,7 @@ pub mod functional_auth {
         /// let res = crate::middleware::auth_middleware::create_unauthorized_response(req).unwrap();
         /// assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
         /// ```
+        #[allow(dead_code)]
         fn create_unauthorized_response(
             req: ServiceRequest,
         ) -> Result<ServiceResponse<EitherBody<BoxBody>>, Error> {

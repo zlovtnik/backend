@@ -331,7 +331,9 @@ pub mod functional_middleware_impl {
 
     /// Composable middleware transformer that supports functional composition
     pub struct FunctionalMiddleware<T, F> {
+        #[allow(dead_code)]
         function: Arc<F>,
+        #[allow(dead_code)]
         registry: Arc<PureFunctionRegistry>,
         _phantom: PhantomData<T>,
     }
