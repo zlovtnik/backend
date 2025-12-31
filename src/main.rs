@@ -127,14 +127,15 @@ async fn main() -> io::Result<()> {
             .unwrap_or_else(|_| "http://localhost:8080/realms/middleware".to_string()),
         client_id: env::var("KEYCLOAK_CLIENT_ID").unwrap_or_else(|_| "middleware-app".to_string()),
         client_secret: {
+            use secrecy::SecretString;
             let secret = env::var("KEYCLOAK_MIDDLEWARE_APP_SECRET");
             match secret {
-                Ok(s) => s,
+                Ok(s) => SecretString::new(s),
                 Err(_) => {
                     let is_dev = env::var("APP_ENV").map(|v| v == "dev").unwrap_or(false);
                     if is_dev {
                         log::warn!("KEYCLOAK_MIDDLEWARE_APP_SECRET not set. Using development default. DO NOT use in production.");
-                        "middleware-app-secret-dev".to_string()
+                        SecretString::new("middleware-app-secret-dev".to_string())
                     } else {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidInput,

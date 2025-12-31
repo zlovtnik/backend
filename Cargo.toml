@@ -59,6 +59,7 @@ bigdecimal = { version = "0.4.8", features = ["serde"] }
 async-trait = "0.1.89"
 aes-gcm = "0.10"
 validator = { version = "0.20", features = ["derive"] }
+secrecy = { version = "0.8", features = ["serde"] }
 
 rcs-functional = { path = "functional_lib", optional = true }
 

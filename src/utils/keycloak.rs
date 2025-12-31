@@ -4,15 +4,26 @@ use openidconnect::{
     AuthenticationFlow, ClientId, ClientSecret, CsrfToken, IssuerUrl,
     Nonce, PkceCodeChallenge, RedirectUrl, Scope,
 };
-use reqwest::Client;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize)]
 pub struct KeycloakConfig {
     pub issuer_url: String,
     pub client_id: String,
-    pub client_secret: String,
+    pub client_secret: SecretString,
     pub redirect_url: String,
+}
+
+impl std::fmt::Debug for KeycloakConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeycloakConfig")
+            .field("issuer_url", &self.issuer_url)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"***REDACTED***")
+            .field("redirect_url", &self.redirect_url)
+            .finish()
+    }
 }
 
 /// OAuth session state for PKCE, CSRF, and nonce validation
@@ -31,7 +42,6 @@ pub struct OAuthSessionState {
 #[derive(Clone)]
 pub struct KeycloakClient {
     client: CoreClient,
-    http_client: Client,
 }
 
 impl KeycloakClient {
@@ -45,13 +55,12 @@ impl KeycloakClient {
         let client = CoreClient::from_provider_metadata(
             provider_metadata,
             ClientId::new(config.client_id),
-            Some(ClientSecret::new(config.client_secret)),
+            Some(ClientSecret::new(config.client_secret.expose_secret().clone())),
         )
         .set_redirect_uri(RedirectUrl::new(config.redirect_url)?);
 
         Ok(KeycloakClient {
             client,
-            http_client: Client::new(),
         })
     }
 
@@ -113,7 +122,7 @@ impl KeycloakClient {
         //
         // use jsonwebtoken::{decode, DecodingKey, Validation};
         // 1. Parse JWT header to extract 'kid'
-        // 2. Fetch JWKS from Keycloak: self.http_client.get(&format!("{}/protocol/openid-connect/certs", self.issuer_url)).await?.json()
+        // 2. Fetch JWKS from Keycloak realm's JWKS endpoint
         // 3. Find JWK entry matching kid
         // 4. Convert RSA public key (n, e) to PEM and create DecodingKey::from_rsa_components(n, e)
         // 5. Validate: decode::<Claims>(token, &key, &Validation::new(Algorithm::RS256))
