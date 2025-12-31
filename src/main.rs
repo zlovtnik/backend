@@ -216,6 +216,7 @@ mod tests {
     }
 
     #[actix_web::test]
+    #[cfg(feature = "functional")]
     async fn test_startup_ok() {
         use std::sync::Arc;
         let docker = clients::Cli::default();

@@ -1,4 +1,5 @@
 use actix_web::{web, HttpMessage, HttpRequest, HttpResponse, Result};
+use diesel::prelude::*;
 use serde_json::json;
 use validator::Validate;
 
@@ -178,10 +179,13 @@ pub async fn find_by_id(
     })?;
 
     let cons_sit_nfag = ConsSitNfag::find_by_id_and_tenant(id, tenant_id.as_str(), &mut conn)
-        .map_err(|e| {
-            ServiceError::not_found("ConsSitNfag not found")
+        .map_err(|e| match e {
+            diesel::result::Error::NotFound => ServiceError::not_found("ConsSitNfag not found")
                 .with_detail(e.to_string())
-                .with_tag("database")
+                .with_tag("database"),
+            _ => ServiceError::internal_server_error("Database error")
+                .with_detail(e.to_string())
+                .with_tag("database"),
         })?;
 
     Ok(HttpResponse::Ok().json(json!({
@@ -229,10 +233,13 @@ pub async fn update(
 
     let cons_sit_nfag =
         ConsSitNfag::update_by_id_and_tenant(id, tenant_id.as_str(), update_dto, &mut conn)
-            .map_err(|e| {
-                ServiceError::not_found("ConsSitNfag not found or update failed")
+            .map_err(|e| match e {
+                diesel::result::Error::NotFound => ServiceError::not_found("ConsSitNfag not found")
                     .with_detail(e.to_string())
-                    .with_tag("database")
+                    .with_tag("database"),
+                _ => ServiceError::internal_server_error("Database error")
+                    .with_detail(e.to_string())
+                    .with_tag("database"),
             })?;
 
     Ok(HttpResponse::Ok().json(json!({

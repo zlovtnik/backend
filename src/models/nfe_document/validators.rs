@@ -50,6 +50,26 @@ pub fn update_nfe_validator() -> Validator<UpdateNfeDocument> {
                 validation_rules::max_length("status", 20)(status)
             })
         })
+        .rule(|dto: &UpdateNfeDocument| {
+            if let Some(valor) = dto.valor_total {
+                if valor <= rust_decimal::Decimal::ZERO {
+                    return Err(ServiceError::bad_request(
+                        "valor_total must be greater than zero",
+                    ));
+                }
+            }
+            Ok(())
+        })
+        .rule(|dto: &UpdateNfeDocument| {
+            if let Some(valor) = dto.valor_produtos {
+                if valor <= rust_decimal::Decimal::ZERO {
+                    return Err(ServiceError::bad_request(
+                        "valor_produtos must be greater than zero",
+                    ));
+                }
+            }
+            Ok(())
+        })
 }
 
 /// Validate a NewNfeDocument

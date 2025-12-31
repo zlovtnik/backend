@@ -338,16 +338,24 @@ impl<T: Into<i64> + TryFrom<i64> + Clone + fmt::Debug + Send + Sync> Cursor for 
         let decoded = cursor_encoding::decode_opaque(encoded)?;
 
         let parts: Vec<&str> = decoded.split(':').collect();
-        if parts.len() != 3 || parts[0] != "id" {
+        // Backward-compatible handling: accept both old two-part (id:VALUE)
+        // and new three-part (id:VALUE:START_VALUE) formats.
+        if (parts.len() != 2 && parts.len() != 3) || parts[0] != "id" {
             return Err(CursorError::InvalidFormat(decoded));
         }
 
         let id: i64 = parts[1]
             .parse()
             .map_err(|_| CursorError::InvalidFormat(decoded.clone()))?;
-        let start_value: i64 = parts[2]
-            .parse()
-            .map_err(|_| CursorError::InvalidFormat(decoded.clone()))?;
+
+        let start_value: i64 = if parts.len() == 3 {
+            parts[2]
+                .parse()
+                .map_err(|_| CursorError::InvalidFormat(decoded.clone()))?
+        } else {
+            0 // Fallback to default start value for legacy two-part cursors
+        };
+
         let id_converted = T::try_from(id).map_err(|_| CursorError::OutOfRange(decoded))?;
         Ok(Self::with_start_value(id_converted, start_value))
     }
