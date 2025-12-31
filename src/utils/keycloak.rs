@@ -1,9 +1,9 @@
 use openidconnect::{
     core::{CoreClient, CoreProviderMetadata, CoreResponseType},
-    reqwest::async_http_client,
     AuthenticationFlow, ClientId, ClientSecret, CsrfToken, IssuerUrl,
     Nonce, PkceCodeChallenge, RedirectUrl, Scope,
 };
+use reqwest::Client as ReqwestClient;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
@@ -41,27 +41,56 @@ pub struct OAuthSessionState {
 
 #[derive(Clone)]
 pub struct KeycloakClient {
-    client: CoreClient,
+    issuer_url: String,
+    client_id: String,
+    client_secret: SecretString,
+    redirect_url: String,
 }
 
 impl KeycloakClient {
     pub async fn new(config: KeycloakConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let provider_metadata = CoreProviderMetadata::discover_async(
-            IssuerUrl::new(config.issuer_url.clone())?,
-            async_http_client,
-        )
-        .await?;
-
-        let client = CoreClient::from_provider_metadata(
-            provider_metadata,
-            ClientId::new(config.client_id),
-            Some(ClientSecret::new(config.client_secret.expose_secret().clone())),
-        )
-        .set_redirect_uri(RedirectUrl::new(config.redirect_url)?);
+        // Validate configuration by attempting discovery
+        let http_client = ReqwestClient::new();
+        let issuer_url = IssuerUrl::new(config.issuer_url.clone())?;
+        let metadata_url = issuer_url.url().join(".well-known/openid-configuration")?;
+        
+        let response = http_client
+            .get(metadata_url)
+            .send()
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+        
+        let _provider_metadata: CoreProviderMetadata = response
+            .json()
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
         Ok(KeycloakClient {
-            client,
+            issuer_url: config.issuer_url,
+            client_id: config.client_id,
+            client_secret: config.client_secret,
+            redirect_url: config.redirect_url,
         })
+    }
+
+    async fn validate_configuration(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Validate configuration by attempting discovery
+        let http_client = ReqwestClient::new();
+        let issuer_url = IssuerUrl::new(self.issuer_url.clone())?;
+        let metadata_url = issuer_url.url().join(".well-known/openid-configuration")?;
+        
+        let response = http_client
+            .get(metadata_url)
+            .send()
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+        
+        let _provider_metadata: CoreProviderMetadata = response
+            .json()
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+        Ok(())
     }
 
     /// Generate authorization URL and return session state for secure storage.
@@ -74,11 +103,34 @@ impl KeycloakClient {
     ///
     /// **IMPORTANT**: Store the returned `OAuthSessionState` securely in an HttpOnly,
     /// Secure, SameSite=Strict cookie and DO NOT expose to frontend code.
-    pub fn get_authorization_url(&self) -> (String, OAuthSessionState) {
+    pub async fn get_authorization_url(&self) -> Result<(String, OAuthSessionState), Box<dyn std::error::Error + Send + Sync>> {
+        // Fetch provider metadata
+        let http_client = ReqwestClient::new();
+        let issuer_url = IssuerUrl::new(self.issuer_url.clone())?;
+        let metadata_url = issuer_url.url().join(".well-known/openid-configuration")?;
+        
+        let response = http_client
+            .get(metadata_url)
+            .send()
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+        
+        let provider_metadata: CoreProviderMetadata = response
+            .json()
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+        // Create a fully configured client from the metadata
+        let client = CoreClient::from_provider_metadata(
+            provider_metadata,
+            ClientId::new(self.client_id.clone()),
+            Some(ClientSecret::new(self.client_secret.expose_secret().to_string())),
+        );
+
+        // Generate PKCE and authorization URL
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
-        let (auth_url, csrf_token, nonce) = self
-            .client
+        let (auth_url, csrf_token, nonce) = client
             .authorize_url(
                 AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
                 CsrfToken::new_random,
@@ -100,7 +152,7 @@ impl KeycloakClient {
                 .as_secs() as i64,
         };
 
-        (auth_url.to_string(), session_state)
+        Ok((auth_url.to_string(), session_state))
     }
 
     /// Validate JWT token signature and claims using RS256 and JWKS.

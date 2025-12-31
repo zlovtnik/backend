@@ -130,12 +130,12 @@ async fn main() -> io::Result<()> {
             use secrecy::SecretString;
             let secret = env::var("KEYCLOAK_MIDDLEWARE_APP_SECRET");
             match secret {
-                Ok(s) => SecretString::new(s),
+                Ok(s) => SecretString::new(s.into_boxed_str()),
                 Err(_) => {
                     let is_dev = env::var("APP_ENV").map(|v| v == "dev").unwrap_or(false);
                     if is_dev {
                         log::warn!("KEYCLOAK_MIDDLEWARE_APP_SECRET not set. Using development default. DO NOT use in production.");
-                        SecretString::new("middleware-app-secret-dev".to_string())
+                        SecretString::new("middleware-app-secret-dev".to_string().into_boxed_str())
                     } else {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidInput,

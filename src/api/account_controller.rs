@@ -269,7 +269,12 @@ pub async fn keycloak_login(
     session: Session,
     _req: HttpRequest,
 ) -> Result<HttpResponse, ServiceError> {
-    let (auth_url, session_state) = keycloak_client.get_authorization_url();
+    let (auth_url, session_state) = keycloak_client.get_authorization_url()
+        .await
+        .map_err(|e| {
+            log::error!("Failed to generate OAuth authorization URL: {}", e);
+            ServiceError::internal_server_error(constants::MESSAGE_INTERNAL_SERVER_ERROR)
+        })?;
 
     // Store session state in secure, HttpOnly, SameSite=Strict cookie with 10-minute TTL
     session.insert("oauth_state", &session_state)

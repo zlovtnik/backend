@@ -620,7 +620,7 @@
       },
       "targets": [
         {
-          "expr": "rate(retry_attempts_count[1m])",
+          "expr": "rate(retry_attempts[1m])",
           "legendFormat": "retry rate",
           "refId": "A"
         }
