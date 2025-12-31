@@ -8,10 +8,11 @@ use crate::{
     config::db::Pool,
     constants,
     error::ServiceError,
-    functional::response_transformers::{ResponseTransformError, ResponseTransformer},
     models::user::UserUpdateDTO,
     services::{account_service, functional_service_base::FunctionalErrorHandling, user_service},
 };
+
+use crate::functional::response_transformers::{ResponseTransformError, ResponseTransformer};
 
 fn response_composition_error(err: ResponseTransformError) -> ServiceError {
     ServiceError::internal_server_error(constants::MESSAGE_INTERNAL_SERVER_ERROR)

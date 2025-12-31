@@ -3,7 +3,7 @@
 pub mod tenant {
     use chrono::NaiveDateTime;
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Default)]
     pub struct Tenant {
         pub id: String,
         pub name: String,

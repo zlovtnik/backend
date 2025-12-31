@@ -1,13 +1,13 @@
 use crate::schema::*;
-use diesel::prelude::*;
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
-use validator::Validate;
 use diesel::deserialize::FromSql;
-use diesel::serialize::{ToSql, Output};
+use diesel::prelude::*;
+use diesel::serialize::{Output, ToSql};
 use diesel::sql_types::Integer;
+use serde::{Deserialize, Serialize};
 use std::io::Write;
 use utoipa::ToSchema;
+use validator::Validate;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, diesel::AsExpression, diesel::FromSqlRow, ToSchema)]
 #[diesel(sql_type = diesel::sql_types::Integer)]
@@ -49,7 +49,10 @@ impl TryFrom<i32> for Tpamb {
         match value {
             1 => Ok(Tpamb::Production),
             2 => Ok(Tpamb::Staging),
-            _ => Err(format!("Invalid tpamb value: {}. Must be 1 (Production) or 2 (Staging)", value)),
+            _ => Err(format!(
+                "Invalid tpamb value: {}. Must be 1 (Production) or 2 (Staging)",
+                value
+            )),
         }
     }
 }
@@ -70,7 +73,10 @@ impl ToSql<Integer, diesel::pg::Pg> for Tpamb {
 impl FromSql<Integer, diesel::pg::Pg> for Tpamb {
     fn from_sql(bytes: diesel::pg::PgValue) -> diesel::deserialize::Result<Self> {
         let value = <i32 as FromSql<Integer, diesel::pg::Pg>>::from_sql(bytes)?;
-        Tpamb::try_from(value).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)) as Box<dyn std::error::Error + Send + Sync>)
+        Tpamb::try_from(value).map_err(|e| {
+            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                as Box<dyn std::error::Error + Send + Sync>
+        })
     }
 }
 
@@ -188,7 +194,7 @@ impl ConsStatServNfag {
         diesel::update(
             cons_stat_serv_nfag::table
                 .filter(cons_stat_serv_nfag::id.eq(id_))
-                .filter(cons_stat_serv_nfag::tenant_id.eq(tenant_id_))
+                .filter(cons_stat_serv_nfag::tenant_id.eq(tenant_id_)),
         )
         .set(&dto)
         .get_result(conn)
@@ -203,7 +209,7 @@ impl ConsStatServNfag {
         diesel::delete(
             cons_stat_serv_nfag::table
                 .filter(cons_stat_serv_nfag::id.eq(id_))
-                .filter(cons_stat_serv_nfag::tenant_id.eq(tenant_id_))
+                .filter(cons_stat_serv_nfag::tenant_id.eq(tenant_id_)),
         )
         .execute(conn)
     }

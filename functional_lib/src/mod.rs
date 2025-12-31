@@ -20,7 +20,6 @@
 //! - Pagination: Iterator-based pagination
 //! - Performance Monitoring: Functional pipeline metrics
 
-pub mod backward_compatibility;
 pub mod chain_builder;
 pub mod concurrent_processing;
 pub mod function_traits;

@@ -37,7 +37,6 @@
 ///    firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="10.0.0.0/8" port port="9000" protocol="tcp" accept'
 ///    firewall-cmd --permanent --add-rich-rule='rule family="ipv4" port port="9000" protocol="tcp" reject'
 ///    ```
-
 use actix_web::http::header::HeaderValue;
 use std::env;
 
@@ -54,18 +53,15 @@ impl SanitizedOrigin {
     /// `Some(SanitizedOrigin)` if the header contains a valid origin format (http:// or https://),
     /// `None` if the header is invalid or contains an unsupported scheme.
     pub fn from_header(value: &HeaderValue) -> Option<Self> {
-        value
-            .to_str()
-            .ok()
-            .and_then(|s| {
-                // Keep origin value as-is (already contains no path/query by spec)
-                // but ensure it's a valid origin format
-                if s.starts_with("http://") || s.starts_with("https://") {
-                    Some(SanitizedOrigin(s.to_string()))
-                } else {
-                    None
-                }
-            })
+        value.to_str().ok().and_then(|s| {
+            // Keep origin value as-is (already contains no path/query by spec)
+            // but ensure it's a valid origin format
+            if s.starts_with("http://") || s.starts_with("https://") {
+                Some(SanitizedOrigin(s.to_string()))
+            } else {
+                None
+            }
+        })
     }
 
     /// Get the sanitized origin string for logging
@@ -122,14 +118,14 @@ pub fn get_allowed_origins() -> Vec<String> {
 /// Normalized origin string
 fn normalize_origin(origin: &str) -> String {
     let mut normalized = origin.trim_end_matches('/').to_string();
-    
+
     // Remove default ports
     if normalized.ends_with(":80") && normalized.starts_with("http://") {
         normalized.truncate(normalized.len() - 3);
     } else if normalized.ends_with(":443") && normalized.starts_with("https://") {
         normalized.truncate(normalized.len() - 4);
     }
-    
+
     normalized
 }
 
@@ -150,9 +146,9 @@ fn normalize_origin(origin: &str) -> String {
 /// `true` if the origin is allowed, `false` otherwise
 pub fn is_origin_allowed(origin: &str, allowed_origins: &[String]) -> bool {
     let normalized_origin = normalize_origin(origin);
-    allowed_origins.iter().any(|allowed| {
-        normalize_origin(allowed) == normalized_origin
-    })
+    allowed_origins
+        .iter()
+        .any(|allowed| normalize_origin(allowed) == normalized_origin)
 }
 
 /// Check if origin validation should be enforced based on environment.
@@ -179,7 +175,10 @@ mod tests {
 
     #[test]
     fn test_is_origin_allowed() {
-        let allowed = vec!["https://example.com".to_string(), "https://app.example.com".to_string()];
+        let allowed = vec![
+            "https://example.com".to_string(),
+            "https://app.example.com".to_string(),
+        ];
 
         assert!(is_origin_allowed("https://example.com", &allowed));
         assert!(is_origin_allowed("https://app.example.com", &allowed));
@@ -196,7 +195,10 @@ mod tests {
 
     #[test]
     fn test_is_origin_allowed_with_default_ports() {
-        let allowed = vec!["https://example.com".to_string(), "http://example.com".to_string()];
+        let allowed = vec![
+            "https://example.com".to_string(),
+            "http://example.com".to_string(),
+        ];
 
         // Default ports should match
         assert!(is_origin_allowed("https://example.com:443", &allowed));
@@ -205,10 +207,22 @@ mod tests {
 
     #[test]
     fn test_normalize_origin() {
-        assert_eq!(normalize_origin("https://example.com/"), "https://example.com");
-        assert_eq!(normalize_origin("https://example.com:443"), "https://example.com");
-        assert_eq!(normalize_origin("http://example.com:80"), "http://example.com");
-        assert_eq!(normalize_origin("https://example.com:443/"), "https://example.com");
+        assert_eq!(
+            normalize_origin("https://example.com/"),
+            "https://example.com"
+        );
+        assert_eq!(
+            normalize_origin("https://example.com:443"),
+            "https://example.com"
+        );
+        assert_eq!(
+            normalize_origin("http://example.com:80"),
+            "http://example.com"
+        );
+        assert_eq!(
+            normalize_origin("https://example.com:443/"),
+            "https://example.com"
+        );
     }
 
     #[test]
@@ -234,12 +248,15 @@ mod tests {
     fn test_enforce_origin_validation_parsing() {
         // Note: These test the normalization logic directly, not the env var parsing
         // since env var mocking is complex in integration tests
-        
+
         // Verify the logic would work correctly for these values:
         let test_values = vec!["true", "1", "yes", "on"];
         for value in test_values {
-            assert!(matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on"),
-                "Value '{}' should be recognized as truthy", value);
+            assert!(
+                matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on"),
+                "Value '{}' should be recognized as truthy",
+                value
+            );
         }
     }
 }

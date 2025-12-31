@@ -8,8 +8,8 @@ use actix_web::{http, App, HttpServer};
 use futures::FutureExt;
 use std::sync::Arc;
 
-use rcs::utils::ws_logger::{LogBroadcaster, init_websocket_logging};
 use rcs::config;
+use rcs::utils::ws_logger::{init_websocket_logging, LogBroadcaster};
 /// יהי רצון מלפני ה' שימצא עבודה חדשה טובה, בעוד נקודת הכניסה ליישום מסדרת לוגים וסביבה, מאתחלת מסד נתונים ורדיס,
 /// רושמת בריכות טננטים, מסדרת CORS ומיידלוור, ומתחילה שרת Actix HTTP.
 ///
@@ -62,10 +62,15 @@ async fn main() -> io::Result<()> {
 
     // Initialize WebSocket-based logging with tracing
     let log_broadcaster = LogBroadcaster::new(ws_log_buffer_size);
-    init_websocket_logging(log_broadcaster.clone())
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to initialize logging: {}", e)))?;
+    init_websocket_logging(log_broadcaster.clone()).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("Failed to initialize logging: {}", e),
+        )
+    })?;
 
     // Validate cursor encryption key at startup to fail fast on misconfiguration
+    #[cfg(feature = "functional")]
     if let Err(e) = rcs::unified_pagination::validate_cursor_encryption_key() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -89,7 +94,7 @@ async fn main() -> io::Result<()> {
         )
     })?;
     let app_url = format!("{}:{}", &app_host, &app_port);
-    
+
     let db_url = env::var("DATABASE_URL").map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -104,8 +109,12 @@ async fn main() -> io::Result<()> {
     })?;
 
     let main_pool = config::db::init_db_pool(&db_url);
-    config::db::run_migration(&mut main_pool.get().unwrap())
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Database migration failed: {}", e)))?;
+    config::db::run_migration(&mut main_pool.get().unwrap()).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("Database migration failed: {}", e),
+        )
+    })?;
     let redis_client = config::cache::init_redis_client(&redis_url);
 
     let manager = config::db::TenantPoolManager::new(main_pool.clone());
@@ -118,14 +127,16 @@ async fn main() -> io::Result<()> {
     let main_broadcaster = log_broadcaster.clone();
 
     // Create and share a PureFunctionRegistry to encourage functional usage across middleware
-    let pure_registry = Arc::new(rcs::functional::pure_function_registry::PureFunctionRegistry::new());
+    #[cfg(feature = "functional")]
+    let pure_registry =
+        Arc::new(rcs::functional::pure_function_registry::PureFunctionRegistry::new());
 
     // Start the main HTTP server
     let main_server = HttpServer::new(move || {
         // Use shared CORS origin configuration from middleware::ws_security
         let allowed_origins = rcs::middleware::ws_security::get_allowed_origins();
         let mut cors_builder = Cors::default();
-        
+
         // Apply allowed origins to CORS builder
         for origin in allowed_origins {
             cors_builder = cors_builder.allowed_origin(&origin);
@@ -163,15 +174,18 @@ async fn main() -> io::Result<()> {
             cors_builder
         };
 
-        App::new()
+        let app = App::new()
             .wrap(cors)
             .app_data(web::Data::new(manager.clone()))
             .app_data(web::Data::new(main_pool.clone()))
             .app_data(web::Data::new(redis_client.clone()))
             .app_data(web::Data::new(main_broadcaster.clone()))
-            .wrap(tracing_actix_web::TracingLogger::default())
-            .wrap(rcs::middleware::auth_middleware::functional_auth::FunctionalAuthentication::with_registry(pure_registry.clone())) // Use functional authentication middleware with registry
-            .wrap_fn(|req, srv| srv.call(req).map(|res| res))
+            .wrap(tracing_actix_web::TracingLogger::default());
+
+        #[cfg(feature = "functional")]
+        let app = app.wrap(rcs::middleware::auth_middleware::functional_auth::FunctionalAuthentication::with_registry(pure_registry.clone()));
+
+        app.wrap_fn(|req, srv| srv.call(req).map(|res| res))
             .configure(config::app::config_services)
     })
     .bind(&app_url)?
@@ -195,14 +209,16 @@ mod tests {
     use testcontainers::Container;
 
     use rcs::config;
-    use rcs::utils::ws_logger::{LogBroadcaster, init_websocket_logging};
+    use rcs::utils::ws_logger::{init_websocket_logging, LogBroadcaster};
 
     fn try_run_postgres<'a>(docker: &'a clients::Cli) -> Option<Container<'a, Postgres>> {
         catch_unwind(AssertUnwindSafe(|| docker.run(Postgres::default()))).ok()
     }
 
     #[actix_web::test]
+    #[cfg(feature = "functional")]
     async fn test_startup_ok() {
+        use std::sync::Arc;
         let docker = clients::Cli::default();
         let postgres = match try_run_postgres(&docker) {
             Some(container) => container,
@@ -225,7 +241,8 @@ mod tests {
         init_websocket_logging(log_broadcaster.clone())
             .expect("failed to initialize websocket logging in test_startup_ok");
 
-        let test_registry = Arc::new(rcs::functional::pure_function_registry::PureFunctionRegistry::new());
+        let test_registry =
+            Arc::new(rcs::functional::pure_function_registry::PureFunctionRegistry::new());
 
         HttpServer::new(move || {
             App::new()
@@ -288,8 +305,9 @@ mod tests {
 
         // Initialize logging for tests
         let log_broadcaster = LogBroadcaster::new(100);
-        init_websocket_logging(log_broadcaster.clone())
-            .expect("failed to initialize websocket logging in test_startup_without_auth_middleware_ok");
+        init_websocket_logging(log_broadcaster.clone()).expect(
+            "failed to initialize websocket logging in test_startup_without_auth_middleware_ok",
+        );
 
         HttpServer::new(move || {
             App::new()

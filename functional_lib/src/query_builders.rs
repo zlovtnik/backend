@@ -3,7 +3,7 @@
 //! This module provides implementations of TypeSafeQueryBuilder for specific tables,
 //! enabling the functional query composition system to generate real Diesel SQL fragments.
 
-use chrono::NaiveDateTime;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use diesel::pg::Pg;
 use diesel::prelude::*;
 
@@ -186,42 +186,42 @@ impl TenantQueryBuilder {
                             .as_ref()
                             .ok_or("Value required for timestamp predicate")?;
                         let timestamp = Self::parse_timestamp(v)?;
-                        Ok(query.filter(diesel::dsl::sql::<diesel::sql_types::Bool>(&format!("{} = '{}'", $col_name, timestamp.format("%Y-%m-%d %H:%M:%S%.f")))))
+                        Ok(query.filter($column.eq(timestamp)))
                     }
                     Operator::NotEquals => {
                         let v = value
                             .as_ref()
                             .ok_or("Value required for timestamp predicate")?;
                         let timestamp = Self::parse_timestamp(v)?;
-                        Ok(query.filter(diesel::dsl::sql::<diesel::sql_types::Bool>(&format!("{} != '{}'", $col_name, timestamp.format("%Y-%m-%d %H:%M:%S%.f")))))
+                        Ok(query.filter($column.ne(timestamp)))
                     }
                     Operator::GreaterThan => {
                         let v = value
                             .as_ref()
                             .ok_or("Value required for timestamp predicate")?;
                         let timestamp = Self::parse_timestamp(v)?;
-                        Ok(query.filter(diesel::dsl::sql::<diesel::sql_types::Bool>(&format!("{} > '{}'", $col_name, timestamp.format("%Y-%m-%d %H:%M:%S%.f")))))
+                        Ok(query.filter($column.gt(timestamp)))
                     }
                     Operator::LessThan => {
                         let v = value
                             .as_ref()
                             .ok_or("Value required for timestamp predicate")?;
                         let timestamp = Self::parse_timestamp(v)?;
-                        Ok(query.filter(diesel::dsl::sql::<diesel::sql_types::Bool>(&format!("{} < '{}'", $col_name, timestamp.format("%Y-%m-%d %H:%M:%S%.f")))))
+                        Ok(query.filter($column.lt(timestamp)))
                     }
                     Operator::GreaterThanEqual => {
                         let v = value
                             .as_ref()
                             .ok_or("Value required for timestamp predicate")?;
                         let timestamp = Self::parse_timestamp(v)?;
-                        Ok(query.filter(diesel::dsl::sql::<diesel::sql_types::Bool>(&format!("{} >= '{}'", $col_name, timestamp.format("%Y-%m-%d %H:%M:%S%.f")))))
+                        Ok(query.filter($column.ge(timestamp)))
                     }
                     Operator::LessThanEqual => {
                         let v = value
                             .as_ref()
                             .ok_or("Value required for timestamp predicate")?;
                         let timestamp = Self::parse_timestamp(v)?;
-                        Ok(query.filter(diesel::dsl::sql::<diesel::sql_types::Bool>(&format!("{} <= '{}'", $col_name, timestamp.format("%Y-%m-%d %H:%M:%S%.f")))))
+                        Ok(query.filter($column.le(timestamp)))
                     }
                     Operator::IsNull => Ok(query.filter($column.is_null())),
                     Operator::IsNotNull => Ok(query.filter($column.is_not_null())),
@@ -241,9 +241,14 @@ impl TenantQueryBuilder {
     }
 
     /// Parses a timestamp string in ISO format
-    fn parse_timestamp(value: &str) -> Result<NaiveDateTime, String> {
-        NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.fZ")
-            .or_else(|_| NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%SZ"))
+    fn parse_timestamp(value: &str) -> Result<DateTime<Utc>, String> {
+        DateTime::parse_from_rfc3339(value)
+            .map(|dt| dt.with_timezone(&Utc))
+            .or_else(|_| {
+                NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.fZ")
+                    .or_else(|_| NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%SZ"))
+                    .map(|ndt| DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
+            })
             .map_err(|_| format!("Invalid timestamp format: {}", value))
     }
 
@@ -291,10 +296,7 @@ mod tests {
     #[test]
     fn test_tenant_query_builder_with_filters() {
         let filter = crate::query_builder::QueryFilter::new().with_predicate(equals(
-            crate::query_builder::Column::new(
-                "tenants".to_string(),
-                "name".to_string(),
-            ),
+            crate::query_builder::Column::new("tenants".to_string(), "name".to_string()),
             "test_tenant".to_string(),
             "name".to_string(),
         ));

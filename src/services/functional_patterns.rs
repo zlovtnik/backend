@@ -382,7 +382,6 @@ impl<T> Default for Validator<T> {
 pub mod validation_rules {
     use super::{ServiceError, ServiceResult};
     use regex::Regex;
-    
 
     /// Validate that a string is not empty
     pub fn required(field_name: &'static str) -> impl Fn(&String) -> ServiceResult<()> {
@@ -700,7 +699,7 @@ impl<T> Retry<T> {
                     if attempts >= self.max_attempts {
                         return Err(err);
                     }
-                    
+
                     log::warn!(
                         "Retry attempt {} failed, retrying in {}ms...",
                         attempts,
@@ -743,7 +742,7 @@ impl<T> Retry<T> {
                         attempts,
                         delay_ms
                     );
-                    
+
                     // Sleep between retries to avoid hot-loop
                     std::thread::sleep(std::time::Duration::from_millis(delay_ms));
                 }

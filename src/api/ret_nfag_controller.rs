@@ -6,7 +6,7 @@ use validator::Validate;
 use crate::{
     config::db::Pool,
     error::ServiceError,
-    models::ret_nfag::{RetNfag, NewRetNfag},
+    models::ret_nfag::{NewRetNfag, RetNfag},
     types::TenantId,
 };
 
@@ -24,14 +24,11 @@ fn extract_pool(req: &HttpRequest) -> Result<Pool, ServiceError> {
 
 /// Extract tenant ID from request extensions.
 fn extract_tenant_id(req: &HttpRequest) -> Result<TenantId, ServiceError> {
-    req.extensions()
-        .get::<TenantId>()
-        .cloned()
-        .ok_or_else(|| {
-            ServiceError::internal_server_error("Tenant ID not found")
-                .with_detail("Missing tenant ID in request extensions")
-                .with_tag("tenant")
-        })
+    req.extensions().get::<TenantId>().cloned().ok_or_else(|| {
+        ServiceError::internal_server_error("Tenant ID not found")
+            .with_detail("Missing tenant ID in request extensions")
+            .with_tag("tenant")
+    })
 }
 
 #[utoipa::path(
@@ -98,12 +95,14 @@ pub async fn find_all_ret_nfag(
 ) -> Result<HttpResponse, ServiceError> {
     let pool = extract_pool(&req)?;
     let tenant_id = extract_tenant_id(&req)?;
-    let limit: i64 = query.get("limit")
+    let limit: i64 = query
+        .get("limit")
         .and_then(|s| s.parse().ok())
         .unwrap_or(50)
         .clamp(1, MAX_LIMIT); // Min 1 record, max 1000 records
 
-    let offset: i64 = query.get("offset")
+    let offset: i64 = query
+        .get("offset")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0)
         .max(0); // Ensure non-negative
@@ -121,11 +120,12 @@ pub async fn find_all_ret_nfag(
                 .with_tag("database")
         })?;
 
-    let ret_list = RetNfag::find_all_by_tenant(tenant_id.as_str(), limit, offset, &mut conn).map_err(|e| {
-        ServiceError::internal_server_error("Failed to find Ret NFAg")
-            .with_detail(e.to_string())
-            .with_tag("database")
-    })?;
+    let ret_list = RetNfag::find_all_by_tenant(tenant_id.as_str(), limit, offset, &mut conn)
+        .map_err(|e| {
+            ServiceError::internal_server_error("Failed to find Ret NFAg")
+                .with_detail(e.to_string())
+                .with_tag("database")
+        })?;
 
     let total_count = RetNfag::count_by_tenant(tenant_id.as_str(), &mut conn).map_err(|e| {
         ServiceError::internal_server_error("Failed to count Ret NFAg")
@@ -176,18 +176,19 @@ pub async fn find_ret_nfag_by_id(
                 .with_tag("database")
         })?;
 
-    let ret = RetNfag::find_by_id_and_tenant(ret_id, tenant_id.as_str(), &mut conn).map_err(|e| {
-        match e {
-            diesel::result::Error::NotFound => {
-                ServiceError::not_found("Ret NFAg not found")
-                    .with_detail(format!("No record with id {} for tenant {}", ret_id, tenant_id))
-                    .with_tag("not_found")
-            }
+    let ret = RetNfag::find_by_id_and_tenant(ret_id, tenant_id.as_str(), &mut conn).map_err(
+        |e| match e {
+            diesel::result::Error::NotFound => ServiceError::not_found("Ret NFAg not found")
+                .with_detail(format!(
+                    "No record with id {} for tenant {}",
+                    ret_id, tenant_id
+                ))
+                .with_tag("not_found"),
             _ => ServiceError::internal_server_error("Failed to find Ret NFAg")
                 .with_detail(e.to_string())
                 .with_tag("database"),
-        }
-    })?;
+        },
+    )?;
 
     Ok(HttpResponse::Ok().json(ret))
 }
@@ -240,15 +241,13 @@ pub async fn update_ret_nfag(
         update_request.into(),
         &mut conn,
     )
-    .map_err(|e| {
-        match e {
-            diesel::result::Error::NotFound => {
-                ServiceError::not_found("Ret NFAg not found").with_tag("database")
-            }
-            _ => ServiceError::internal_server_error("Failed to update Ret NFAg")
-                .with_detail(e.to_string())
-                .with_tag("database"),
+    .map_err(|e| match e {
+        diesel::result::Error::NotFound => {
+            ServiceError::not_found("Ret NFAg not found").with_tag("database")
         }
+        _ => ServiceError::internal_server_error("Failed to update Ret NFAg")
+            .with_detail(e.to_string())
+            .with_tag("database"),
     })?;
 
     Ok(HttpResponse::Ok().json(updated_ret))
@@ -287,11 +286,12 @@ pub async fn delete_ret_nfag(
                 .with_tag("database")
         })?;
 
-    let deleted_count = RetNfag::delete_by_id_and_tenant(ret_id, tenant_id.as_str(), &mut conn).map_err(|e| {
-        ServiceError::internal_server_error("Failed to delete Ret NFAg")
-            .with_detail(e.to_string())
-            .with_tag("database")
-    })?;
+    let deleted_count = RetNfag::delete_by_id_and_tenant(ret_id, tenant_id.as_str(), &mut conn)
+        .map_err(|e| {
+            ServiceError::internal_server_error("Failed to delete Ret NFAg")
+                .with_detail(e.to_string())
+                .with_tag("database")
+        })?;
 
     if deleted_count == 0 {
         return Err(ServiceError::not_found("Ret NFAg not found")

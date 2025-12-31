@@ -1,8 +1,8 @@
 use crate::models::nfag::Nfag;
 use crate::schema::*;
+use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 
 #[derive(Queryable, Identifiable, Associations, Serialize, Deserialize, Debug)]
 #[diesel(belongs_to(Nfag))]

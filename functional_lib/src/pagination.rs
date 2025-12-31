@@ -1,5 +1,8 @@
 //! Iterator-based pagination utilities.
 //!
+//! NOTE: This is a legacy index-based pagination system. For new features,
+//! use `unified_pagination` which provides encrypted cursor-based pagination.
+//!
 //! FP-012: iterator-driven pagination with bounded memory usage. The helpers here
 //! enable large dataset processing without materialising every element by
 //! carefully consuming only the items required for the requested page.

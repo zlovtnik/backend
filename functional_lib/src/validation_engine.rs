@@ -1093,11 +1093,11 @@ where
 /// Returns a `ValidationEngine<T>` configured with the library's default `ValidationConfig`.
 
 /// Creates a default ValidationEngine for type `T`.
-/// 
+///
 /// Returns a `ValidationEngine<T>` configured with the library's default `ValidationConfig`.
-/// 
+///
 /// # Examples
-/// 
+///
 ///
 /// # Examples
 ///

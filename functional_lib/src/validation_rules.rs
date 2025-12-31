@@ -790,7 +790,7 @@ impl<T, R: ValidationRule<T>> ValidationRule<T> for AllValidator<T, R> {
     /// # Examples
     ///
     /// ```
-    /// // use crate::validators::{all, Length, ValidationRule};
+    /// # use crate::validation_rules::{all, Length, ValidationRule};
     /// let v = all(vec![Length { min: Some(3), max: Some(5) }]);
     /// let ok = v.validate(&"rust".to_string(), "username");
     /// assert!(ok.is_ok());

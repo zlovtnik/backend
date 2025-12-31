@@ -6,7 +6,7 @@ diesel::table! {
         id -> Varchar,
         name -> Varchar,
         db_url -> Text,
-        created_at -> Timestamp,
-        updated_at -> Timestamp,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
     }
 }

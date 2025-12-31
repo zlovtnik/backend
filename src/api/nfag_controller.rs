@@ -1,7 +1,7 @@
 use actix_web::{web, HttpMessage, HttpRequest, HttpResponse, Result};
+use diesel::result::Error as DieselError;
 use serde_json::json;
 use validator::Validate;
-use diesel::result::Error as DieselError;
 
 use crate::{
     config::db::Pool,
@@ -171,14 +171,13 @@ pub async fn find_by_id(
             .with_tag("database")
     })?;
 
-    let nfag = Nfag::find_by_id_and_tenant(nfag_id, &tenant_id, &mut conn).map_err(|e| {
-        match e {
+    let nfag =
+        Nfag::find_by_id_and_tenant(nfag_id, &tenant_id, &mut conn).map_err(|e| match e {
             DieselError::NotFound => ServiceError::not_found("NFAg not found"),
             other => ServiceError::internal_server_error("NFAg fetch failed")
                 .with_detail(other.to_string())
                 .with_tag("database"),
-        }
-    })?;
+        })?;
 
     Ok(HttpResponse::Ok().json(json!({
         "message": "NFAg retrieved successfully",
@@ -228,14 +227,15 @@ pub async fn update(
         updated_at: Some(chrono::Utc::now()),
     };
 
-    let nfag = Nfag::update_by_id_and_tenant(nfag_id, &tenant_id, update_dto, &mut conn).map_err(|e| {
-        match e {
-            DieselError::NotFound => ServiceError::not_found("NFAg not found"),
-            other => ServiceError::internal_server_error("NFAg update failed")
-                .with_detail(other.to_string())
-                .with_tag("database"),
-        }
-    })?;
+    let nfag =
+        Nfag::update_by_id_and_tenant(nfag_id, &tenant_id, update_dto, &mut conn).map_err(|e| {
+            match e {
+                DieselError::NotFound => ServiceError::not_found("NFAg not found"),
+                other => ServiceError::internal_server_error("NFAg update failed")
+                    .with_detail(other.to_string())
+                    .with_tag("database"),
+            }
+        })?;
 
     Ok(HttpResponse::Ok().json(json!({
         "message": "NFAg updated successfully",
@@ -256,10 +256,7 @@ pub async fn update(
     ),
     tag = "nfag"
 )]
-pub async fn delete(
-    path: web::Path<i32>,
-    req: HttpRequest,
-) -> Result<HttpResponse, ServiceError> {
+pub async fn delete(path: web::Path<i32>, req: HttpRequest) -> Result<HttpResponse, ServiceError> {
     let nfag_id = path.into_inner();
     let pool = extract_pool(&req)?;
     let tenant_id = extract_tenant_id(&req)?;
@@ -270,15 +267,15 @@ pub async fn delete(
             .with_tag("database")
     })?;
 
-    let deleted_count = Nfag::delete_by_id_and_tenant(nfag_id, &tenant_id, &mut conn).map_err(|e| {
-        ServiceError::internal_server_error("Failed to delete NFAg")
-            .with_detail(e.to_string())
-            .with_tag("database")
-    })?;
+    let deleted_count =
+        Nfag::delete_by_id_and_tenant(nfag_id, &tenant_id, &mut conn).map_err(|e| {
+            ServiceError::internal_server_error("Failed to delete NFAg")
+                .with_detail(e.to_string())
+                .with_tag("database")
+        })?;
 
     if deleted_count == 0 {
-        return Err(ServiceError::not_found("NFAg not found")
-            .with_tag("not_found"));
+        return Err(ServiceError::not_found("NFAg not found").with_tag("not_found"));
     }
 
     Ok(HttpResponse::Ok().json(json!({

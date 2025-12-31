@@ -2655,7 +2655,7 @@ dependencies = [
 
 [[package]]
 name = "rcs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "actix-cors",
  "actix-rt",
@@ -2713,12 +2713,14 @@ dependencies = [
 
 [[package]]
 name = "rcs-functional"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "actix-rt",
  "actix-web",
+ "aes-gcm",
  "async-trait",
  "awc",
+ "base64 0.21.7",
  "chrono",
  "diesel",
  "futures",

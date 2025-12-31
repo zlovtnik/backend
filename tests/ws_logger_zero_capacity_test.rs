@@ -14,13 +14,13 @@ mod tests {
         // The constructor should clamp it to 1 instead
         // If this test runs without panicking, the guard is working
         let broadcaster = LogBroadcaster::new(0);
-        
+
         // Verify it works by sending a message
         broadcaster.send("test message".to_string());
-        
+
         // Verify we can subscribe
         let _receiver = broadcaster.subscribe();
-        
+
         // Verify basic functionality with the guarded capacity
         broadcaster.send("hello".to_string());
     }
@@ -51,7 +51,11 @@ mod tests {
             let broadcaster = LogBroadcaster::new(capacity);
             broadcaster.send("message".to_string());
             let receiver = broadcaster.subscribe();
-            assert!(!receiver.is_closed(), "Broadcaster with capacity {} should work", capacity);
+            assert!(
+                !receiver.is_closed(),
+                "Broadcaster with capacity {} should work",
+                capacity
+            );
         }
     }
 }

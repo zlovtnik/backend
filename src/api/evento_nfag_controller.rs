@@ -119,11 +119,12 @@ pub async fn find_all_eventos_nfag(
                 .with_tag("database")
         })?;
 
-    let eventos = EventoNfag::find_all_by_tenant(&tenant_id, limit, offset, &mut conn).map_err(|e| {
-        ServiceError::internal_server_error("Failed to fetch Evento NFAg records")
-            .with_detail(e.to_string())
-            .with_tag("database")
-    })?;
+    let eventos =
+        EventoNfag::find_all_by_tenant(&tenant_id, limit, offset, &mut conn).map_err(|e| {
+            ServiceError::internal_server_error("Failed to fetch Evento NFAg records")
+                .with_detail(e.to_string())
+                .with_tag("database")
+        })?;
 
     let total = EventoNfag::count_by_tenant(&tenant_id, &mut conn).map_err(|e| {
         ServiceError::internal_server_error("Failed to count Evento NFAg records")
@@ -174,18 +175,19 @@ pub async fn find_evento_nfag_by_id(
                 .with_tag("database")
         })?;
 
-    let evento = EventoNfag::find_by_id_and_tenant(evento_id, &tenant_id, &mut conn).map_err(|e| {
-        match e {
-            diesel::result::Error::NotFound => {
-                ServiceError::not_found("Evento NFAg not found")
-                    .with_detail(format!("No Evento NFAg with id {} found for tenant", evento_id))
-                    .with_tag("database")
-            }
+    let evento = EventoNfag::find_by_id_and_tenant(evento_id, &tenant_id, &mut conn).map_err(
+        |e| match e {
+            diesel::result::Error::NotFound => ServiceError::not_found("Evento NFAg not found")
+                .with_detail(format!(
+                    "No Evento NFAg with id {} found for tenant",
+                    evento_id
+                ))
+                .with_tag("database"),
             _ => ServiceError::internal_server_error("Failed to find Evento NFAg")
                 .with_detail(e.to_string())
                 .with_tag("database"),
-        }
-    })?;
+        },
+    )?;
     Ok(HttpResponse::Ok().json(evento))
 }
 
@@ -231,17 +233,22 @@ pub async fn update_evento_nfag(
                 .with_tag("database")
         })?;
 
-    let updated_evento = EventoNfag::update_by_id_and_tenant(evento_id, &tenant_id, update_request.into(), &mut conn).map_err(|e| {
-        match e {
-            diesel::result::Error::NotFound => {
-                ServiceError::not_found("Evento NFAg not found")
-                    .with_detail(format!("No Evento NFAg with id {} found for tenant to update", evento_id))
-                    .with_tag("database")
-            }
-            _ => ServiceError::internal_server_error("Failed to update Evento NFAg")
-                .with_detail(e.to_string())
-                .with_tag("database"),
-        }
+    let updated_evento = EventoNfag::update_by_id_and_tenant(
+        evento_id,
+        &tenant_id,
+        update_request.into(),
+        &mut conn,
+    )
+    .map_err(|e| match e {
+        diesel::result::Error::NotFound => ServiceError::not_found("Evento NFAg not found")
+            .with_detail(format!(
+                "No Evento NFAg with id {} found for tenant to update",
+                evento_id
+            ))
+            .with_tag("database"),
+        _ => ServiceError::internal_server_error("Failed to update Evento NFAg")
+            .with_detail(e.to_string())
+            .with_tag("database"),
     })?;
 
     Ok(HttpResponse::Ok().json(updated_evento))
@@ -280,15 +287,15 @@ pub async fn delete_evento_nfag(
                 .with_tag("database")
         })?;
 
-    let deleted_count = EventoNfag::delete_by_id_and_tenant(evento_id, &tenant_id, &mut conn).map_err(|e| {
-        ServiceError::internal_server_error("Failed to delete Evento NFAg")
-            .with_detail(e.to_string())
-            .with_tag("database")
-    })?;
+    let deleted_count = EventoNfag::delete_by_id_and_tenant(evento_id, &tenant_id, &mut conn)
+        .map_err(|e| {
+            ServiceError::internal_server_error("Failed to delete Evento NFAg")
+                .with_detail(e.to_string())
+                .with_tag("database")
+        })?;
 
     if deleted_count == 0 {
-        return Err(ServiceError::not_found("Evento NFAg not found")
-            .with_tag("not_found"));
+        return Err(ServiceError::not_found("Evento NFAg not found").with_tag("not_found"));
     }
 
     Ok(HttpResponse::Ok().json(json!({

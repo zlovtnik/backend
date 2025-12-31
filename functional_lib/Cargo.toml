@@ -1,7 +1,7 @@
 [package]
 name = "rcs-functional"
 authors = ["Rafael Cardoso dos Santos <racasantos@icloud.com>"]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.86"
 
@@ -28,7 +28,9 @@ actix-rt = "2.8.0"
 awc = "3.8.1"
 log = "0.4.18"
 url = "2.4"
+aes-gcm = "0.10"
+base64 = "0.21.2"
 chrono = { version = "0.4.26", features = ["serde"] }
 uuid = { version = "1.3.3", features = ["v4"] }
 rust_decimal = { version = "1.38", features = ["serde", "db-diesel-postgres"] }
-diesel = { version = "2.2.0", features = ["postgres", "r2d2"] }
+diesel = { version = "2.2.0", features = ["postgres", "r2d2", "chrono"] }

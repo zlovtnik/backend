@@ -65,7 +65,7 @@ impl LogBroadcaster {
     /// use rcs::utils::ws_logger::LogBroadcaster;
     ///
     /// let broadcaster = LogBroadcaster::new(1000);
-    /// 
+    ///
     /// // Zero capacity is automatically clamped to 1
     /// let broadcaster_min = LogBroadcaster::new(0);
     /// ```
@@ -144,11 +144,7 @@ impl<S> tracing_subscriber::Layer<S> for WebSocketLogLayer
 where
     S: tracing::Subscriber,
 {
-    fn on_event(
-        &self,
-        event: &tracing::Event<'_>,
-        ctx: tracing_subscriber::layer::Context<'_, S>,
-    ) {
+    fn on_event(&self, event: &tracing::Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
         let metadata = event.metadata();
         let level = metadata.level();
         let span_name = metadata.name().to_string();
@@ -203,12 +199,13 @@ fn format_log_event(
                 "message": message,
                 "span": span_name,
             });
-            
+
             // Add all captured fields (if any besides message)
             if let Some(obj) = json_obj.as_object_mut() {
                 // Include fields object with all recorded field values
                 if !visitor.fields.is_empty() {
-                    let fields: serde_json::Map<String, serde_json::Value> = visitor.fields
+                    let fields: serde_json::Map<String, serde_json::Value> = visitor
+                        .fields
                         .into_iter()
                         .filter(|(k, _)| k != "message") // Message already at root level
                         .map(|(k, v)| (k, serde_json::Value::String(v)))
@@ -218,7 +215,7 @@ fn format_log_event(
                     }
                 }
             }
-            
+
             json_obj.to_string()
         }
     }
@@ -235,12 +232,12 @@ impl tracing::field::Visit for LogVisitor {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
         let field_name = field.name();
         let value_str = format!("{:?}", value);
-        
+
         // Always capture the message field
         if field_name == "message" {
             self.message = value_str.clone();
         }
-        
+
         // Capture all fields (including message) in the structured map for JSON output
         self.fields.insert(field_name.to_string(), value_str);
     }

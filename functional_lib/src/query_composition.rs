@@ -21,6 +21,7 @@
 
 #![allow(dead_code)]
 
+use crate::models::filters::FieldFilter;
 use crate::query_builder::{Column, Operator, Predicate, QueryFilter, TypeSafeQueryBuilder};
 use regex::Regex;
 use std::collections::HashMap;
@@ -31,14 +32,6 @@ use tokio::sync::Semaphore;
 
 /// Type alias for database connection pool
 pub type Pool = diesel::r2d2::Pool<diesel::r2d2::ConnectionManager<diesel::PgConnection>>;
-
-/// Represents a field filter for query composition
-#[derive(Debug, Clone)]
-pub struct FieldFilter {
-    pub field: String,
-    pub operator: String,
-    pub value: String,
-}
 
 /// Lazy evaluation configuration for large result sets.
 ///
@@ -341,9 +334,9 @@ where
     /// ```
     /// let data = vec![1, 2, 3];
     /// let mut iter = LazyQueryIterator::with_data(data);
-    /// assert_eq!(iter.next(), Some(1));
-    /// assert_eq!(iter.next(), Some(2));
-    /// assert_eq!(iter.next(), Some(3));
+    /// assert_eq!(iter.next(), Some(Ok(1)));
+    /// assert_eq!(iter.next(), Some(Ok(2)));
+    /// assert_eq!(iter.next(), Some(Ok(3)));
     /// assert_eq!(iter.next(), None);
     /// ```
     #[cfg(test)]
@@ -403,9 +396,9 @@ where
     ///
     /// ```
     /// let mut it = LazyQueryIterator::with_data(vec![1u32, 2u32, 3u32]);
-    /// assert_eq!(it.next(), Some(1u32));
-    /// assert_eq!(it.next(), Some(2u32));
-    /// assert_eq!(it.next(), Some(3u32));
+    /// assert_eq!(it.next(), Some(Ok(1u32)));
+    /// assert_eq!(it.next(), Some(Ok(2u32)));
+    /// assert_eq!(it.next(), Some(Ok(3u32)));
     /// assert_eq!(it.next(), None);
     /// ```
     fn load_next_chunk(&mut self) -> Result<bool, String> {
@@ -465,9 +458,9 @@ where
     /// let data = vec![1, 2, 3];
     /// let mut iter = LazyQueryIterator::with_data(data);
     ///
-    /// assert_eq!(iter.next(), Some(1));
-    /// assert_eq!(iter.next(), Some(2));
-    /// assert_eq!(iter.next(), Some(3));
+    /// assert_eq!(iter.next(), Some(Ok(1)));
+    /// assert_eq!(iter.next(), Some(Ok(2)));
+    /// assert_eq!(iter.next(), Some(Ok(3)));
     /// assert_eq!(iter.next(), None);
     /// ```
     fn next(&mut self) -> Option<Self::Item> {

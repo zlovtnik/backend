@@ -1,8 +1,8 @@
 use crate::models::nfag::Nfag;
 use crate::schema::*;
 use diesel::prelude::*;
-use serde::{Deserialize, Serialize};
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 
 #[derive(Queryable, Identifiable, Associations, Serialize, Deserialize, Debug)]
 #[diesel(belongs_to(Nfag))]

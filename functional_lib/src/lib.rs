@@ -17,7 +17,8 @@
 //! - Concurrent Processing: Parallel functional operations
 //! - Response Transformers: Composable API response formatting
 //! - Error Handling: Monadic error processing
-//! - Pagination: Iterator-based pagination
+//! - Pagination: Simple iterator-based page-index pagination (Legacy)
+//! - Unified Pagination: Advanced cursor-based pagination with encryption (Recommended)
 //! - Performance Monitoring: Functional pipeline metrics
 
 pub mod chain_builder;
@@ -27,6 +28,7 @@ pub mod function_traits;
 pub mod functional_tests;
 pub mod immutable_state;
 pub mod iterator_engine;
+pub mod lazy_pipeline;
 pub mod math_functions;
 pub mod models;
 pub mod pagination;
@@ -40,6 +42,7 @@ pub mod query_composition;
 pub mod response_transformers;
 pub mod schema;
 pub mod state_transitions;
+pub mod unified_pagination;
 pub mod validation_engine;
 pub mod validation_integration;
 pub mod validation_rules;

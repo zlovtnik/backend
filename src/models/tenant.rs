@@ -11,7 +11,8 @@ use crate::{
     schema::tenants::{self, dsl::*},
 };
 
-use super::{functional_utils, Custom};
+use super::functional_utils;
+use super::Custom;
 
 use crate::models::ValidationError;
 

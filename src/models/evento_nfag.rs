@@ -1,7 +1,7 @@
 use crate::schema::*;
+use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 use utoipa::ToSchema;
 use validator::{Validate, ValidationError};
 
@@ -58,7 +58,7 @@ pub struct CreateEventoNfagRequest {
 pub struct UpdateEventoNfagRequest {
     #[validate(length(min = 1))]
     pub xml_content: Option<String>,
-    
+
     pub status: Option<String>,
 }
 
@@ -66,7 +66,14 @@ pub struct UpdateEventoNfagRequest {
 /// Validates that the status is one of the allowed values (case-insensitive).
 /// Note: Normalization to lowercase is handled in the From<UpdateEventoNfagRequest> impl.
 fn validate_evento_status(status: &str) -> Result<(), ValidationError> {
-    let valid_statuses = ["pending", "authorized", "rejected", "cancelled", "processed", "failed"];
+    let valid_statuses = [
+        "pending",
+        "authorized",
+        "rejected",
+        "cancelled",
+        "processed",
+        "failed",
+    ];
     if valid_statuses.contains(&status.to_lowercase().as_str()) {
         Ok(())
     } else {
@@ -161,7 +168,7 @@ impl EventoNfag {
         diesel::update(
             evento_nfag::table
                 .filter(evento_nfag::id.eq(id_))
-                .filter(evento_nfag::tenant_id.eq(tenant_id_))
+                .filter(evento_nfag::tenant_id.eq(tenant_id_)),
         )
         .set(&dto)
         .get_result(conn)
@@ -176,7 +183,7 @@ impl EventoNfag {
         diesel::delete(
             evento_nfag::table
                 .filter(evento_nfag::id.eq(id_))
-                .filter(evento_nfag::tenant_id.eq(tenant_id_))
+                .filter(evento_nfag::tenant_id.eq(tenant_id_)),
         )
         .execute(conn)
     }

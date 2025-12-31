@@ -198,7 +198,7 @@ impl ConcurrentProcessor {
     /// # Examples
     ///
     /// ```
-    /// use crate::concurrent_processing::ConcurrentProcessor;
+    /// # use rcs_functional::concurrent_processing::ConcurrentProcessor;
     ///
     /// let proc = ConcurrentProcessor::try_default().unwrap();
     /// let out = proc.map(vec![1, 2, 3], |x| x * 2).unwrap();
@@ -353,7 +353,7 @@ impl ConcurrentProcessor {
     ///
     /// ```
     /// // Run inside a Tokio runtime in tests or examples.
-    /// use crate::concurrent_processing::{ConcurrentProcessor, ParallelConfig};
+    /// # use rcs_functional::concurrent_processing::ConcurrentProcessor;
     ///
     /// let rt = tokio::runtime::Runtime::new().unwrap();
     /// let proc = ConcurrentProcessor::try_default().unwrap();
@@ -397,8 +397,8 @@ impl ConcurrentProcessor {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// // use crate::concurrent_processing::{ConcurrentProcessor, ParallelConfig};
+    /// # use std::sync::Arc;
+    /// # use rcs_functional::concurrent_processing::ConcurrentProcessor;
     /// // create a runtime and a processor (adjust to your crate's public API as needed)
     /// let rt = tokio::runtime::Runtime::new().unwrap();
     /// rt.block_on(async {
@@ -592,9 +592,9 @@ impl ConcurrentProcessor {
 /// # Examples
 ///
 /// ```
-/// // use std::time::Duration;
-/// use crate::parallel_iterators::ParallelMetrics;
-/// use crate::concurrent_processing::aggregate_metrics;
+/// # use std::time::Duration;
+/// # use rcs_functional::parallel_iterators::ParallelMetrics;
+/// # use rcs_functional::concurrent_processing::aggregate_metrics;
 ///
 /// let mut a = ParallelMetrics::default();
 /// a.total_time = Duration::from_millis(10);
@@ -623,19 +623,24 @@ where
     I: IntoIterator<Item = &'a ParallelMetrics>,
 {
     let mut aggregated = ParallelMetrics::default();
-    let mut count = 0_u64;
+    let mut total_efficiency = 0.0;
+    let mut efficiency_count = 0;
 
     for metric in metrics {
         aggregated.total_time += metric.total_time;
         aggregated.thread_count = aggregated.thread_count.max(metric.thread_count);
         aggregated.throughput = aggregated.throughput.saturating_add(metric.throughput);
         aggregated.memory_usage = aggregated.memory_usage.saturating_add(metric.memory_usage);
-        aggregated.efficiency += metric.efficiency;
-        count += 1;
+        if let Some(eff) = metric.efficiency {
+            total_efficiency += eff;
+            efficiency_count += 1;
+        }
     }
 
-    if count > 0 {
-        aggregated.efficiency /= count as f64;
+    if efficiency_count > 0 {
+        aggregated.efficiency = Some(total_efficiency / efficiency_count as f64);
+    } else {
+        aggregated.efficiency = None;
     }
 
     aggregated
@@ -671,7 +676,7 @@ mod tests {
         let result = processor.map(data, |x| x * 2);
 
         assert_eq!(result.data, vec![2, 4, 6, 8, 10]);
-        assert!(result.metrics.efficiency >= 0.0);
+        assert!(result.metrics.efficiency.unwrap_or(0.0) >= 0.0);
     }
 
     #[test]
@@ -690,13 +695,13 @@ mod tests {
         let mut a = ParallelMetrics::default();
         a.throughput = 100;
         a.memory_usage = 10;
-        a.efficiency = 0.8;
+        a.efficiency = Some(0.8);
         a.total_time = Duration::from_millis(10);
 
         let mut b = ParallelMetrics::default();
         b.throughput = 200;
         b.memory_usage = 20;
-        b.efficiency = 0.6;
+        b.efficiency = Some(0.6);
         b.total_time = Duration::from_millis(20);
 
         let aggregated = aggregate_metrics([&a, &b]);
@@ -704,7 +709,7 @@ mod tests {
         assert_eq!(aggregated.throughput, 300);
         assert_eq!(aggregated.memory_usage, 30);
         assert_eq!(aggregated.total_time, Duration::from_millis(30));
-        assert!((aggregated.efficiency - 0.7).abs() < f64::EPSILON);
+        assert!((aggregated.efficiency.unwrap_or(0.0) - 0.7).abs() < f64::EPSILON);
     }
 
     #[actix_rt::test]
@@ -975,7 +980,7 @@ fn aggregate_metrics_single_metric() {
     let mut m = ParallelMetrics::default();
     m.throughput = 500;
     m.memory_usage = 1024;
-    m.efficiency = 0.95;
+    m.efficiency = Some(0.95);
     m.total_time = Duration::from_millis(100);
     m.thread_count = 4;
 
@@ -984,7 +989,7 @@ fn aggregate_metrics_single_metric() {
     assert_eq!(aggregated.throughput, 500);
     assert_eq!(aggregated.memory_usage, 1024);
     assert_eq!(aggregated.thread_count, 4);
-    assert!((aggregated.efficiency - 0.95).abs() < f64::EPSILON);
+    assert!((aggregated.efficiency.unwrap_or(0.0) - 0.95).abs() < f64::EPSILON);
 }
 
 #[test]

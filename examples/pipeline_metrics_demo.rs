@@ -42,7 +42,7 @@ fn main() {
     let summary = pipeline.metrics_summary();
     println!("Total combined time: {:?}", summary.total_time);
     println!("Thread count (max across ops): {}", summary.thread_count);
-    println!("Average efficiency: {:.2}", summary.efficiency);
+    println!("Average efficiency: {:.2}", summary.efficiency.unwrap_or(0.0));
     println!("Total memory usage: {} bytes", summary.memory_usage);
     println!("Average throughput: {} ops/s", summary.throughput);
 

@@ -3,9 +3,9 @@
 
 #![allow(dead_code)]
 
+use crate::models::person::PersonDTO;
 use crate::validation_engine::{ValidationEngine, ValidationOutcome};
 use crate::validation_rules::{Email, Length, Phone, Range, Required};
-use crate::models::person::PersonDTO;
 
 /// Validate a PersonDTO by applying field-specific rules and aggregating all validation errors.
 ///
@@ -145,13 +145,11 @@ pub fn validate_person_with_complex_rules(person: &PersonDTO) -> ValidationOutco
     let phone_valid = !person.phone.is_empty() && phone_validation.is_valid;
 
     if !email_valid && !phone_valid {
-        return ValidationOutcome::failure(vec![
-            crate::validation_rules::ValidationError::new(
-                "contact",
-                "MISSING_CONTACT",
-                "Either a valid email or phone number must be provided",
-            ),
-        ]);
+        return ValidationOutcome::failure(vec![crate::validation_rules::ValidationError::new(
+            "contact",
+            "MISSING_CONTACT",
+            "Either a valid email or phone number must be provided",
+        )]);
     }
 
     ValidationOutcome::success(())
