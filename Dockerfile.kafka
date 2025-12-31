@@ -1,0 +1,100 @@
+# Production-grade Kafka Dockerfile for cloud deployment (e.g., Render)
+# with secure JMX monitoring and proper authentication/SSL configuration
+#
+# SECURITY WARNING: 
+# This Dockerfile supports two modes:
+# 1. PRODUCTION (recommended): JMX auth + SSL enabled - requires proper secret management
+# 2. DEVELOPMENT ONLY: JMX auth/SSL disabled - USE ONLY IN ISOLATED DEV/TEST ENVIRONMENTS
+#
+# To use development mode, build with: --build-arg JMX_SECURE=false
+# Default is production mode (JMX_SECURE=true)
+
+FROM confluentinc/cp-kafka:7.5.0
+
+LABEL maintainer="Your Name <your.email@example.com>"
+LABEL description="Production Kafka broker with secure JMX monitoring"
+
+# Build arguments for security configuration
+ARG JMX_SECURE=true
+
+# Set environment variables with production defaults
+ENV KAFKA_HOME=/opt/kafka \
+    KAFKA_BROKER_ID=1 \
+    KAFKA_HEAP_OPTS="-Xms1G -Xmx1G" \
+    KAFKA_JVM_PERFORMANCE_OPTS="-XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35 -XX:+DisableExplicitGC" \
+    KAFKA_JMX_PORT=9999 \
+    JMX_SECURE=${JMX_SECURE}
+
+# Create required directories for secure JMX files
+RUN mkdir -p /var/lib/kafka/data /var/log/kafka /etc/kafka/secrets && \
+    chmod -R 755 /var/lib/kafka/data /var/log/kafka && \
+    chmod 700 /etc/kafka/secrets
+
+# Copy custom configuration if exists
+# COPY configs/server.properties ${KAFKA_HOME}/config/server.properties
+# COPY configs/log4j.properties ${KAFKA_HOME}/config/log4j.properties
+
+# Create JMX configuration based on security mode
+RUN if [ "${JMX_SECURE}" = "true" ]; then \
+        echo "=== Configuring SECURE JMX (Production Mode) ===" && \
+        mkdir -p /etc/kafka/jmx && \
+        chmod 700 /etc/kafka/jmx; \
+    else \
+        echo "=== WARNING: Configuring INSECURE JMX (Development Mode Only) ===" && \
+        echo "    ⚠️  JMX authentication and SSL are DISABLED" && \
+        echo "    ⚠️  DO NOT use this configuration in production" && \
+        echo "    ⚠️  ONLY for isolated development/test environments"; \
+    fi
+
+# Create data directories
+RUN mkdir -p /var/lib/kafka/data /var/log/kafka && \
+    chmod -R 755 /var/lib/kafka/data /var/log/kafka
+
+# Copy custom configuration if exists
+# COPY configs/server.properties ${KAFKA_HOME}/config/server.properties
+# COPY configs/log4j.properties ${KAFKA_HOME}/config/log4j.properties
+
+# Create startup wrapper script that configures JMX based on security mode
+RUN mkdir -p /etc/kafka/scripts && chmod 755 /etc/kafka/scripts
+
+COPY <<EOF /etc/kafka/start-kafka-secure.sh
+#!/bin/bash
+set -e
+
+if [ "\${JMX_SECURE}" = "true" ]; then
+    echo "Starting Kafka with SECURE JMX (auth + SSL enabled)"
+    
+    # Verify secure files exist
+    if [ ! -f /etc/kafka/secrets/jmxremote.password ]; then
+        echo "ERROR: JMX password file not found at /etc/kafka/secrets/jmxremote.password"
+        exit 1
+    fi
+    
+    if [ ! -f /etc/kafka/secrets/kafka.server.keystore.jks ]; then
+        echo "ERROR: JMX keystore file not found at /etc/kafka/secrets/kafka.server.keystore.jks"
+        exit 1
+    fi
+    
+    # Set secure JMX options
+    export KAFKA_JMX_OPTS="-Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.authenticate=true -Dcom.sun.management.jmxremote.ssl=true -Dcom.sun.management.jmxremote.port=9999 -Dcom.sun.management.jmxremote.rmi.port=9999 -Dcom.sun.management.jmxremote.password.file=/etc/kafka/secrets/jmxremote.password -Dcom.sun.management.jmxremote.access.file=/etc/kafka/secrets/jmxremote.access -Dcom.sun.management.jmxremote.registry.ssl=true -Dcom.sun.management.jmxremote.ssl.need.client.auth=false -Djavax.net.ssl.keyStore=/etc/kafka/secrets/kafka.server.keystore.jks -Djavax.net.ssl.keyStorePassword=\${KEYSTORE_PASSWORD:-changeit} -Djavax.net.ssl.trustStore=/etc/kafka/secrets/kafka.server.truststore.jks -Djavax.net.ssl.trustStorePassword=\${TRUSTSTORE_PASSWORD:-changeit}"
+    
+else
+    echo "⚠️  Starting Kafka with INSECURE JMX (development mode only)"
+    export KAFKA_JMX_OPTS="-Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -Dcom.sun.management.jmxremote.port=9999 -Dcom.sun.management.jmxremote.rmi.port=9999 -Dcom.sun.management.jmxremote.local.only=false"
+fi
+
+exec /etc/confluent/docker/run
+EOF
+
+# Expose ports
+# 9092: External listener (PLAINTEXT)
+# 9093: Internal listener (PLAINTEXT_INTERNAL)
+# 9999: JMX metrics
+EXPOSE 9092 9093 9999
+
+# Health check - validates broker is responding
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD kafka-broker-api-versions --bootstrap-server localhost:9093 || exit 1
+
+# Run Kafka with secure JMX configuration
+CMD ["/etc/kafka/start-kafka-secure.sh"]
