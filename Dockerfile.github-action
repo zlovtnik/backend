@@ -26,11 +26,13 @@ WORKDIR /app
 
 # Copy Cargo files first for dependency caching
 COPY Cargo.toml Cargo.lock ./
+COPY functional_lib/Cargo.toml ./functional_lib/Cargo.toml
 COPY diesel.toml ./
 COPY migrations/ ./migrations/
 
 # Copy source code
 COPY src/ ./src/
+COPY functional_lib/ ./functional_lib/
 
 # Copy benchmark files
 COPY benches/ ./benches/
