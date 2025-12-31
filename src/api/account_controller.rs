@@ -377,6 +377,7 @@ pub async fn keycloak_callback(
     }
 
     // Extract and validate authorization code
+    #[allow(unused_variables)]
     let code = query.get("code").ok_or_else(|| {
         log::warn!("Authorization code missing from OAuth callback");
         ServiceError::bad_request("Authorization code missing. Invalid callback.")

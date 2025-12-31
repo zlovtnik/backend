@@ -15,6 +15,7 @@ use crate::{
 };
 
 #[derive(Serialize)]
+#[allow(dead_code)]
 struct TenantStats {
     tenant_id: String,
     name: String,
@@ -22,6 +23,7 @@ struct TenantStats {
 }
 
 #[derive(Serialize)]
+#[allow(dead_code)]
 struct SystemStats {
     total_tenants: i64,
     active_tenants: i32,

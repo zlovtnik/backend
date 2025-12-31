@@ -271,6 +271,7 @@ async fn handle_ws_session(
 
     // Subscribe to the log broadcaster
     let mut rx = broadcaster.subscribe();
+    #[allow(unused_assignments)]
     let mut last_activity = std::time::Instant::now();
     let mut consecutive_send_errors = 0usize;
 

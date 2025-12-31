@@ -1,5 +1,4 @@
 use actix_web::{web, HttpMessage, HttpRequest, HttpResponse, Result};
-use diesel::prelude::*;
 use serde_json::json;
 use validator::Validate;
 

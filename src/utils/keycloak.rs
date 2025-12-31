@@ -82,6 +82,7 @@ impl KeycloakClient {
         })
     }
 
+    #[allow(dead_code)]
     async fn validate_configuration(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Validate configuration by attempting discovery
         let http_client = ReqwestClient::builder()

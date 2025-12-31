@@ -19,16 +19,42 @@ ARG JMX_SECURE=true
 
 # Set environment variables with production defaults
 ENV KAFKA_HOME=/opt/kafka \
-    KAFKA_BROKER_ID=1 \
+    KAFKA_BROKER_ID=${KAFKA_BROKER_ID:-1} \
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT \
+    KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092 \
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=${KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR:-1} \
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=${KAFKA_TRANSACTION_STATE_LOG_MIN_ISR:-1} \
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=${KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR:-1} \
+    KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=${KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS:-0} \
+    KAFKA_AUTO_CREATE_TOPICS_ENABLE=${KAFKA_AUTO_CREATE_TOPICS_ENABLE:-true} \
+    KAFKA_DELETE_TOPIC_ENABLE=${KAFKA_DELETE_TOPIC_ENABLE:-true} \
+    KAFKA_LOG_RETENTION_HOURS=${KAFKA_LOG_RETENTION_HOURS:-168} \
+    KAFKA_LOG_SEGMENT_BYTES=${KAFKA_LOG_SEGMENT_BYTES:-1073741824} \
+    KAFKA_LOG_CLEANUP_POLICY=${KAFKA_LOG_CLEANUP_POLICY:-delete} \
+    KAFKA_NUM_NETWORK_THREADS=${KAFKA_NUM_NETWORK_THREADS:-8} \
+    KAFKA_NUM_IO_THREADS=${KAFKA_NUM_IO_THREADS:-8} \
+    KAFKA_SOCKET_SEND_BUFFER_BYTES=${KAFKA_SOCKET_SEND_BUFFER_BYTES:-102400} \
+    KAFKA_SOCKET_RECEIVE_BUFFER_BYTES=${KAFKA_SOCKET_RECEIVE_BUFFER_BYTES:-102400} \
+    KAFKA_SOCKET_REQUEST_MAX_BYTES=${KAFKA_SOCKET_REQUEST_MAX_BYTES:-104857600} \
+    KAFKA_NUM_REPLICA_FETCHERS=${KAFKA_NUM_REPLICA_FETCHERS:-4} \
+    KAFKA_REPLICA_SOCKET_RECEIVE_BUFFER_BYTES=${KAFKA_REPLICA_SOCKET_RECEIVE_BUFFER_BYTES:-65536} \
+    KAFKA_REPLICA_LAG_TIME_MAX_MS=${KAFKA_REPLICA_LAG_TIME_MAX_MS:-30000} \
+    KAFKA_CONNECTIONS_MAX_IDLE_MS=${KAFKA_CONNECTIONS_MAX_IDLE_MS:-540000} \
+    KAFKA_ZOOKEEPER_SESSION_TIMEOUT_MS=${KAFKA_ZOOKEEPER_SESSION_TIMEOUT_MS:-18000} \
+    KAFKA_ZOOKEEPER_CONNECT=${KAFKA_ZOOKEEPER_CONNECT:-zookeeper:2181} \
     KAFKA_HEAP_OPTS="-Xms1G -Xmx1G" \
     KAFKA_JVM_PERFORMANCE_OPTS="-XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35 -XX:+DisableExplicitGC" \
     KAFKA_JMX_PORT=9999 \
-    JMX_SECURE=${JMX_SECURE}
+    KAFKA_METRICS_NUM_SAMPLES=${KAFKA_METRICS_NUM_SAMPLES:-3} \
+    KAFKA_METRICS_SAMPLE_WINDOW_MS=${KAFKA_METRICS_SAMPLE_WINDOW_MS:-30000} \
+    JMX_SECURE=${JMX_SECURE} \
+    KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD:-changeit} \
+    TRUSTSTORE_PASSWORD=${TRUSTSTORE_PASSWORD:-changeit}
 
 # Create required directories for secure JMX files
-RUN mkdir -p /var/lib/kafka/data /var/log/kafka /etc/kafka/secrets && \
+RUN mkdir -p /var/lib/kafka/data /var/log/kafka /etc/secrets && \
     chmod -R 755 /var/lib/kafka/data /var/log/kafka && \
-    chmod 700 /etc/kafka/secrets
+    chmod 700 /etc/secrets
 
 # Copy custom configuration if exists
 # COPY configs/server.properties ${KAFKA_HOME}/config/server.properties
@@ -65,18 +91,18 @@ if [ "${JMX_SECURE}" = "true" ]; then
     echo "Starting Kafka with SECURE JMX (auth + SSL enabled)"
     
     # Verify secure files exist
-    if [ ! -f /etc/kafka/secrets/jmxremote.password ]; then
-        echo "ERROR: JMX password file not found at /etc/kafka/secrets/jmxremote.password"
+    if [ ! -f /etc/secrets/jmxremote.password ]; then
+        echo "ERROR: JMX password file not found at /etc/secrets/jmxremote.password"
         exit 1
     fi
     
-    if [ ! -f /etc/kafka/secrets/kafka.server.keystore.jks ]; then
-        echo "ERROR: JMX keystore file not found at /etc/kafka/secrets/kafka.server.keystore.jks"
+    if [ ! -f /etc/secrets/kafka.server.keystore.jks ]; then
+        echo "ERROR: JMX keystore file not found at /etc/secrets/kafka.server.keystore.jks"
         exit 1
     fi
     
     # Set secure JMX options
-    export KAFKA_JMX_OPTS="-Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.authenticate=true -Dcom.sun.management.jmxremote.ssl=true -Dcom.sun.management.jmxremote.port=9999 -Dcom.sun.management.jmxremote.rmi.port=9999 -Dcom.sun.management.jmxremote.password.file=/etc/kafka/secrets/jmxremote.password -Dcom.sun.management.jmxremote.access.file=/etc/kafka/secrets/jmxremote.access -Dcom.sun.management.jmxremote.registry.ssl=true -Dcom.sun.management.jmxremote.ssl.need.client.auth=false -Djavax.net.ssl.keyStore=/etc/kafka/secrets/kafka.server.keystore.jks -Djavax.net.ssl.keyStorePassword=${KEYSTORE_PASSWORD:-changeit} -Djavax.net.ssl.trustStore=/etc/kafka/secrets/kafka.server.truststore.jks -Djavax.net.ssl.trustStorePassword=${TRUSTSTORE_PASSWORD:-changeit}"
+    export KAFKA_JMX_OPTS="-Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.authenticate=true -Dcom.sun.management.jmxremote.ssl=true -Dcom.sun.management.jmxremote.port=9999 -Dcom.sun.management.jmxremote.rmi.port=9999 -Dcom.sun.management.jmxremote.password.file=/etc/secrets/jmxremote.password -Dcom.sun.management.jmxremote.access.file=/etc/secrets/jmxremote.access -Dcom.sun.management.jmxremote.registry.ssl=true -Dcom.sun.management.jmxremote.ssl.need.client.auth=false -Djavax.net.ssl.keyStore=/etc/secrets/kafka.server.keystore.jks -Djavax.net.ssl.keyStorePassword=${KEYSTORE_PASSWORD:-changeit} -Djavax.net.ssl.trustStore=/etc/secrets/kafka.server.truststore.jks -Djavax.net.ssl.trustStorePassword=${TRUSTSTORE_PASSWORD:-changeit}"
     
 else
     echo "⚠️  Starting Kafka with INSECURE JMX (development mode only)"
