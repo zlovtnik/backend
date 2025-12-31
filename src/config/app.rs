@@ -171,6 +171,9 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
         .add_route(|cfg| {
             cfg.service(web::scope("/evento-nfag").configure(configure_evento_nfag_routes));
         })
+        .add_route(|cfg| {
+            cfg.service(web::scope("/functional").configure(configure_functional_operations_routes));
+        })
         .build(cfg);
 }
 
@@ -470,3 +473,40 @@ configure_crud_routes!(
     "evento-nfag",
     "EventoNfag"
 );
+
+/// Register functional operations demonstration endpoints using functional composition patterns.
+///
+/// Exposes functional operations (filter, map, chain, state transitions) for visualization
+/// and learning purposes. Useful for React frontends demonstrating functional programming patterns.
+///
+/// # Routes
+///
+/// - GET `/operations` - List available operations
+/// - POST `/demo/filter` - Demonstrate filter operation
+/// - POST `/demo/map` - Demonstrate map transformation
+/// - POST `/demo/chain` - Demonstrate complex operation chain
+/// - POST `/demo/state-transitions` - Demonstrate immutable state transitions
+///
+/// Note: This function uses cfg.service() with attribute macros (#[get], #[post]) rather than
+/// explicit web::resource() definitions for code reuse across multiple contexts. The alternative
+/// pattern using explicit web::resource()/route() is used elsewhere in the file (lines 191-223, etc.)
+/// for route composition, but the attribute macro approach is valid and commonly used in Actix-web.
+fn configure_functional_operations_routes(cfg: &mut web::ServiceConfig) {
+    RouteBuilder::new()
+        .add_route(|cfg| {
+            cfg.service(functional_operations_controller::get_available_operations);
+        })
+        .add_route(|cfg| {
+            cfg.service(functional_operations_controller::demo_filter);
+        })
+        .add_route(|cfg| {
+            cfg.service(functional_operations_controller::demo_map);
+        })
+        .add_route(|cfg| {
+            cfg.service(functional_operations_controller::demo_chain);
+        })
+        .add_route(|cfg| {
+            cfg.service(functional_operations_controller::demo_state_transitions);
+        })
+        .build(cfg);
+}
