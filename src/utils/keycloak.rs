@@ -1,9 +1,10 @@
 use openidconnect::{
     core::{CoreClient, CoreProviderMetadata, CoreResponseType},
-    AuthenticationFlow, ClientId, ClientSecret, CsrfToken, IssuerUrl,
-    Nonce, PkceCodeChallenge, RedirectUrl, Scope,
+    AuthenticationFlow, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce, PkceCodeChallenge,
+    RedirectUrl, Scope,
 };
 use reqwest::Client as ReqwestClient;
+use std::time::Duration;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
@@ -47,19 +48,27 @@ pub struct KeycloakClient {
     redirect_url: String,
 }
 
+const KEYCLOAK_TIMEOUT: Duration = Duration::from_secs(10);
+
 impl KeycloakClient {
-    pub async fn new(config: KeycloakConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn new(
+        config: KeycloakConfig,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         // Validate configuration by attempting discovery
-        let http_client = ReqwestClient::new();
+        let http_client = ReqwestClient::builder()
+            .timeout(KEYCLOAK_TIMEOUT)
+            .connect_timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
         let issuer_url = IssuerUrl::new(config.issuer_url.clone())?;
         let metadata_url = issuer_url.url().join(".well-known/openid-configuration")?;
-        
+
         let response = http_client
             .get(metadata_url)
             .send()
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-        
+
         let _provider_metadata: CoreProviderMetadata = response
             .json()
             .await
@@ -75,16 +84,20 @@ impl KeycloakClient {
 
     async fn validate_configuration(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Validate configuration by attempting discovery
-        let http_client = ReqwestClient::new();
+        let http_client = ReqwestClient::builder()
+            .timeout(KEYCLOAK_TIMEOUT)
+            .connect_timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
         let issuer_url = IssuerUrl::new(self.issuer_url.clone())?;
         let metadata_url = issuer_url.url().join(".well-known/openid-configuration")?;
-        
+
         let response = http_client
             .get(metadata_url)
             .send()
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-        
+
         let _provider_metadata: CoreProviderMetadata = response
             .json()
             .await
@@ -103,18 +116,24 @@ impl KeycloakClient {
     ///
     /// **IMPORTANT**: Store the returned `OAuthSessionState` securely in an HttpOnly,
     /// Secure, SameSite=Strict cookie and DO NOT expose to frontend code.
-    pub async fn get_authorization_url(&self) -> Result<(String, OAuthSessionState), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn get_authorization_url(
+        &self,
+    ) -> Result<(String, OAuthSessionState), Box<dyn std::error::Error + Send + Sync>> {
         // Fetch provider metadata
-        let http_client = ReqwestClient::new();
+        let http_client = ReqwestClient::builder()
+            .timeout(KEYCLOAK_TIMEOUT)
+            .connect_timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
         let issuer_url = IssuerUrl::new(self.issuer_url.clone())?;
         let metadata_url = issuer_url.url().join(".well-known/openid-configuration")?;
-        
+
         let response = http_client
             .get(metadata_url)
             .send()
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-        
+
         let provider_metadata: CoreProviderMetadata = response
             .json()
             .await
@@ -124,11 +143,17 @@ impl KeycloakClient {
         let client = CoreClient::from_provider_metadata(
             provider_metadata,
             ClientId::new(self.client_id.clone()),
-            Some(ClientSecret::new(self.client_secret.expose_secret().to_string())),
+            Some(ClientSecret::new(
+                self.client_secret.expose_secret().to_string(),
+            )),
         );
 
         // Generate PKCE and authorization URL
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+
+        // Parse the redirect_url into RedirectUrl type required by OpenID Connect
+        let redirect_url = RedirectUrl::new(self.redirect_url.clone())
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
         let (auth_url, csrf_token, nonce) = client
             .authorize_url(
@@ -140,6 +165,7 @@ impl KeycloakClient {
             .add_scope(Scope::new("profile".to_string()))
             .add_scope(Scope::new("email".to_string()))
             .set_pkce_challenge(pkce_challenge)
+            .set_redirect_uri(std::borrow::Cow::Owned(redirect_url))
             .url();
 
         let session_state = OAuthSessionState {
@@ -168,7 +194,10 @@ impl KeycloakClient {
     /// **TODO**: Implement JWKS fetching and caching (consider TTL-based cache)
     /// **TODO**: Convert JWK to DecodingKey using RSA modulus (n) and exponent (e)
     /// **TODO**: Validate nonce claim matches stored value from OAuthSessionState
-    pub fn validate_token_sync(&self, _token: &str) -> Result<Claims, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn validate_token_sync(
+        &self,
+        _token: &str,
+    ) -> Result<Claims, Box<dyn std::error::Error + Send + Sync>> {
         // Temporary: Return explicit error rather than using dummy key
         // In production, uncomment and implement JWKS-based RS256 validation:
         //
@@ -213,12 +242,18 @@ impl Claims {
     /// # Returns
     /// * `Ok(())` if the issuer matches or if the iss claim is not present (for backward compatibility)
     /// * `Err(String)` if the issuer doesn't match
-    pub fn validate_issuer(&self, expected_issuer: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn validate_issuer(
+        &self,
+        expected_issuer: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(iss) = &self.iss {
             if iss != expected_issuer {
                 return Err(Box::new(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("Token issuer '{}' does not match expected issuer '{}'", iss, expected_issuer),
+                    format!(
+                        "Token issuer '{}' does not match expected issuer '{}'",
+                        iss, expected_issuer
+                    ),
                 )));
             }
         }
@@ -233,7 +268,10 @@ impl Claims {
     /// # Returns
     /// * `Ok(())` if the audience contains the client ID or if the aud claim is not present (for backward compatibility)
     /// * `Err(String)` if the audience doesn't contain the client ID
-    pub fn validate_audience(&self, expected_client_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn validate_audience(
+        &self,
+        expected_client_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(aud) = &self.aud {
             if !aud.contains(&expected_client_id.to_string()) {
                 return Err(Box::new(std::io::Error::new(

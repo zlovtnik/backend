@@ -1,7 +1,7 @@
 use actix_service::forward_ready;
 use actix_web::body::EitherBody;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
-use actix_web::http::{Method, header::HeaderValue};
+use actix_web::http::{header::HeaderValue, Method};
 use actix_web::web::{self, Data};
 use actix_web::Error;
 use actix_web::HttpMessage;
@@ -141,7 +141,7 @@ where
         // We create the service future SYNCHRONOUSLY here (before entering async move)
         // This avoids the 'static lifetime issue because we don't try to call self.service
         // from within an async move block.
-        
+
         let service_fut = self.service.call(req);
 
         Box::pin(async move {
@@ -156,10 +156,8 @@ where
                         let token = authen_str[7..].trim().to_string();
 
                         // Wrap synchronous validation in web::block to prevent blocking the async runtime
-                        let validate_result = web::block(move || {
-                            keycloak_client.validate_token_sync(&token)
-                        })
-                        .await;
+                        let validate_result =
+                            web::block(move || keycloak_client.validate_token_sync(&token)).await;
 
                         // Handle the nested Result layers:
                         // - Err(e) = web::block join error (internal thread pool error)
@@ -190,10 +188,7 @@ where
                             }
                             Err(e) => {
                                 // web::block returned an error (thread pool issue)
-                                error!(
-                                    "Token validation blocking operation failed: {}",
-                                    e
-                                );
+                                error!("Token validation blocking operation failed: {}", e);
                             }
                         }
                     } else {
@@ -212,9 +207,9 @@ where
             // If validation failed, the service still runs but we should have rejected the
             // request earlier (before calling service_fut).
             if !should_call_service {
-                return Err(Error::from(
-                    actix_web::error::ErrorUnauthorized(constants::MESSAGE_INVALID_TOKEN),
-                ));
+                return Err(Error::from(actix_web::error::ErrorUnauthorized(
+                    constants::MESSAGE_INVALID_TOKEN,
+                )));
             }
 
             service_fut.await.map(ServiceResponse::map_into_left_body)

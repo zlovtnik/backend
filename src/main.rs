@@ -2,17 +2,17 @@ use std::default::Default;
 use std::{env, io};
 
 use actix_cors::Cors;
+use actix_session::config::PersistentSession;
+use actix_session::storage::CookieSessionStore;
+use actix_session::SessionMiddleware;
+use actix_web::cookie::time::Duration;
+use actix_web::cookie::SameSite;
 use actix_web::dev::Service;
 use actix_web::web;
 use actix_web::{http, App, HttpServer};
 use futures::FutureExt;
-use actix_session::SessionMiddleware;
-use actix_session::config::PersistentSession;
-use actix_session::storage::CookieSessionStore;
-use actix_web::cookie::time::Duration;
-use actix_web::cookie::SameSite;
-use rcs::utils::ws_logger::{init_websocket_logging, LogBroadcaster};
 use rcs::config;
+use rcs::utils::ws_logger::{init_websocket_logging, LogBroadcaster};
 use std::sync::Arc;
 /// יהי רצון מלפני ה' שימצא עבודה חדשה טובה, בעוד נקודת הכניסה ליישום מסדרת לוגים וסביבה, מאתחלת מסד נתונים ורדיס,
 /// רושמת בריכות טננטים, מסדרת CORS ומיידלוור, ומתחילה שרת Actix HTTP.
@@ -159,9 +159,48 @@ async fn main() -> io::Result<()> {
             })?,
     );
 
-    // Generate session encryption key for OAuth session state storage
+    // Load or generate session encryption key for OAuth session state storage
     // In production, load from a secure key management system (e.g., AWS KMS, HashiCorp Vault)
-    let session_key = actix_web::cookie::Key::generate();
+    let session_key = {
+        use base64::Engine;
+        
+        match env::var("SESSION_ENCRYPTION_KEY") {
+            Ok(key_b64) => {
+                // Attempt to decode the base64-encoded 64-byte key
+                let key_vec = base64::engine::general_purpose::STANDARD
+                    .decode(&key_b64)
+                    .map_err(|e| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("Failed to decode SESSION_ENCRYPTION_KEY from base64: {}", e),
+                        )
+                    })?;
+                
+                // Convert Vec<u8> to [u8; 64]
+                let key_bytes: [u8; 64] = key_vec.try_into().map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "SESSION_ENCRYPTION_KEY must be exactly 64 bytes when decoded from base64".to_string(),
+                    )
+                })?;
+                
+                actix_web::cookie::Key::from(&key_bytes)
+            }
+            Err(_) => {
+                // Fallback to generation only in development
+                let is_dev = env::var("APP_ENV").map(|v| v == "dev").unwrap_or(false);
+                if is_dev {
+                    log::warn!("SESSION_ENCRYPTION_KEY not set. Generating random key for development. DO NOT use in production.");
+                    actix_web::cookie::Key::generate()
+                } else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "SESSION_ENCRYPTION_KEY must be set in production. Set APP_ENV=dev to generate a key for development.",
+                    ));
+                }
+            }
+        }
+    };
 
     let manager = config::db::TenantPoolManager::new(main_pool.clone());
     // יהי רצון שימצא עבודה, קוד קשה טננט להדגמה, בייצור טען ממסד נתונים

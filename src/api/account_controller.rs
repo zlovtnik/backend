@@ -1,6 +1,6 @@
+use actix_session::Session;
 use actix_web::http::{self, StatusCode};
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
-use actix_session::Session;
 use log::info;
 use serde_json::json;
 use std::borrow::Cow;
@@ -269,22 +269,21 @@ pub async fn keycloak_login(
     session: Session,
     _req: HttpRequest,
 ) -> Result<HttpResponse, ServiceError> {
-    let (auth_url, session_state) = keycloak_client.get_authorization_url()
-        .await
-        .map_err(|e| {
-            log::error!("Failed to generate OAuth authorization URL: {}", e);
-            ServiceError::internal_server_error(constants::MESSAGE_INTERNAL_SERVER_ERROR)
-        })?;
+    let (auth_url, session_state) = keycloak_client.get_authorization_url().await.map_err(|e| {
+        log::error!("Failed to generate OAuth authorization URL: {}", e);
+        ServiceError::internal_server_error(constants::MESSAGE_INTERNAL_SERVER_ERROR)
+    })?;
 
     // Store session state in secure, HttpOnly, SameSite=Strict cookie with 10-minute TTL
-    session.insert("oauth_state", &session_state)
-        .map_err(|e| {
-            log::error!("Failed to store OAuth session state: {}", e);
-            ServiceError::internal_server_error(constants::MESSAGE_INTERNAL_SERVER_ERROR)
-        })?;
+    session.insert("oauth_state", &session_state).map_err(|e| {
+        log::error!("Failed to store OAuth session state: {}", e);
+        ServiceError::internal_server_error(constants::MESSAGE_INTERNAL_SERVER_ERROR)
+    })?;
 
-    log::debug!("OAuth session state stored with CSRF token: {}", 
-        &session_state.csrf_token[..8.min(session_state.csrf_token.len())]);
+    log::debug!(
+        "OAuth session state stored with CSRF token: {}",
+        &session_state.csrf_token[..8.min(session_state.csrf_token.len())]
+    );
 
     Ok(HttpResponse::Found()
         .append_header((http::header::LOCATION, auth_url))
@@ -323,11 +322,11 @@ pub async fn keycloak_callback(
         if let Some(error_desc) = query.get("error_description") {
             log::warn!("Error description: {}", error_desc);
         }
-        return Err(ServiceError::bad_request(
-            "Authentication failed. Please try again."
-        )
-        .with_tag("oauth_error")
-        .with_detail(format!("Provider error: {}", error)));
+        return Err(
+            ServiceError::bad_request("Authentication failed. Please try again.")
+                .with_tag("oauth_error")
+                .with_detail(format!("Provider error: {}", error)),
+        );
     }
 
     // Retrieve stored OAuth session state from secure session
@@ -356,35 +355,33 @@ pub async fn keycloak_callback(
         log::warn!("OAuth session state expired");
         session.purge(); // Clear the entire session
         return Err(ServiceError::bad_request(
-            "Authentication session expired. Please restart authentication."
+            "Authentication session expired. Please restart authentication.",
         )
         .with_tag("session_expired"));
     }
 
     // Extract and validate state parameter (CSRF protection)
-    let returned_state = query.get("state")
-        .ok_or_else(|| {
-            log::warn!("State parameter missing from OAuth callback");
-            ServiceError::bad_request("State parameter missing. Invalid callback.")
-                .with_tag("missing_state")
-        })?;
+    let returned_state = query.get("state").ok_or_else(|| {
+        log::warn!("State parameter missing from OAuth callback");
+        ServiceError::bad_request("State parameter missing. Invalid callback.")
+            .with_tag("missing_state")
+    })?;
 
     if returned_state != &session_state.csrf_token {
         log::warn!("CSRF token mismatch - possible CSRF attack");
         session.purge();
         return Err(ServiceError::bad_request(
-            "CSRF validation failed. Please restart authentication."
+            "CSRF validation failed. Please restart authentication.",
         )
         .with_tag("csrf_mismatch"));
     }
 
     // Extract and validate authorization code
-    let code = query.get("code")
-        .ok_or_else(|| {
-            log::warn!("Authorization code missing from OAuth callback");
-            ServiceError::bad_request("Authorization code missing. Invalid callback.")
-                .with_tag("missing_code")
-        })?;
+    let code = query.get("code").ok_or_else(|| {
+        log::warn!("Authorization code missing from OAuth callback");
+        ServiceError::bad_request("Authorization code missing. Invalid callback.")
+            .with_tag("missing_code")
+    })?;
 
     // Remove OAuth session state from session immediately to prevent reuse
     session.remove("oauth_state");
