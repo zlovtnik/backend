@@ -57,11 +57,11 @@ RUN mkdir -p /var/lib/kafka/data /var/log/kafka && \
 # Create startup wrapper script that configures JMX based on security mode
 RUN mkdir -p /etc/kafka/scripts && chmod 755 /etc/kafka/scripts
 
-COPY <<EOF /etc/kafka/start-kafka-secure.sh
+RUN cat > /etc/kafka/start-kafka-secure.sh << 'EOF' && chmod +x /etc/kafka/start-kafka-secure.sh
 #!/bin/bash
 set -e
 
-if [ "\${JMX_SECURE}" = "true" ]; then
+if [ "${JMX_SECURE}" = "true" ]; then
     echo "Starting Kafka with SECURE JMX (auth + SSL enabled)"
     
     # Verify secure files exist
@@ -76,7 +76,7 @@ if [ "\${JMX_SECURE}" = "true" ]; then
     fi
     
     # Set secure JMX options
-    export KAFKA_JMX_OPTS="-Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.authenticate=true -Dcom.sun.management.jmxremote.ssl=true -Dcom.sun.management.jmxremote.port=9999 -Dcom.sun.management.jmxremote.rmi.port=9999 -Dcom.sun.management.jmxremote.password.file=/etc/kafka/secrets/jmxremote.password -Dcom.sun.management.jmxremote.access.file=/etc/kafka/secrets/jmxremote.access -Dcom.sun.management.jmxremote.registry.ssl=true -Dcom.sun.management.jmxremote.ssl.need.client.auth=false -Djavax.net.ssl.keyStore=/etc/kafka/secrets/kafka.server.keystore.jks -Djavax.net.ssl.keyStorePassword=\${KEYSTORE_PASSWORD:-changeit} -Djavax.net.ssl.trustStore=/etc/kafka/secrets/kafka.server.truststore.jks -Djavax.net.ssl.trustStorePassword=\${TRUSTSTORE_PASSWORD:-changeit}"
+    export KAFKA_JMX_OPTS="-Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.authenticate=true -Dcom.sun.management.jmxremote.ssl=true -Dcom.sun.management.jmxremote.port=9999 -Dcom.sun.management.jmxremote.rmi.port=9999 -Dcom.sun.management.jmxremote.password.file=/etc/kafka/secrets/jmxremote.password -Dcom.sun.management.jmxremote.access.file=/etc/kafka/secrets/jmxremote.access -Dcom.sun.management.jmxremote.registry.ssl=true -Dcom.sun.management.jmxremote.ssl.need.client.auth=false -Djavax.net.ssl.keyStore=/etc/kafka/secrets/kafka.server.keystore.jks -Djavax.net.ssl.keyStorePassword=${KEYSTORE_PASSWORD:-changeit} -Djavax.net.ssl.trustStore=/etc/kafka/secrets/kafka.server.truststore.jks -Djavax.net.ssl.trustStorePassword=${TRUSTSTORE_PASSWORD:-changeit}"
     
 else
     echo "⚠️  Starting Kafka with INSECURE JMX (development mode only)"
