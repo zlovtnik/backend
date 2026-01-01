@@ -60,19 +60,39 @@ impl KeycloakClient {
             .connect_timeout(Duration::from_secs(5))
             .build()
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-        let issuer_url = IssuerUrl::new(config.issuer_url.clone())?;
-        let metadata_url = issuer_url.url().join(".well-known/openid-configuration")?;
+        
+        // Construct metadata URL directly to preserve the full issuer path
+        let metadata_url = if config.issuer_url.ends_with('/') {
+            format!("{}{}well-known/openid-configuration", config.issuer_url, ".")
+        } else {
+            format!("{}/.well-known/openid-configuration", config.issuer_url)
+        };
 
+        log::debug!("Keycloak: Fetching metadata from {}", metadata_url);
         let response = http_client
-            .get(metadata_url)
+            .get(&metadata_url)
             .send()
             .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+            .map_err(|e| {
+                log::error!("Keycloak: Failed to fetch metadata: {}", e);
+                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+            })?;
 
+        let status = response.status();
+        log::debug!("Keycloak: Metadata response status: {}", status);
+        
         let _provider_metadata: CoreProviderMetadata = response
             .json()
             .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+            .map_err(|e| {
+                log::error!("Keycloak: Failed to parse metadata response as JSON: {} | Issuer URL: {}", e, config.issuer_url);
+                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+            })?;
+        
+        log::info!("Keycloak: Successfully initialized with issuer: {}", config.issuer_url);
+        
+        // Validate issuer URL format for OpenID Connect
+        let _issuer_url = IssuerUrl::new(config.issuer_url.clone())?;
 
         Ok(KeycloakClient {
             issuer_url: config.issuer_url,
