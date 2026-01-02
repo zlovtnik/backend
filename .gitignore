@@ -185,3 +185,12 @@ package-lock.json
 frontend/.github/temp/
 
 .fake
+
+# Secrets - JMX Configuration
+# DO NOT commit keystores, truststores, or password files
+# IMPORTANT: These contain sensitive credentials and SSL keys
+secrets/jmxremote.password
+secrets/jmxremote.access
+secrets/*.jks
+secrets/jmxremote.password.sample
+secrets/jmxremote.access.sample

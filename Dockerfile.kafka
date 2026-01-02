@@ -51,10 +51,10 @@ ENV KAFKA_HOME=/opt/kafka \
     KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD:-changeit} \
     TRUSTSTORE_PASSWORD=${TRUSTSTORE_PASSWORD:-changeit}
 
-# Create required directories for secure JMX files
-RUN mkdir -p /var/lib/kafka/data /var/log/kafka /etc/secrets && \
-    chmod -R 755 /var/lib/kafka/data /var/log/kafka && \
-    chmod 700 /etc/secrets
+# Create required directories for data and logs
+# NOTE: /etc/secrets should be mounted at runtime, not created in the image
+RUN mkdir -p /var/lib/kafka/data /var/log/kafka && \
+    chmod -R 755 /var/lib/kafka/data /var/log/kafka
 
 # Copy custom configuration if exists
 # COPY configs/server.properties ${KAFKA_HOME}/config/server.properties
@@ -71,14 +71,6 @@ RUN if [ "${JMX_SECURE}" = "true" ]; then \
         echo "    ⚠️  DO NOT use this configuration in production" && \
         echo "    ⚠️  ONLY for isolated development/test environments"; \
     fi
-
-# Create data directories
-RUN mkdir -p /var/lib/kafka/data /var/log/kafka && \
-    chmod -R 755 /var/lib/kafka/data /var/log/kafka
-
-# Copy custom configuration if exists
-# COPY configs/server.properties ${KAFKA_HOME}/config/server.properties
-# COPY configs/log4j.properties ${KAFKA_HOME}/config/log4j.properties
 
 # Create startup wrapper script that configures JMX based on security mode
 RUN mkdir -p /etc/kafka/scripts && chmod 755 /etc/kafka/scripts
@@ -120,7 +112,7 @@ EXPOSE 9092 9093 9999
 
 # Health check - validates broker is responding
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD kafka-broker-api-versions --bootstrap-server localhost:9093 || exit 1
+    CMD kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1
 
 # Run Kafka with secure JMX configuration
 CMD ["/etc/kafka/start-kafka-secure.sh"]

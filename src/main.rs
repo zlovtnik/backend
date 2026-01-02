@@ -146,7 +146,7 @@ async fn main() -> io::Result<()> {
             }
         },
         redirect_url: env::var("KEYCLOAK_REDIRECT_URL")
-            .unwrap_or_else(|_| "http://localhost:8080/api/auth/callback".to_string()),
+            .unwrap_or_else(|_| "http://localhost:8000/api/callback".to_string()),
     };
     let keycloak_client = web::Data::new(
         rcs::utils::keycloak::KeycloakClient::new(keycloak_config)
@@ -270,7 +270,7 @@ async fn main() -> io::Result<()> {
                             .session_ttl(Duration::seconds(600)) // 10 minute OAuth session TTL
                     )
                     .cookie_name("oauth_session".to_string())
-                    .cookie_path("/api/auth".to_string())
+                    .cookie_path("/api".to_string()) // Covers /api/auth/* and /api/callback
                     .cookie_http_only(true) // Prevent JavaScript access
                     .cookie_same_site(SameSite::Strict) // Prevent CSRF
                     // In production, set to true and ensure HTTPS
@@ -370,7 +370,7 @@ mod tests {
         .unwrap()
         .run();
 
-        assert_eq!(true, true);
+        // Test passes if server starts without panicking - HTTP binding success is the verification
     }
 
     /// Starts an Actix HTTP server configured with CORS and a database pool to verify it can start without authentication middleware.
@@ -434,6 +434,6 @@ mod tests {
         .unwrap()
         .run();
 
-        assert_eq!(true, true);
+        // Test passes if server starts without panicking - HTTP binding success is the verification
     }
 }
