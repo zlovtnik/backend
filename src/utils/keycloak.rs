@@ -160,21 +160,22 @@ impl KeycloakClient {
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
-        // Create a fully configured client from the metadata
+        // Parse the redirect_url into RedirectUrl type required by OpenID Connect
+        let redirect_url = RedirectUrl::new(self.redirect_url.clone())
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+        // Create a fully configured client from the metadata with redirect_uri set
         let client = CoreClient::from_provider_metadata(
             provider_metadata,
             ClientId::new(self.client_id.clone()),
             Some(ClientSecret::new(
                 self.client_secret.expose_secret().to_string(),
             )),
-        );
+        )
+        .set_redirect_uri(redirect_url);
 
         // Generate PKCE and authorization URL
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
-
-        // Parse the redirect_url into RedirectUrl type required by OpenID Connect
-        let redirect_url = RedirectUrl::new(self.redirect_url.clone())
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
         let (auth_url, csrf_token, nonce) = client
             .authorize_url(
@@ -186,8 +187,12 @@ impl KeycloakClient {
             .add_scope(Scope::new("profile".to_string()))
             .add_scope(Scope::new("email".to_string()))
             .set_pkce_challenge(pkce_challenge)
-            .set_redirect_uri(std::borrow::Cow::Owned(redirect_url))
             .url();
+
+        log::debug!(
+            "OAuth2 authorization URL generated for client_id: {} with scopes: openid, profile, email",
+            self.client_id
+        );
 
         let session_state = OAuthSessionState {
             pkce_verifier: pkce_verifier.secret().to_string(),

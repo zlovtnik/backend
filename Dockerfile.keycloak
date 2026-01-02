@@ -33,10 +33,10 @@ ENV KEYCLOAK_HOME=/opt/keycloak \
     KEYCLOAK_JMX_PORT=9999 \
     JMX_SECURE=${JMX_SECURE}
 
-# Create required directories for secure JMX files
-RUN mkdir -p /opt/keycloak/data /var/log/keycloak /etc/secrets && \
-    chmod -R 755 /opt/keycloak/data /var/log/keycloak && \
-    chmod 700 /etc/secrets
+# Create required directories for data and logs
+# NOTE: /etc/secrets should be mounted at runtime, not created in the image
+RUN mkdir -p /opt/keycloak/data /var/log/keycloak && \
+    chmod -R 755 /opt/keycloak/data /var/log/keycloak
 
 # Create JMX configuration based on security mode
 RUN if [ "${JMX_SECURE}" = "true" ]; then \

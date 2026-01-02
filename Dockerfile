@@ -19,16 +19,17 @@ RUN apt-get update \
         unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# leverage Docker layer caching by copying manifests first
+# leverage Docker layer caching by copying manifests and build files first
 COPY Cargo.toml Cargo.lock ./
-COPY functional_lib/Cargo.toml ./functional_lib/Cargo.toml
 COPY diesel.toml ./
 COPY build.rs ./
 COPY rust-toolchain.toml ./
 
-# copy source and migrations
-COPY src ./src
+# copy workspace member manifests and source
 COPY functional_lib ./functional_lib
+
+# copy main source, migrations, and benchmarks
+COPY src ./src
 COPY migrations ./migrations
 COPY benches ./benches
 
