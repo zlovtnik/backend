@@ -36,9 +36,6 @@ CERT_VALIDITY_DAYS=365
 
 echo "=== Generating JMX Keystores and Truststores ==="
 echo "Location: $SECRETS_DIR"
-echo "=== Generating JMX Keystores and Truststores ==="
-echo "Location: $SECRETS_DIR"
-echo ""
 echo ""
 
 # 1. Generate Kafka keystore

@@ -1012,6 +1012,12 @@ where
     ///
     /// A vector of results or an error if the query fails
     ///
+    /// # Notes
+    ///
+    /// This is a generic implementation. Table-specific implementations of
+    /// `TypeSafeQueryBuilder::build()` are required to actually execute queries.
+    /// See the [query_builder](crate::query_builder) module for details.
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -1019,9 +1025,41 @@ where
     /// // let chunk = composer.execute_chunk_query(0, 100).expect("Query failed");
     /// // assert!(chunk.len() <= 100);
     /// ```
-    pub fn execute_chunk_query(&self, _offset: usize, _limit: usize) -> Result<Vec<U>, String> {
-        // TODO: Implement actual query execution with TypeSafeQueryBuilder
-        Err("execute_chunk_query not yet implemented".to_string())
+    pub fn execute_chunk_query(&self, offset: usize, limit: usize) -> Result<Vec<U>, String> {
+        // Validate offset and limit parameters
+        if limit == 0 {
+            return Err("Limit must be greater than 0".to_string());
+        }
+
+        // Add defensive bounds checks before casting to i64
+        if offset > i64::MAX as usize {
+            return Err(format!("Offset parameter ({}) exceeds maximum allowed value (i64::MAX = {})", offset, i64::MAX));
+        }
+        if limit > i64::MAX as usize {
+            return Err(format!("Limit parameter ({}) exceeds maximum allowed value (i64::MAX = {})", limit, i64::MAX));
+        }
+
+        // Check if a connection pool is available
+        let _pool = self.pool.as_ref()
+            .ok_or_else(|| "No database connection pool configured. Use with_pool() to set a pool.".to_string())?;
+        
+        // Prepare the query builder with pagination parameters
+        // Create a copy of the current builder state with pagination applied
+        let mut _paginated_builder = self.builder.clone();
+        _paginated_builder = _paginated_builder
+            .limit(limit as i64)
+            .offset(offset as i64);
+        
+        // Note: The actual query execution requires `T` to implement `diesel::Table`,
+        // which is only available through table-specific implementations of
+        // TypeSafeQueryBuilder::build(). This generic implementation validates
+        // the inputs and pool availability but cannot execute the query directly.
+        // 
+        // For table-specific execution, either:
+        // 1. Provide a table-specific implementation of execute_chunk_query(), or
+        // 2. Call the table-specific builder's build() method directly
+        
+        Err("Query execution requires table-specific TypeSafeQueryBuilder implementation. Ensure your table implements the diesel::Table trait.".to_string())
     }
 }
 

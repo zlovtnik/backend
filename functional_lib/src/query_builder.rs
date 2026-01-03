@@ -460,6 +460,22 @@ pub struct TypeSafeQueryBuilder<T, U> {
     _phantom: PhantomData<U>,
 }
 
+impl<T, U> Clone for TypeSafeQueryBuilder<T, U>
+where
+    U: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            _table_marker: PhantomData,
+            filters: self.filters.clone(),
+            order_by: self.order_by.clone(),
+            limit: self.limit,
+            offset: self.offset,
+            _phantom: PhantomData,
+        }
+    }
+}
+
 /// Ordering specification for queries.
 #[derive(Debug, Clone)]
 pub struct OrderSpec {
