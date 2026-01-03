@@ -445,6 +445,7 @@ where
 ///
 /// This builder ensures compile-time type safety while providing functional
 /// composition capabilities and automatic parameter sanitization.
+#[derive(Clone)]
 pub struct TypeSafeQueryBuilder<T, U> {
     /// Type marker for Diesel table
     _table_marker: PhantomData<T>,
