@@ -396,47 +396,101 @@ pub async fn keycloak_callback(
     //
     // TODO: Validate nonce in ID token matches session_state.nonce
     //
-    // For now, generate a temporary JWT token to allow OAuth flow to complete
-    // This is a workaround until full token exchange is implemented
-    let temp_claims = crate::models::Claims {
-        sub: "oauth-user".to_string(),
-        email: Some("oauth@example.com".to_string()),
-        email_verified: false,
-        name: Some("OAuth User".to_string()),
-        picture: None,
-        iss: "keycloak-oauth".to_string(),
-        aud: vec![_keycloak_client.client_id.clone()],
-        iat: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
-        exp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            + 3600, // 1 hour expiration
+    // Production guard: Prevent OAuth flow in production until full Keycloak/token validation is implemented
+    let app_env = std::env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
+    if app_env == "production" {
+        log::error!("OAuth login attempted in production with incomplete implementation. Aborting.");
+        session.purge();
+        return Err(ServiceError::bad_request(
+            "OAuth authentication is not yet available in production. Please use standard authentication."
+        ).with_tag("oauth_production_disabled"));
+    }
+
+    // Extract stable unique identifier from OAuth authorization code
+    // In the authorization code flow, the code parameter uniquely identifies an authorization grant.
+    // Once proper token exchange is implemented, this should extract 'sub', 'preferred_username', or 'email'
+    // from the ID token claims for a more persistent user identifier.
+    let oauth_unique_id = code.clone();
+
+    // For now, use authorization code as the stable username identifier.
+    // TODO: Once full token exchange is implemented, extract from claims:
+    //   - Preferred: user's 'sub' (subject claim) from ID token
+    //   - Fallback: 'preferred_username' or 'email' from claims
+    let username = format!("oauth_{}", oauth_unique_id);
+
+    // Validate and map tenant from claims or configuration
+    // TODO: Once token exchange is implemented, extract tenant from:
+    //   - Custom 'tenant_id' claim in ID token
+    //   - 'realm_access.roles' containing tenant information
+    //   - Default tenant from environment configuration
+    let tenant_id = std::env::var("OAUTH_DEFAULT_TENANT")
+        .unwrap_or_else(|_| "default".to_string());
+
+    // Generate unique login session ID derived from authorization code
+    let login_session = format!("oauth-{}-{}", oauth_unique_id, uuid::Uuid::new_v4());
+
+    log::info!(
+        "OAuth login: code={}, username={}, tenant_id={}",
+        oauth_unique_id, username, tenant_id
+    );
+
+    // Create LoginInfoDTO with extracted/derived values
+    let oauth_login = crate::models::user::LoginInfoDTO {
+        username,
+        login_session,
+        tenant_id,
     };
 
-    let token = crate::security::jwt::encode_jwt(&temp_claims)
-        .map_err(|e| {
-            log::error!("Failed to generate OAuth token: {}", e);
-            ServiceError::internal_error("Failed to process authentication")
-        })?;
+    let token = crate::models::user_token::UserToken::generate_token(&oauth_login);
 
-    // Store token in session
-    session.insert("auth_token", token.clone())
-        .map_err(|e| {
-            log::error!("Failed to store auth token in session: {}", e);
-            ServiceError::internal_error("Failed to process authentication")
-        })?;
+    // Create a redirect response with HttpOnly secure cookie (cookie-based auth)
+    // The token is stored in the cookie and sent with each request via the Authorization header.
+    // The server-side session is not used for token storage; authentication is stateless via Bearer tokens.
+    use actix_web::cookie::Cookie;
+    let cookie = Cookie::build("auth_token", token.clone())
+        .path("/")
+        .http_only(true)
+        .secure(true)
+        .same_site(actix_web::cookie::SameSite::Lax)
+        .finish();
 
-    Ok(ResponseTransformer::new(json!({
-        "status": "authenticated",
-        "message": "Authentication successful. Your account has been verified.",
-        "token": token,
-    }))
-    .with_message(Cow::Borrowed("Keycloak authentication successful"))
-    .respond_to(&req))
+    // Read frontend callback URL from environment with sensible defaults
+    let frontend_callback_url = std::env::var("OAUTH_FRONTEND_CALLBACK_URL")
+        .or_else(|_| {
+            // Default based on environment
+            let app_env = std::env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
+            match app_env.as_str() {
+                "production" => Err(std::env::VarError::NotPresent),
+                _ => Ok("http://localhost:3000/auth/callback".to_string()),
+            }
+        })
+        .map_err(|_| {
+            log::error!("OAUTH_FRONTEND_CALLBACK_URL not set and no development default available");
+            ServiceError::internal_server_error(
+                "OAuth configuration incomplete: frontend callback URL not configured"
+            ).with_tag("oauth_config_missing")
+        })?
+        .trim()
+        .to_string();
+
+    // Validate callback URL is a valid absolute URL
+    use url::Url;
+    let _validated_url = Url::parse(&frontend_callback_url)
+        .map_err(|e| {
+            log::error!("Invalid OAUTH_FRONTEND_CALLBACK_URL: {}", e);
+            ServiceError::bad_request(
+                "OAuth configuration error: invalid callback URL format"
+            ).with_tag("oauth_invalid_callback_url")
+        })?
+        .to_string(); // Normalize and validate
+
+    let response = HttpResponse::Found() // 302 redirect
+        .insert_header(("Location", frontend_callback_url))
+        .cookie(cookie)
+        .finish();
+
+    log::info!("OAuth callback successful, redirecting to frontend with auth token");
+    Ok(response)
 }
 
 #[cfg(test)]

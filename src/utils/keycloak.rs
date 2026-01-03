@@ -7,6 +7,7 @@ use reqwest::Client as ReqwestClient;
 use std::time::Duration;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 #[derive(Clone, Deserialize)]
 pub struct KeycloakConfig {
@@ -50,6 +51,37 @@ pub struct KeycloakClient {
 
 const KEYCLOAK_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Helper function to construct metadata URL robustly from issuer URL using URL::join
+/// 
+/// This ensures proper URL path joining and validates the resulting URL.
+/// The issuer URL should be the full realm issuer URL (e.g., https://keycloak.example.com/realms/master).
+/// 
+/// # Errors
+/// Returns an error if the issuer URL is invalid or URL joining fails.
+fn build_metadata_url(issuer_url: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    // Ensure issuer URL ends with / so join() doesn't replace the last path segment
+    let issuer_with_slash = if issuer_url.ends_with('/') {
+        issuer_url.to_string()
+    } else {
+        format!("{}/", issuer_url)
+    };
+    
+    // Parse issuer URL and join with the well-known path
+    let base_url = Url::parse(&issuer_with_slash)
+        .map_err(|e| {
+            log::error!("Invalid issuer URL: {}", e);
+            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+        })?
+        .join(".well-known/openid-configuration")
+        .map_err(|e| {
+            log::error!("Failed to construct metadata URL: {}", e);
+            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+        })?
+        .to_string();
+    
+    Ok(base_url)
+}
+
 impl KeycloakClient {
     pub async fn new(
         config: KeycloakConfig,
@@ -61,12 +93,8 @@ impl KeycloakClient {
             .build()
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
         
-        // Construct metadata URL directly to preserve the full issuer path
-        let metadata_url = if config.issuer_url.ends_with('/') {
-            format!("{}well-known/openid-configuration", config.issuer_url)
-        } else {
-            format!("{}/.well-known/openid-configuration", config.issuer_url)
-        };
+        // Construct metadata URL robustly using URL::join
+        let metadata_url = build_metadata_url(&config.issuer_url)?;
 
         log::debug!("Keycloak: Fetching metadata from {}", metadata_url);
         let response = http_client
@@ -81,12 +109,37 @@ impl KeycloakClient {
         let status = response.status();
         log::debug!("Keycloak: Metadata response status: {}", status);
         
-        let body_text = response.text().await.unwrap_or_default();
-        log::debug!("Keycloak: Metadata response body: {}", body_text);
+        let body_text = response.text().await
+            .map_err(|e| {
+                log::error!("Keycloak: Failed to read metadata response body: {}", e);
+                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+            })?;
+        
+        // Check HTTP status before attempting JSON parse
+        if !status.is_success() {
+            let error_msg = if body_text.len() > 200 {
+                format!("{}...", &body_text[..200])
+            } else {
+                body_text.clone()
+            };
+            log::error!(
+                "Keycloak: Metadata request failed with status {}: {}",
+                status, error_msg
+            );
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Keycloak metadata request failed: {}", status),
+            )) as Box<dyn std::error::Error + Send + Sync>);
+        }
+        
+        // Log only a truncated preview for security (avoid exposing internal URLs/config)
+        log::trace!("Keycloak: Metadata response (truncated): {}", 
+            if body_text.len() > 200 { format!("{}...", &body_text[..200]) } else { body_text.clone() }
+        );
         
         let _provider_metadata: CoreProviderMetadata = serde_json::from_str(&body_text)
             .map_err(|e| {
-                log::error!("Keycloak: Failed to parse metadata response as JSON: {} | Body: {}", e, body_text);
+                log::error!("Keycloak: Failed to parse metadata response as JSON: {}", e);
                 Box::new(e) as Box<dyn std::error::Error + Send + Sync>
             })?;
         
@@ -148,12 +201,8 @@ impl KeycloakClient {
             .build()
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
         
-        // Construct metadata URL directly to preserve the full issuer path (same as initialization)
-        let metadata_url = if self.issuer_url.ends_with('/') {
-            format!("{}well-known/openid-configuration", self.issuer_url)
-        } else {
-            format!("{}/.well-known/openid-configuration", self.issuer_url)
-        };
+        // Construct metadata URL robustly using URL::join (same as initialization)
+        let metadata_url = build_metadata_url(&self.issuer_url)?;
 
         let response = http_client
             .get(metadata_url)
@@ -161,12 +210,34 @@ impl KeycloakClient {
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
+        let status = response.status();
         let body_text = response.text().await.unwrap_or_default();
-        log::debug!("get_authorization_url: Metadata response body: {}", body_text);
+        
+        // Check HTTP status before attempting JSON parse
+        if !status.is_success() {
+            let error_msg = if body_text.len() > 200 {
+                format!("{}...", &body_text[..200])
+            } else {
+                body_text.clone()
+            };
+            log::error!(
+                "get_authorization_url: Metadata request failed with status {}: {}",
+                status, error_msg
+            );
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Keycloak metadata request failed: {}", status),
+            )) as Box<dyn std::error::Error + Send + Sync>);
+        }
+        
+        // Log only a truncated preview for security (avoid exposing internal URLs/config)
+        log::trace!("get_authorization_url: Metadata response (truncated): {}", 
+            if body_text.len() > 200 { format!("{}...", &body_text[..200]) } else { body_text.clone() }
+        );
         
         let provider_metadata: CoreProviderMetadata = serde_json::from_str(&body_text)
             .map_err(|e| {
-                log::error!("get_authorization_url: Failed to parse metadata as JSON: {} | Body: {}", e, body_text);
+                log::error!("get_authorization_url: Failed to parse metadata as JSON: {}", e);
                 Box::new(e) as Box<dyn std::error::Error + Send + Sync>
             })?;
 
