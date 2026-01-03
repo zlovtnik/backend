@@ -63,7 +63,7 @@ impl KeycloakClient {
         
         // Construct metadata URL directly to preserve the full issuer path
         let metadata_url = if config.issuer_url.ends_with('/') {
-            format!("{}{}well-known/openid-configuration", config.issuer_url, ".")
+            format!("{}well-known/openid-configuration", config.issuer_url)
         } else {
             format!("{}/.well-known/openid-configuration", config.issuer_url)
         };
@@ -81,11 +81,12 @@ impl KeycloakClient {
         let status = response.status();
         log::debug!("Keycloak: Metadata response status: {}", status);
         
-        let _provider_metadata: CoreProviderMetadata = response
-            .json()
-            .await
+        let body_text = response.text().await.unwrap_or_default();
+        log::debug!("Keycloak: Metadata response body: {}", body_text);
+        
+        let _provider_metadata: CoreProviderMetadata = serde_json::from_str(&body_text)
             .map_err(|e| {
-                log::error!("Keycloak: Failed to parse metadata response as JSON: {} | Issuer URL: {}", e, config.issuer_url);
+                log::error!("Keycloak: Failed to parse metadata response as JSON: {} | Body: {}", e, body_text);
                 Box::new(e) as Box<dyn std::error::Error + Send + Sync>
             })?;
         
@@ -146,8 +147,13 @@ impl KeycloakClient {
             .connect_timeout(Duration::from_secs(5))
             .build()
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-        let issuer_url = IssuerUrl::new(self.issuer_url.clone())?;
-        let metadata_url = issuer_url.url().join(".well-known/openid-configuration")?;
+        
+        // Construct metadata URL directly to preserve the full issuer path (same as initialization)
+        let metadata_url = if self.issuer_url.ends_with('/') {
+            format!("{}well-known/openid-configuration", self.issuer_url)
+        } else {
+            format!("{}/.well-known/openid-configuration", self.issuer_url)
+        };
 
         let response = http_client
             .get(metadata_url)
@@ -155,10 +161,14 @@ impl KeycloakClient {
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
-        let provider_metadata: CoreProviderMetadata = response
-            .json()
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+        let body_text = response.text().await.unwrap_or_default();
+        log::debug!("get_authorization_url: Metadata response body: {}", body_text);
+        
+        let provider_metadata: CoreProviderMetadata = serde_json::from_str(&body_text)
+            .map_err(|e| {
+                log::error!("get_authorization_url: Failed to parse metadata as JSON: {} | Body: {}", e, body_text);
+                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+            })?;
 
         // Parse the redirect_url into RedirectUrl type required by OpenID Connect
         let redirect_url = RedirectUrl::new(self.redirect_url.clone())

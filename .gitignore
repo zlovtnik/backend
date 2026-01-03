@@ -192,5 +192,3 @@ frontend/.github/temp/
 secrets/jmxremote.password
 secrets/jmxremote.access
 secrets/*.jks
-secrets/jmxremote.password.sample
-secrets/jmxremote.access.sample

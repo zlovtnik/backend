@@ -198,6 +198,7 @@ services:
     volumes:
       - keycloak_data:/opt/keycloak/data
       - ./configs/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
+      - ./secrets:/etc/secrets:ro
     networks:
       - middleware
     healthcheck:

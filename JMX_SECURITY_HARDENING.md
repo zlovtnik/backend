@@ -407,7 +407,7 @@ git status | grep secrets
 ```bash
 # Remove from Git history (WARNING: this rewrites history)
 git rm --cached secrets/jmxremote.password secrets/jmxremote.access secrets/*.jks
-git commit --amend "Remove sensitive JMX files"
+git commit --amend -m "Remove sensitive JMX files"
 
 # Then force push (be careful!)
 git push --force-with-lease
@@ -424,7 +424,7 @@ bash secrets/generate-keystores.sh
 | File | Purpose |
 |------|---------|
 | `secrets/README.md` | Detailed setup and security notes |
-| `secrets/generate-keystores.sh` | Secure keyststore/truststore generation |
+| `secrets/generate-keystores.sh` | Secure keystore/truststore generation |
 | `secrets/jmxremote.password` | JMX user credentials |
 | `secrets/jmxremote.access` | JMX role-based access control |
 | `Dockerfile.kafka` | Kafka container with JMX validation |
