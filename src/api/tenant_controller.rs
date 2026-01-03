@@ -3,6 +3,10 @@ use diesel::prelude::*;
 use log::info;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 use crate::{
     config::db::{Pool as DatabasePool, TenantPoolManager},
@@ -20,6 +24,24 @@ struct TenantStats {
     tenant_id: String,
     name: String,
     status: String,
+}
+
+#[derive(Serialize)]
+#[allow(dead_code)]
+struct TenantPoolMetrics {
+    tenant_id: String,
+    available: bool,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[allow(dead_code)]
+struct SystemStatsResponse {
+    #[serde(flatten)]
+    base: SystemStats,
+    /// Connection pool metrics for each configured tenant
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pool_metrics: Option<Vec<TenantPoolMetrics>>,
 }
 
 #[derive(Serialize)]
@@ -50,9 +72,270 @@ struct PaginatedTenantResponse {
     next_cursor: Option<i64>,
 }
 
+/// Collects connection pool metrics for all tenants by checking each tenant's pool health.
+///
+/// This function performs a paginated iteration over all tenants, testing each tenant's
+/// connection pool availability and basic connectivity. It returns a vector of metrics
+/// that can be used for monitoring or health reporting.
+///
+/// # Arguments
+/// * `conn` - Mutable reference to a database connection for tenant listing
+/// * `manager` - Reference to the TenantPoolManager for accessing tenant pools
+/// * `operation` - Operation name for error tagging (used in error messages)
+///
+/// # Returns
+/// * `Ok(Vec<TenantPoolMetrics>)` - Vector of pool metrics for all tenants
+/// * `Err(ServiceError)` - If tenant listing fails
+async fn collect_pool_metrics(
+    conn: &mut diesel::PgConnection,
+    manager: &TenantPoolManager,
+    operation: &str,
+) -> Result<Vec<TenantPoolMetrics>, ServiceError> {
+    let mut pool_metrics = Vec::new();
+    let page_size = 1000i64;
+    let mut offset = 0i64;
+
+    // Semaphore to limit concurrent health checks to prevent resource exhaustion
+    let semaphore = Arc::new(Semaphore::new(10));
+    let mut join_set = JoinSet::new();
+
+    // Collect metrics for each configured tenant pool concurrently
+    loop {
+        let (tenants, _) = Tenant::list_paginated(offset, page_size, conn).map_err(|e| {
+            log::error!("Failed to fetch tenant page for pool metrics: {}", e);
+            ServiceError::internal_server_error(format!("Failed to fetch tenant page: {}", e))
+                .with_tag("tenant")
+                .with_metadata("operation", operation)
+        })?;
+
+        if tenants.is_empty() {
+            break;
+        }
+
+        for tenant in tenants {
+            let permit = Arc::clone(&semaphore).acquire_owned().await.map_err(|e| {
+                log::error!("Failed to acquire semaphore permit: {}", e);
+                ServiceError::internal_server_error("Failed to acquire concurrency permit".to_string())
+                    .with_tag("concurrency")
+                    .with_metadata("operation", operation)
+            })?;
+
+            let manager_clone = manager.clone();
+            let tenant_id = tenant.id.clone();
+            let tenant_id_clone = tenant_id.clone();
+
+            join_set.spawn(async move {
+                let _permit = permit; // Hold permit until task completes
+                match tokio::time::timeout(
+                    Duration::from_secs(5),
+                    tokio::task::spawn_blocking(move || {
+                        check_tenant_pool_health(&tenant_id, &manager_clone)
+                    })
+                ).await {
+                    Ok(Ok(metric)) => metric,
+                    Ok(Err(_)) => {
+                        log::warn!("Health check task panicked for tenant {}", tenant_id_clone);
+                        TenantPoolMetrics {
+                            tenant_id: tenant_id_clone,
+                            available: false,
+                            error: Some("Health check task failed".to_string()),
+                        }
+                    }
+                    Err(_) => {
+                        log::warn!("Health check timeout for tenant {}", tenant_id_clone);
+                        TenantPoolMetrics {
+                            tenant_id: tenant_id_clone,
+                            available: false,
+                            error: Some("Health check timeout".to_string()),
+                        }
+                    }
+                }
+            });
+        }
+
+        offset += page_size;
+    }
+
+    // Collect results from concurrent tasks
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(metric) => pool_metrics.push(metric),
+            Err(e) => {
+                log::error!("Failed to join health check task: {}", e);
+                // Continue processing other results
+            }
+        }
+    }
+
+    Ok(pool_metrics)
+}
+
+/// Checks the health of a single tenant's connection pool.
+///
+/// # Arguments
+/// * `tenant_id` - The tenant ID to check
+/// * `manager` - Reference to the TenantPoolManager
+///
+/// # Returns
+/// * `TenantPoolMetrics` - Health metrics for the tenant's pool
+fn check_tenant_pool_health(tenant_id: &str, manager: &TenantPoolManager) -> TenantPoolMetrics {
+    match manager.get_tenant_pool(tenant_id) {
+        Some(tenant_pool) => {
+            match tenant_pool.get() {
+                Ok(mut conn) => {
+                    // Test pool connectivity with a simple query
+                    match diesel::sql_query("SELECT 1").execute(&mut conn) {
+                        Ok(_) => TenantPoolMetrics {
+                            tenant_id: tenant_id.to_string(),
+                            available: true,
+                            error: None,
+                        },
+                        Err(e) => TenantPoolMetrics {
+                            tenant_id: tenant_id.to_string(),
+                            available: false,
+                            error: Some(format!("Health check failed: {}", e)),
+                        },
+                    }
+                }
+                Err(e) => TenantPoolMetrics {
+                    tenant_id: tenant_id.to_string(),
+                    available: false,
+                    error: Some(format!("Pool connection failed: {}", e)),
+                },
+            }
+        }
+        None => TenantPoolMetrics {
+            tenant_id: tenant_id.to_string(),
+            available: false,
+            error: Some("No connection pool configured".to_string()),
+        },
+    }
+}
+
+/// Collects tenant health status for all tenants.
+///
+/// This function performs a paginated iteration over all tenants, testing each tenant's
+/// connection pool availability and basic connectivity. It returns a vector of health
+/// status objects suitable for detailed health reporting.
+///
+/// # Arguments
+/// * `conn` - Mutable reference to a database connection for tenant listing
+/// * `manager` - Reference to the TenantPoolManager for accessing tenant pools
+/// * `operation` - Operation name for error tagging (used in error messages)
+///
+/// # Returns
+/// * `Ok(Vec<TenantHealth>)` - Vector of health status for all tenants
+/// * `Err(ServiceError)` - If tenant listing fails
+async fn collect_tenant_health(
+    conn: &mut diesel::PgConnection,
+    manager: &TenantPoolManager,
+    operation: &str,
+) -> Result<Vec<TenantHealth>, ServiceError> {
+    let mut tenant_health_status = Vec::new();
+    let page_size = 1000i64;
+    let mut offset = 0i64;
+
+    // Semaphore to limit concurrent health checks to prevent resource exhaustion
+    let semaphore = Arc::new(Semaphore::new(10));
+    let mut join_set = JoinSet::new();
+
+    // Process tenants in paginated chunks to avoid memory issues
+    loop {
+        let (tenants, _) = Tenant::list_paginated(offset, page_size, conn).map_err(|e| {
+            ServiceError::internal_server_error(format!("Failed to fetch tenant page: {}", e))
+                .with_tag("tenant")
+                .with_metadata("operation", operation)
+        })?;
+
+        if tenants.is_empty() {
+            break; // No more tenants to process
+        }
+
+        for tenant in tenants {
+            let permit = Arc::clone(&semaphore).acquire_owned().await.map_err(|e| {
+                log::error!("Failed to acquire semaphore permit: {}", e);
+                ServiceError::internal_server_error("Failed to acquire concurrency permit".to_string())
+                    .with_tag("concurrency")
+                    .with_metadata("operation", operation)
+            })?;
+
+            let manager_clone = manager.clone();
+            let tenant_id = tenant.id.clone();
+            let tenant_name = tenant.name.clone();
+            let tenant_id_clone = tenant_id.clone();
+            let tenant_name_clone = tenant_name.clone();
+
+            join_set.spawn(async move {
+                let _permit = permit; // Hold permit until task completes
+                match tokio::time::timeout(
+                    Duration::from_secs(5),
+                    tokio::task::spawn_blocking(move || {
+                        match manager_clone.get_tenant_pool(&tenant_id) {
+                            Some(pool) => {
+                                match pool.get() {
+                                    Ok(mut conn) => {
+                                        // Simple health check: SELECT 1
+                                        match diesel::sql_query("SELECT 1").execute(&mut conn) {
+                                            Ok(_) => (true, None),
+                                            Err(e) => (false, Some(format!("DB query failed: {}", e))),
+                                        }
+                                    }
+                                    Err(e) => (false, Some(format!("Pool connection failed: {}", e))),
+                                }
+                            }
+                            None => (false, Some("No connection pool configured".to_string())),
+                        }
+                    })
+                ).await {
+                    Ok(Ok((status, error_msg))) => TenantHealth {
+                        tenant_id: tenant_id_clone,
+                        name: tenant_name_clone,
+                        status,
+                        error_message: error_msg,
+                    },
+                    Ok(Err(_)) => {
+                        log::warn!("Health check task panicked for tenant {}", tenant_id_clone);
+                        TenantHealth {
+                            tenant_id: tenant_id_clone,
+                            name: tenant_name_clone,
+                            status: false,
+                            error_message: Some("Health check task failed".to_string()),
+                        }
+                    }
+                    Err(_) => {
+                        log::warn!("Health check timeout for tenant {}", tenant_id_clone);
+                        TenantHealth {
+                            tenant_id: tenant_id_clone,
+                            name: tenant_name_clone,
+                            status: false,
+                            error_message: Some("Health check timeout".to_string()),
+                        }
+                    }
+                }
+            });
+        }
+
+        offset += page_size;
+    }
+
+    // Collect results from concurrent tasks
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(health_result) => tenant_health_status.push(health_result),
+            Err(e) => {
+                log::error!("Failed to join health check task: {}", e);
+                // Continue processing other results
+            }
+        }
+    }
+
+    Ok(tenant_health_status)
+}
+
 /// Collects system-wide metrics and per-tenant connection status.
 ///
-/// Gathers totals for tenants and users, reports each tenant's connection state, and keeps the `_manager` parameter for API compatibility while delegating logic to `tenant_service`.
+/// Gathers totals for tenants and users, reports each tenant's connection state, and collects
+/// connection pool metrics for each configured tenant pool managed by `TenantPoolManager`.
 ///
 /// # Examples
 ///
@@ -63,16 +346,52 @@ struct PaginatedTenantResponse {
 /// ```
 pub async fn get_system_stats(
     pool: web::Data<DatabasePool>,
-    _manager: web::Data<TenantPoolManager>, // TODO: Consider using this for advanced tenant pool metrics/diagnostics
+    manager: web::Data<TenantPoolManager>,
 ) -> Result<HttpResponse, ServiceError> {
-    info!("Fetching tenant statistics");
+    info!("Fetching tenant statistics with pool metrics");
 
-    // Use functional QueryReader pattern
+    // Use functional QueryReader pattern to get base stats
     let stats_reader = tenant_service::system_stats_reader();
-    let stats = tenant_service::run_query(stats_reader, pool.get_ref())
+    let base_stats = tenant_service::run_query(stats_reader, pool.get_ref())
         .log_error("tenant_controller::get_system_stats")?;
 
-    Ok(HttpResponse::Ok().json(stats))
+    // Collect tenant pool metrics from TenantPoolManager
+    let mut conn = pool.get().map_err(|e| {
+        log::error!("Failed to get main pool connection for pool metrics: {}", e);
+        ServiceError::internal_server_error(format!("Failed to get db connection: {}", e))
+            .with_tag("tenant")
+            .with_metadata("operation", "get_system_stats")
+    })?;
+
+    let pool_metrics = collect_pool_metrics(&mut conn, &manager, "get_system_stats").await?;
+
+    // Create response with base stats and pool metrics
+    let base_stats_struct = SystemStats {
+        total_tenants: base_stats.total_tenants,
+        active_tenants: base_stats.active_tenants,
+        total_users: base_stats.total_users,
+        logged_in_users: base_stats.logged_in_users,
+        tenant_stats: base_stats
+            .tenant_stats
+            .into_iter()
+            .map(|ts| TenantStats {
+                tenant_id: ts.tenant_id,
+                name: ts.name,
+                status: ts.status,
+            })
+            .collect(),
+    };
+
+    let response = SystemStatsResponse {
+        base: base_stats_struct,
+        pool_metrics: if pool_metrics.is_empty() {
+            None
+        } else {
+            Some(pool_metrics)
+        },
+    };
+
+    Ok(HttpResponse::Ok().json(response))
 }
 
 /// Get detailed health status of all tenants (admin only)
@@ -88,49 +407,7 @@ pub async fn get_tenant_health(
             .with_metadata("operation", "get_tenant_health")
     })?;
 
-    let mut tenant_health_status = Vec::new();
-    let page_size = 1000i64; // Process tenants in chunks
-    let mut offset = 0i64;
-
-    // Process tenants in paginated chunks to avoid memory issues
-    loop {
-        let (tenants, _) = Tenant::list_paginated(offset, page_size, &mut conn).map_err(|e| {
-            ServiceError::internal_server_error(format!("Failed to fetch tenant page: {}", e))
-                .with_tag("tenant")
-                .with_metadata("operation", "get_tenant_health")
-        })?;
-
-        if tenants.is_empty() {
-            break; // No more tenants to process
-        }
-
-        for tenant in tenants {
-            let (status, error_msg) = match manager.get_tenant_pool(&tenant.id) {
-                Some(pool) => {
-                    match pool.get() {
-                        Ok(mut conn) => {
-                            // Simple health check: SELECT 1
-                            match diesel::sql_query("SELECT 1").execute(&mut conn) {
-                                Ok(_) => (true, None),
-                                Err(e) => (false, Some(format!("DB query failed: {}", e))),
-                            }
-                        }
-                        Err(e) => (false, Some(format!("Pool connection failed: {}", e))),
-                    }
-                }
-                None => (false, Some("No connection pool configured".to_string())),
-            };
-
-            tenant_health_status.push(TenantHealth {
-                tenant_id: tenant.id,
-                name: tenant.name,
-                status,
-                error_message: error_msg,
-            });
-        }
-
-        offset += page_size;
-    }
+    let tenant_health_status = collect_tenant_health(&mut conn, &manager, "get_tenant_health").await?;
 
     Ok(HttpResponse::Ok().json(tenant_health_status))
 }

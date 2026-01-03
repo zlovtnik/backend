@@ -314,7 +314,7 @@ pub async fn keycloak_callback(
     query: web::Query<std::collections::HashMap<String, String>>,
     _keycloak_client: web::Data<crate::utils::keycloak::KeycloakClient>,
     session: Session,
-    req: HttpRequest,
+    _req: HttpRequest,
 ) -> Result<HttpResponse, ServiceError> {
     // Check for OAuth errors from Keycloak
     if let Some(error) = query.get("error") {
@@ -387,15 +387,61 @@ pub async fn keycloak_callback(
     // Remove OAuth session state from session immediately to prevent reuse
     session.remove("oauth_state");
 
-    // TODO: Exchange authorization code for tokens using code, pkce_verifier
-    // let tokens = keycloak_client.exchange_code_for_token(
-    //     code.clone(),
-    //     session_state.pkce_verifier,
-    //     session_state.nonce
-    // ).await?;
-    //
-    // TODO: Validate nonce in ID token matches session_state.nonce
-    //
+    // Exchange authorization code for tokens using code, pkce_verifier, and nonce
+    let tokens = _keycloak_client
+        .exchange_code_for_token(
+            code,
+            session_state.pkce_verifier.clone(),
+            session_state.nonce.clone(),
+        )
+        .await
+        .map_err(|e| {
+            log::error!("Failed to exchange authorization code for tokens: {}", e);
+            ServiceError::internal_server_error(
+                "Token exchange failed. Please restart authentication.",
+            )
+            .with_tag("token_exchange_failed")
+            .with_detail(format!("Keycloak error: {}", e))
+        })?;
+
+    // Validate nonce in ID token matches session_state.nonce
+    let id_token_str = tokens
+        .id_token
+        .as_ref()
+        .ok_or_else(|| {
+            log::error!("ID token not present in token response");
+            ServiceError::internal_server_error("Token validation failed: ID token missing")
+                .with_tag("missing_id_token")
+        })?;
+
+    // Validate ID token signature using Keycloak's public key/JWKS
+    let id_token_claims: crate::utils::keycloak::Claims = _keycloak_client
+        .validate_id_token(id_token_str)
+        .await
+        .map_err(|e| {
+            log::error!("Failed to validate ID token signature: {}", e);
+            ServiceError::internal_server_error(
+                "Token validation failed: invalid signature",
+            )
+            .with_tag("invalid_id_token_signature")
+            .with_detail(format!("Validation error: {}", e))
+        })?;
+
+    // Validate nonce in ID token matches stored nonce
+    if id_token_claims.nonce.as_deref() != Some(&session_state.nonce) {
+        log::warn!(
+            "Nonce mismatch - possible replay attack. Expected: {}, got: {:?}",
+            &session_state.nonce,
+            id_token_claims.nonce
+        );
+        return Err(ServiceError::bad_request(
+            "Nonce validation failed. Possible replay attack detected.",
+        )
+        .with_tag("nonce_mismatch"));
+    }
+
+    log::debug!("Nonce validation successful");
+
     // Production guard: Prevent OAuth flow in production until full Keycloak/token validation is implemented
     let app_env = std::env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
     if app_env == "production" {
@@ -406,35 +452,38 @@ pub async fn keycloak_callback(
         ).with_tag("oauth_production_disabled"));
     }
 
-    // Extract stable unique identifier from OAuth authorization code
-    // In the authorization code flow, the code parameter uniquely identifies an authorization grant.
-    // Once proper token exchange is implemented, this should extract 'sub', 'preferred_username', or 'email'
-    // from the ID token claims for a more persistent user identifier.
-    let oauth_unique_id = code.clone();
+    // Extract stable unique identifier from ID token claims
+    // Prefer sub (subject claim) as it uniquely identifies the user within the Keycloak realm
+    let oauth_unique_id = id_token_claims
+        .sub
+        .clone();
 
-    // For now, use authorization code as the stable username identifier.
-    // TODO: Once full token exchange is implemented, extract from claims:
-    //   - Preferred: user's 'sub' (subject claim) from ID token
-    //   - Fallback: 'preferred_username' or 'email' from claims
-    let username = format!("oauth_{}", oauth_unique_id);
+    // Extract username from claims: prefer preferred_username, fallback to email, then sub
+    let username = id_token_claims
+        .preferred_username
+        .clone()
+        .or_else(|| id_token_claims.email.clone())
+        .unwrap_or_else(|| format!("oauth_{}", oauth_unique_id));
 
-    // Validate and map tenant from claims or configuration
-    // TODO: Once token exchange is implemented, extract tenant from:
-    //   - Custom 'tenant_id' claim in ID token
-    //   - 'realm_access.roles' containing tenant information
-    //   - Default tenant from environment configuration
-    let tenant_id = std::env::var("OAUTH_DEFAULT_TENANT")
-        .unwrap_or_else(|_| "default".to_string());
+    // Extract tenant_id from ID token claims
+    // Priority: custom 'tenant_id' claim > default from environment
+    // NOTE: For multi-tenant support, you may also extract from 'realm_access.roles'
+    // or map roles to tenant IDs using application configuration
+    let tenant_id = id_token_claims
+        .tenant_id
+        .clone()
+        .or_else(|| std::env::var("OAUTH_DEFAULT_TENANT").ok())
+        .unwrap_or_else(|| "default".to_string());
 
-    // Generate unique login session ID derived from authorization code
+    // Generate unique login session ID
     let login_session = format!("oauth-{}-{}", oauth_unique_id, uuid::Uuid::new_v4());
 
-    log::info!(
-        "OAuth login: code={}, username={}, tenant_id={}",
-        oauth_unique_id, username, tenant_id
+    log::debug!(
+        "OAuth login: sub={}, username={}, email={:?}, tenant_id={}",
+        oauth_unique_id, username, id_token_claims.email, tenant_id
     );
 
-    // Create LoginInfoDTO with extracted/derived values
+    // Create LoginInfoDTO with extracted values from ID token
     let oauth_login = crate::models::user::LoginInfoDTO {
         username,
         login_session,
@@ -451,7 +500,7 @@ pub async fn keycloak_callback(
         .path("/")
         .http_only(true)
         .secure(true)
-        .same_site(actix_web::cookie::SameSite::Lax)
+        .same_site(actix_web::cookie::SameSite::Strict)
         .finish();
 
     // Read frontend callback URL from environment with sensible defaults
