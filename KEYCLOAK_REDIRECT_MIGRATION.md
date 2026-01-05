@@ -24,9 +24,8 @@ redirect_url: env::var("KEYCLOAK_REDIRECT_URL")
 **File**: `docker-middleware-stack/configs/keycloak/realm-export.json`  
 **Client**: `middleware-app`  
 **Changes**:
-- Added `redirectUris` array with both old and new URLs:
-  - `http://localhost:8000/api/callback` (primary, new)
-  - `http://localhost:8080/api/auth/callback` (legacy, backward compatibility)
+- Updated `redirectUris` array to use the new URL:
+  - `http://localhost:8000/api/callback` (primary)
 - Added `webOrigins` array for CORS with frontend domains:
   - `http://localhost:8000`
   - `http://localhost:8080` (legacy)
@@ -153,21 +152,15 @@ Step-by-step testing guide including:
 
 ### For Backward Compatibility
 
-The Keycloak realm export includes **both** old (8080) and new (8000) redirect URIs:
+The Keycloak realm export has been updated to use the new redirect URI:
 
 ```json
 "redirectUris": [
-  "http://localhost:8000/api/callback",    // New
-  "http://localhost:8080/api/auth/callback" // Legacy
+  "http://localhost:8000/api/callback"
 ]
 ```
 
-This allows:
-- ✅ Existing clients to continue working while migrating
-- ✅ Gradual rollout of new version
-- ✅ Easy rollback if needed
-
-To remove legacy URL after migration: Edit Keycloak client settings and remove the old URI.
+Migration is complete - the old URI has been removed.
 
 ## Testing & Verification
 

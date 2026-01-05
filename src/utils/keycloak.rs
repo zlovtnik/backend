@@ -4,6 +4,7 @@ use openidconnect::{
     PkceCodeChallenge, RedirectUrl, Scope,
 };
 use reqwest::Client as ReqwestClient;
+use reqwest::blocking::Client as BlockingClient;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -553,7 +554,7 @@ impl KeycloakClient {
     ///
     /// This method:
     /// 1. Decodes the JWT header to extract the key ID (kid)
-    /// 2. Fetches JWKS from Keycloak's /.well-known/jwks.json endpoint
+    /// 2. Fetches JWKS from Keycloak's /protocol/openid-connect/certs endpoint
     /// 3. Locates the JWK matching the token's kid
     /// 4. Converts RSA public key to DecodingKey
     /// 5. Validates RS256 signature and standard claims (iss, aud, exp, nbf)
@@ -593,7 +594,7 @@ impl KeycloakClient {
         })?;
 
         // Fetch JWKS from Keycloak
-        let jwks_url = format!("{}/.well-known/jwks.json", self.issuer_url.trim_end_matches('/'));
+        let jwks_url = format!("{}/protocol/openid-connect/certs", self.issuer_url.trim_end_matches('/'));
         let http_client = ReqwestClient::builder()
             .timeout(KEYCLOAK_TIMEOUT)
             .build()
@@ -622,6 +623,24 @@ impl KeycloakClient {
             )) as Box<dyn std::error::Error + Send + Sync>
         })?;
 
+        // Validate JWK is RSA type and has required components
+        if jwk.kty != "RSA" {
+            let error_msg = format!("JWK with kid {} has unsupported kty {}, expected RSA", kid, jwk.kty);
+            log::error!("{}", error_msg);
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                error_msg,
+            )) as Box<dyn std::error::Error + Send + Sync>);
+        }
+        if jwk.n.is_empty() || jwk.e.is_empty() {
+            let error_msg = format!("JWK with kid {} is missing required RSA components (n or e)", kid);
+            log::error!("{}", error_msg);
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                error_msg,
+            )) as Box<dyn std::error::Error + Send + Sync>);
+        }
+
         // Convert JWK to DecodingKey
         let decoding_key = DecodingKey::from_rsa_components(&jwk.n, &jwk.e).map_err(|e| {
             log::error!("Failed to create decoding key from JWK: {}", e);
@@ -639,13 +658,80 @@ impl KeycloakClient {
             Box::new(e) as Box<dyn std::error::Error + Send + Sync>
         })?;
 
-        // Additional claim validation
+        // Additional claim validation (defense-in-depth: validate claims again after decode
+        // to ensure library validation was applied correctly and catch any edge cases)
         let claims = token_data.claims;
         claims.validate_issuer(&self.issuer_url)?;
         claims.validate_audience(&self.client_id)?;
 
         log::debug!("ID token signature validation successful");
         Ok(claims)
+    }
+
+    /// Get the issuer URL for this Keycloak client
+    pub fn issuer_url(&self) -> &str {
+        &self.issuer_url
+    }
+
+    /// Get the client ID for this Keycloak client
+    pub fn client_id(&self) -> &str {
+        &self.client_id
+    }
+
+    /// Validate ID token signature and claims using Keycloak's JWKS endpoint (synchronous version).
+    ///
+    /// This method performs the same validation as validate_id_token but synchronously.
+    pub fn validate_id_token_sync(&self, id_token: &str) -> Result<Claims, Box<dyn std::error::Error + Send + Sync>> {
+        let header = decode_header(id_token).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+        let kid = header.kid.ok_or_else(|| Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, "No kid in header")) as Box<dyn std::error::Error + Send + Sync>)?;
+
+        let jwks_url = format!("{}/protocol/openid-connect/certs", self.issuer_url);
+
+        let client = BlockingClient::new();
+        let jwks: Jwks = client.get(&jwks_url).send().map_err(|e| Box::new(e))?.json().map_err(|e| Box::new(e))?;
+
+        let jwk = jwks.keys.iter().find(|j| j.kid == kid).ok_or_else(|| Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, format!("No JWK found for key ID: {}", kid))) as Box<dyn std::error::Error + Send + Sync>)?;
+
+        let decoding_key = DecodingKey::from_rsa_components(&jwk.n, &jwk.e).map_err(|e| Box::new(e))?;
+
+        let mut validation = Validation::new(Algorithm::RS256);
+        validation.set_issuer(&[&self.issuer_url]);
+        validation.set_audience(&[&self.client_id]);
+
+        let token_data = decode::<Claims>(id_token, &decoding_key, &validation).map_err(|e| Box::new(e))?;
+
+        let claims = token_data.claims;
+        claims.validate_issuer(&self.issuer_url)?;
+        claims.validate_audience(&self.client_id)?;
+
+        Ok(claims)
+    }
+}
+
+fn deserialize_aud<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    use serde_json::Value;
+
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::String(s) => Ok(Some(vec![s])),
+        Value::Array(arr) => {
+            let mut vec = Vec::new();
+            for v in arr {
+                if let Value::String(s) = v {
+                    vec.push(s);
+                } else {
+                    return Err(serde::de::Error::custom("aud array must contain strings"));
+                }
+            }
+            Ok(Some(vec))
+        }
+        Value::Null => Ok(None),
+        _ => Err(serde::de::Error::custom("aud must be a string or array of strings")),
     }
 }
 
@@ -663,7 +749,7 @@ pub struct Claims {
     pub iss: Option<String>,
     /// OpenID Connect audience (aud claim) - can be a single string or array of strings
     /// Serde will attempt to deserialize as Vec<String>, falling back to a single string wrapped in a Vec
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_aud")]
     pub aud: Option<Vec<String>>,
 }
 

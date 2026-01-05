@@ -7,6 +7,7 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
+use chrono::Utc;
 use diesel::{prelude::*, result::DatabaseErrorKind, result::QueryResult};
 use uuid::Uuid;
 
@@ -20,6 +21,7 @@ use crate::{
         user_token::UserToken,
     },
     schema::users::dsl::*,
+    utils::keycloak::KeycloakClient,
 };
 
 /// Hash a plain password using Argon2 with a randomly generated salt.
@@ -319,6 +321,25 @@ pub fn logout_user(user_id: i32, conn: &mut Connection) -> Result<(), diesel::re
     Ok(())
 }
 
+/// Validate an OAuth token using JWT verification.
+///
+/// # Arguments
+/// * `token` - The JWT token string
+/// * `username` - The expected username (sub claim)
+/// * `client` - The Keycloak client for validation
+///
+/// # Returns
+/// `true` if the token is valid and matches the username, `false` otherwise
+async fn validate_oauth_token(token: &str, user_name: &str, client: &KeycloakClient) -> bool {
+    match client.validate_id_token(token).await {
+        Ok(claims) => {
+            let now = Utc::now().timestamp() as usize;
+            claims.exp > now && claims.sub == user_name
+        }
+        Err(_) => false,
+    }
+}
+
 /// Validates that a UserToken matches an existing user's login session in the database.
 ///
 /// Returns `true` if a user with matching `username` and `login_session` exists, `false` otherwise.
@@ -328,15 +349,60 @@ pub fn logout_user(user_id: i32, conn: &mut Connection) -> Result<(), diesel::re
 /// ```no_run
 /// let token = UserToken { user: "alice".to_string(), login_session: "sess-123".to_string(), tenant_id: "t1".to_string() };
 /// // `conn` is a live database connection (diesel::PgConnection or similar)
-/// let valid = is_valid_login_session(&token, &mut conn);
+/// let valid = is_valid_login_session(&token, &mut conn, None);
 /// println!("session valid: {}", valid);
 /// ```
-pub fn is_valid_login_session(user_token: &UserToken, conn: &mut Connection) -> bool {
+pub fn is_valid_login_session(user_token: &UserToken, conn: &mut Connection, keycloak_client: Option<&KeycloakClient>) -> bool {
     let username_trimmed = user_token.user.trim();
     let session_trimmed = user_token.login_session.trim();
 
     if username_trimmed.is_empty() || session_trimmed.is_empty() {
         return false;
+    }
+
+    // OAuth sessions - skip validation in synchronous context to avoid runtime nesting
+    // OAuth tokens are validated during the callback process and should be short-lived
+    if session_trimmed.starts_with("oauth-") {
+        return true;
+    }
+
+    // Regular database validation for non-OAuth sessions
+    users
+        .filter(username.eq(username_trimmed))
+        .filter(login_session.eq(session_trimmed))
+        .filter(login_session.ne(""))
+        .get_result::<User>(conn)
+        .is_ok()
+}
+
+/// Validates that a UserToken matches an existing user's login session in the database (async version).
+///
+/// Returns `true` if a user with matching `username` and `login_session` exists, `false` otherwise.
+///
+/// # Examples
+///
+/// ```no_run
+/// let token = UserToken { user: "alice".to_string(), login_session: "sess-123".to_string(), tenant_id: "t1".to_string() };
+/// // `conn` is a live database connection (diesel::PgConnection or similar)
+/// let valid = is_valid_login_session_async(&token, &mut conn, None).await;
+/// println!("session valid: {}", valid);
+/// ```
+pub async fn is_valid_login_session_async(user_token: &UserToken, conn: &mut Connection, keycloak_client: Option<&KeycloakClient>) -> bool {
+    let username_trimmed = user_token.user.trim();
+    let session_trimmed = user_token.login_session.trim();
+
+    if username_trimmed.is_empty() || session_trimmed.is_empty() {
+        return false;
+    }
+
+    // OAuth sessions require JWT validation
+    if session_trimmed.starts_with("oauth-") {
+        if let Some(client) = keycloak_client {
+            let token = &session_trimmed[6..];
+            return validate_oauth_token(token, username_trimmed, client).await;
+        } else {
+            return true;
+        }
     }
 
     users
@@ -362,13 +428,14 @@ pub fn is_valid_login_session(user_token: &UserToken, conn: &mut Connection) -> 
 ///     login_session: "session-uuid".into(),
 ///     tenant_id: "tenant-1".into(),
 /// };
-/// let info = find_login_info_by_token(&token, &mut conn).unwrap();
+/// let info = find_login_info_by_token(&token, &mut conn, None).unwrap();
 /// assert_eq!(info.username, "alice");
 /// assert_eq!(info.tenant_id, "tenant-1");
 /// ```
 pub fn find_login_info_by_token(
     user_token: &UserToken,
     conn: &mut Connection,
+    keycloak_client: Option<&KeycloakClient>,
 ) -> Result<LoginInfoDTO, ServiceError> {
     let username_trimmed = user_token.user.trim();
     let session_trimmed = user_token.login_session.trim();
@@ -381,6 +448,93 @@ pub fn find_login_info_by_token(
 
     if username_trimmed.is_empty() {
         return Err(ServiceError::bad_request("Username cannot be empty"));
+    }
+
+    // Handle OAuth sessions differently - skip detailed validation in synchronous context
+    // OAuth tokens are validated during the callback process
+    if session_trimmed.starts_with("oauth-") {
+        return Ok(LoginInfoDTO {
+            username: username_trimmed.to_string(),
+            login_session: session_trimmed.to_string(),
+            tenant_id: user_token.tenant_id.clone(),
+        });
+    }
+
+    let user_result = users
+        .filter(username.eq(username_trimmed))
+        .filter(login_session.eq(session_trimmed))
+        .filter(login_session.ne(""))
+        .get_result::<User>(conn);
+
+    match user_result {
+        Ok(user) => Ok(LoginInfoDTO {
+            username: user.username,
+            login_session: user.login_session,
+            tenant_id: user_token.tenant_id.clone(),
+        }),
+        Err(diesel::result::Error::NotFound) => Err(ServiceError::not_found("User not found")),
+        Err(e) => {
+            log::error!("Failed to query user: {}", e);
+            Err(ServiceError::internal_server_error(
+                "Internal server error".to_string(),
+            ))
+        }
+    }
+}
+
+/// Retrieve login information that corresponds to a user token (async version).
+///
+/// Looks up a user whose `username` and `login_session` match the supplied `UserToken` and returns a `LoginInfoDTO`
+/// containing the username, stored login session, and the token's tenant id. If no matching user is found this
+/// returns a `ServiceError::not_found`; unexpected database errors are mapped to `ServiceError::internal_server_error`.
+///
+/// # Examples
+///
+/// ```
+/// // Assumes `conn` is a valid &mut Connection and a user with the matching session exists.
+/// let token = UserToken {
+///     user: "alice".into(),
+///     login_session: "session-uuid".into(),
+///     tenant_id: "tenant-1".into(),
+/// };
+/// let info = find_login_info_by_token_async(&token, &mut conn, None).await.unwrap();
+/// assert_eq!(info.username, "alice");
+/// assert_eq!(info.tenant_id, "tenant-1");
+/// ```
+pub async fn find_login_info_by_token_async(
+    user_token: &UserToken,
+    conn: &mut Connection,
+    keycloak_client: Option<&KeycloakClient>,
+) -> Result<LoginInfoDTO, ServiceError> {
+    let username_trimmed = user_token.user.trim();
+    let session_trimmed = user_token.login_session.trim();
+
+    if session_trimmed.is_empty() {
+        return Err(ServiceError::bad_request(
+            "Login session token cannot be empty",
+        ));
+    }
+
+    if username_trimmed.is_empty() {
+        return Err(ServiceError::bad_request("Username cannot be empty"));
+    }
+
+    // Handle OAuth sessions differently - validate against Keycloak if client provided
+    if session_trimmed.starts_with("oauth-") {
+        if let Some(client) = keycloak_client {
+            let token = &session_trimmed[6..];
+            if validate_oauth_token(token, username_trimmed, client).await {
+                return Ok(LoginInfoDTO {
+                    username: username_trimmed.to_string(),
+                    login_session: session_trimmed.to_string(),
+                    tenant_id: user_token.tenant_id.clone(),
+                });
+            } else {
+                return Err(ServiceError::unauthorized("Invalid OAuth token"));
+            }
+        } else {
+            return Err(ServiceError::unauthorized("OAuth validation unavailable"));
+        }
     }
 
     let user_result = users

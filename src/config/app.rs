@@ -144,6 +144,9 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
         .add_route(|cfg| {
             cfg.service(web::resource("/ws/logs").route(web::get().to(ws_controller::ws_logs)));
         })
+        .add_route(|cfg| {
+            cfg.service(web::resource("/callback").route(web::get().to(account_controller::keycloak_callback)));
+        })
         // Scoped routes
         .add_route(|cfg| {
             cfg.service(web::scope("/auth").configure(configure_auth_routes));
@@ -200,9 +203,6 @@ fn configure_auth_routes(cfg: &mut web::ServiceConfig) {
             cfg.service(web::resource("/login/keycloak").route(web::get().to(account_controller::keycloak_login)));
         })
         .add_route(|cfg| {
-            cfg.service(web::resource("/callback").route(web::get().to(account_controller::keycloak_callback)));
-        })
-        .add_route(|cfg| {
             cfg.service(web::resource("/logout").route(web::post().to(account_controller::logout)));
         })
         .add_route(|cfg| {
@@ -218,6 +218,9 @@ fn configure_auth_routes(cfg: &mut web::ServiceConfig) {
         })
         .add_route(|cfg| {
             cfg.service(web::resource("/me").route(web::get().to(account_controller::me)));
+        })
+        .add_route(|cfg| {
+            cfg.service(web::resource("/user").route(web::get().to(account_controller::me))); // Alias for backward compatibility and REST convention flexibility
         })
         .build(cfg);
 }

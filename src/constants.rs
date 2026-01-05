@@ -23,10 +23,11 @@ pub const AUTHORIZATION: &str = "Authorization";
 pub const EMPTY: &str = "";
 
 // ignore routes
-pub const IGNORE_ROUTES: [&str; 10] = [
+pub const IGNORE_ROUTES: [&str; 11] = [
     "/api/ping",
     "/api/auth/signup",
     "/api/auth/login",
+    "/api/callback",
     "/auth/signup",
     "/auth/login",
     "/health",

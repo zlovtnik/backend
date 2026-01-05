@@ -31,7 +31,7 @@ use crate::{
         run_query, validation_rules, Either, Pipeline, QueryReader, Retry, Validator,
     },
     services::functional_service_base::{FunctionalErrorHandling, FunctionalQueryService},
-    utils::token_utils,
+    utils::{keycloak::KeycloakClient, token_utils},
 };
 use diesel::result::{DatabaseErrorKind, Error as DieselError};
 use diesel::Connection;
@@ -143,12 +143,14 @@ pub fn login_reader(login: LoginDTO) -> Result<QueryReader<TokenBodyResponse>, S
 fn verify_token_with_retry(
     token_data: TokenData<UserToken>,
     pool: &Pool,
+    keycloak_client: Option<KeycloakClient>,
 ) -> Result<String, ServiceError> {
     let shared_data = Arc::new(token_data);
     let pool = pool.clone();
+    let keycloak_client = keycloak_client;
 
     Retry::new(move || {
-        token_utils::verify_token(shared_data.as_ref(), &pool)
+        token_utils::verify_token(shared_data.as_ref(), &pool, keycloak_client.as_ref())
             .map_err(|err| ServiceError::unauthorized(err))
     })
     .max_attempts(3)
@@ -291,7 +293,7 @@ pub fn logout(authen_header: &HeaderValue, pool: &Pool) -> Result<(), ServiceErr
             })
         })
         .and_then(|token_data| {
-            verify_token_with_retry(token_data, pool).map_err(|err| {
+            verify_token_with_retry(token_data, pool, None).map_err(|err| {
                 log::warn!(
                     "Token verification failed after retries during logout: {}",
                     err
@@ -367,7 +369,7 @@ pub fn refresh(
             })
         })
         .and_then(|token_data| {
-            verify_token_with_retry(token_data.clone(), pool)
+            verify_token_with_retry(token_data.clone(), pool, None)
                 .map(|_| token_data)
                 .map_err(|err| {
                     log::warn!(
@@ -379,8 +381,8 @@ pub fn refresh(
         })
         .and_then(|token_data| {
             query_service.query(|conn| {
-                if user_ops::is_valid_login_session(&token_data.claims, conn) {
-                    user_ops::find_login_info_by_token(&token_data.claims, conn).map_err(|_| {
+                if user_ops::is_valid_login_session(&token_data.claims, conn, None) {
+                    user_ops::find_login_info_by_token(&token_data.claims, conn, None).map_err(|_| {
                         ServiceError::unauthorized(constants::MESSAGE_TOKEN_MISSING.to_string())
                     })
                 } else {
@@ -499,7 +501,7 @@ pub fn refresh_with_token(
 /// let pool: Pool = unimplemented!();
 /// let _ = me(&auth, &pool);
 /// ```
-pub fn me(authen_header: &HeaderValue, pool: &Pool) -> Result<LoginInfoDTO, ServiceError> {
+pub fn me(authen_header: &HeaderValue, pool: &Pool, keycloak_client: &KeycloakClient) -> Result<LoginInfoDTO, ServiceError> {
     let query_service = FunctionalQueryService::new(pool.clone());
 
     authen_header
@@ -520,7 +522,7 @@ pub fn me(authen_header: &HeaderValue, pool: &Pool) -> Result<LoginInfoDTO, Serv
             })
         })
         .and_then(|token_data| {
-            verify_token_with_retry(token_data.clone(), pool)
+            verify_token_with_retry(token_data.clone(), pool, Some(keycloak_client.clone()))
                 .map(|_| token_data)
                 .map_err(|err| {
                     log::warn!(
@@ -529,14 +531,13 @@ pub fn me(authen_header: &HeaderValue, pool: &Pool) -> Result<LoginInfoDTO, Serv
                     );
                     ServiceError::unauthorized(constants::MESSAGE_PROCESS_TOKEN_ERROR.to_string())
                 })
+                .and_then(|verified_token_data| {
+                    query_service.query(|conn| {
+                        user_ops::find_login_info_by_token(&verified_token_data.claims, conn, Some(keycloak_client))
+                            .map_err(|_| ServiceError::internal_server_error("Database error".to_string()))
+                    })
+                })
         })
-        .and_then(|token_data| {
-            query_service.query(|conn| {
-                user_ops::find_login_info_by_token(&token_data.claims, conn)
-                    .map_err(|_| ServiceError::internal_server_error("Database error".to_string()))
-            })
-        })
-        .log_error("me operation")
 }
 
 /// Retrieve users with pagination and return them as response DTOs.

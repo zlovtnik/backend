@@ -28,18 +28,17 @@ redirect_url: env::var("KEYCLOAK_REDIRECT_URL")
 KEYCLOAK_REDIRECT_URL=http://localhost:8000/api/callback
 ```
 
-### 2. Keycloak Realm Configuration (Already Updated)
+### 2. Keycloak Realm Configuration (Updated)
 
 **File**: `docker-middleware-stack/configs/keycloak/realm-export.json`
 
-The `middleware-app` client now includes both old and new redirect URIs for backward compatibility:
+The `middleware-app` client now uses the new redirect URI:
 
 ```json
 {
   "clientId": "middleware-app",
   "redirectUris": [
-    "http://localhost:8000/api/callback",
-    "http://localhost:8080/api/auth/callback"
+    "http://localhost:8000/api/callback"
   ],
   "webOrigins": [
     "http://localhost:8000",
@@ -94,7 +93,6 @@ The `realm-export.json` with updated redirect URIs will be automatically importe
 4. Go to **Clients** → **middleware-app**
 5. In the **Settings** tab, verify the "Redirect URIs" field contains:
    - `http://localhost:8000/api/callback` ✅ (primary)
-   - `http://localhost:8080/api/auth/callback` ✅ (legacy, for backward compatibility)
 
 #### Step 3: Verify Web Origins
 
@@ -118,7 +116,6 @@ If you're using an external Keycloak instance (e.g., Keycloak running on Railway
 3. Go to **Clients** → Your application client (e.g., `middleware-app`)
 4. In **Settings** tab, under **Redirect URIs**, add:
    - **Primary**: `https://your-app-domain:8000/api/callback`
-   - **Legacy** (if needed): `https://your-app-domain:8080/api/auth/callback`
 5. Under **Web Origins**, add:
    - `https://your-app-domain:8000`
    - `https://your-app-domain:8080` (optional, for legacy support)
@@ -139,8 +136,7 @@ curl -X PUT -H "Authorization: Bearer $TOKEN" \
   "http://localhost:8080/admin/realms/middleware/clients/$CLIENT_ID" \
   -d '{
     "redirectUris": [
-      "http://localhost:8000/api/callback",
-      "http://localhost:8080/api/auth/callback"
+      "http://localhost:8000/api/callback"
     ],
     "webOrigins": [
       "http://localhost:8000",
@@ -286,9 +282,9 @@ After configuration, verify:
 
 - [ ] Backend is running on port **8000**
 - [ ] `KEYCLOAK_REDIRECT_URL` in `.env` is set to `http://localhost:8000/api/callback`
-- [ ] Keycloak realm exports include both redirect URIs for `middleware-app` client
+- [ ] Keycloak realm exports include the redirect URI for `middleware-app` client
 - [ ] `KC_FRONTEND_URL` in `.env.keycloak` is set to `http://localhost:8000`
-- [ ] Keycloak admin console shows correct redirect URIs (no typos, matching scheme)
+- [ ] Keycloak admin console shows correct redirect URI (no typos, matching scheme)
 - [ ] Web Origins includes all frontend origins (localhost:3000, localhost:5173, etc.)
 - [ ] OAuth authorization request redirects correctly to `/api/callback`
 - [ ] Backend successfully exchanges code for tokens
@@ -326,7 +322,7 @@ If you were previously running on **port 8080**:
 1. Log into your Keycloak admin console
 2. Navigate to **Clients** → Your client
 3. Update **Redirect URIs**:
-   - Remove old: `https://your-old-domain:8080/...`
+   - Remove old: `https://your-old-domain:8080/api/auth/callback`
    - Add new: `https://your-new-domain:8000/api/callback`
 4. Update **Web Origins** similarly
 5. Click **Save**

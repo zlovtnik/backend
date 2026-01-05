@@ -2,12 +2,12 @@ use actix_service::forward_ready;
 use actix_web::body::EitherBody;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
 use actix_web::http::Method;
-use actix_web::web::{self, Data};
+use actix_web::web::Data;
 use actix_web::Error;
 use actix_web::HttpMessage;
 use actix_web::HttpResponse;
 use futures::future::{ok, LocalBoxFuture, Ready};
-use log::{debug, error, info};
+use log::{error, info};
 
 use crate::config::db::TenantPoolManager;
 use crate::constants;
@@ -53,7 +53,9 @@ where
 
     /// Authenticate a ServiceRequest and either forward it to the inner service or return a 401 Unauthorized response.
     ///
-    /// On success, forwards the (possibly augmented) request to the wrapped service and returns its response as the left variant of `EitherBody`. On failure, returns a 401 Unauthorized JSON response as the right variant.
+    /// On success, augments the request with tenant context (TenantId and TenantPool in extensions) and forwards
+    /// the request to the wrapped service, returning its response as the left variant of `EitherBody`.
+    /// On failure, returns a 401 Unauthorized JSON response as the right variant.
     ///
     /// # Returns
     ///
@@ -77,6 +79,34 @@ where
             return Box::pin(async move { fut.await.map(ServiceResponse::map_into_left_body) });
         }
 
+        if Method::OPTIONS == *req.method() {
+            let fut = self.service.call(req);
+            return Box::pin(async move { fut.await.map(ServiceResponse::map_into_left_body) });
+        }
+
+        // Check if route should be bypassed (no authentication required)
+        let path = req.path();
+        if constants::IGNORE_ROUTES
+            .iter()
+            .any(|route| path.starts_with(route))
+        {
+            let fut = self.service.call(req);
+            return Box::pin(async move { fut.await.map(ServiceResponse::map_into_left_body) });
+        }
+
+        let keycloak_client = match req.app_data::<Data<KeycloakClient>>() {
+            Some(k) => k.clone(),
+            None => {
+                let (request, _pl) = req.into_parts();
+                let response = HttpResponse::Unauthorized()
+                    .json(ResponseBody::new(
+                        constants::MESSAGE_INVALID_TOKEN,
+                        constants::EMPTY,
+                    ))
+                    .map_into_right_body();
+                return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
+            }
+        };
         // Check if route should be bypassed (no authentication required)
         let path = req.path();
         if constants::IGNORE_ROUTES
@@ -102,23 +132,35 @@ where
             }
         };
 
-        let keycloak_client = match req.app_data::<Data<KeycloakClient>>() {
-            Some(k) => k.clone(),
-            None => {
-                let (request, _pl) = req.into_parts();
-                let response = HttpResponse::Unauthorized()
-                    .json(ResponseBody::new(
-                        constants::MESSAGE_INVALID_TOKEN,
-                        constants::EMPTY,
-                    ))
-                    .map_into_right_body();
-                return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
+
+        let token = if let Some(cookie) = req.cookie("auth_token") {
+            Some(cookie.value().to_string())
+        } else if let Some(auth_header) = req.headers().get(constants::AUTHORIZATION) {
+            let auth_str = match auth_header.to_str() {
+                Ok(s) => s,
+                Err(_) => {
+                    let (request, _pl) = req.into_parts();
+                    let response = HttpResponse::Unauthorized()
+                        .json(ResponseBody::new(
+                            constants::MESSAGE_INVALID_TOKEN,
+                            constants::EMPTY,
+                        ))
+                        .map_into_right_body();
+                    return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
+                }
+            };
+            if auth_str.to_lowercase().starts_with("bearer ") && auth_str.len() > 7 {
+                Some(auth_str[7..].trim().to_string())
+            } else {
+                None
             }
+        } else {
+            None
         };
 
-        let authen_header = match req.headers().get(constants::AUTHORIZATION) {
-            Some(h) => h.clone(),
-            None => {
+        let token = match token {
+            Some(t) if !t.is_empty() => t,
+            _ => {
                 let (request, _pl) = req.into_parts();
                 let response = HttpResponse::Unauthorized()
                     .json(ResponseBody::new(
@@ -132,88 +174,62 @@ where
 
         let req_path = req.path().to_string();
 
-        // Perform token validation using web::block
-        // The key insight: we wrap the validation closure in web::block, which executes it
-        // in a separate thread pool, preventing the async runtime from being blocked.
-        // The async move block below will await the validation result and conditionally
-        // augment the request extensions before the service is called.
-        //
-        // We create the service future SYNCHRONOUSLY here (before entering async move)
-        // This avoids the 'static lifetime issue because we don't try to call self.service
-        // from within an async move block.
+        // Validate token using async approach
+        match crate::utils::token_utils::decode_token(token.clone()) {
+            Ok(token_data) => {
+                let tenant_id = token_data.claims.tenant_id.clone();
+                if let Some(tenant_pool) = manager.get_tenant_pool(&tenant_id) {
+                    match crate::utils::token_utils::verify_token(&token_data, &tenant_pool, Some(&keycloak_client)) {
+                        Ok(_) => {
+                            info!(
+                                "Successful authentication - tenant: {}, user: {}, route: {}",
+                                tenant_id, token_data.claims.user, req_path
+                            );
 
-        let service_fut = self.service.call(req);
+                            // Augment request extensions with tenant context
+                            req.extensions_mut().insert(tenant_pool);
+                            req.extensions_mut().insert(TenantId(tenant_id.clone()));
 
-        Box::pin(async move {
-            // Validate token asynchronously using web::block
-            info!("Authentication attempt for route: {}", req_path);
-
-            let mut should_call_service = false;
-
-            if let Ok(authen_str) = authen_header.to_str() {
-                if authen_str.starts_with("bearer") || authen_str.starts_with("Bearer") {
-                    if authen_str.len() > 7 {
-                        let token = authen_str[7..].trim().to_string();
-
-                        // Wrap synchronous validation in web::block to prevent blocking the async runtime
-                        let validate_result =
-                            web::block(move || keycloak_client.validate_token_sync(&token)).await;
-
-                        // Handle the nested Result layers:
-                        // - Err(e) = web::block join error (internal thread pool error)
-                        // - Ok(Err(e)) = validation error from validate_token_sync
-                        // - Ok(Ok(claims)) = successful validation
-                        match validate_result {
-                            Ok(Ok(claims)) => {
-                                // Token successfully validated
-                                debug!("Token successfully validated for user: {}", claims.sub);
-                                let tenant_id = claims
-                                    .tenant_id
-                                    .as_ref()
-                                    .unwrap_or(&"tenant1".to_string())
-                                    .clone();
-                                if let Some(_tenant_pool) = manager.get_tenant_pool(&tenant_id) {
-                                    info!(
-                                        "Successful authentication - tenant: {}, user: {}, route: {}",
-                                        tenant_id, claims.sub, req_path
-                                    );
-                                    should_call_service = true;
-                                } else {
-                                    error!("Tenant not found for token");
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                // validate_token_sync returned an error
-                                error!("Token validation failed: {}", e);
-                            }
-                            Err(e) => {
-                                // web::block returned an error (thread pool issue)
-                                error!("Token validation blocking operation failed: {}", e);
-                            }
+                            // Call the service with augmented request
+                            let fut = self.service.call(req);
+                            Box::pin(async move { fut.await.map(ServiceResponse::map_into_left_body) })
                         }
-                    } else {
-                        error!("Authorization header missing bearer token");
+                        Err(e) => {
+                            error!("Token verification failed: {}", e);
+                            let (request, _pl) = req.into_parts();
+                            let response = HttpResponse::Unauthorized()
+                                .json(ResponseBody::new(
+                                    constants::MESSAGE_INVALID_TOKEN,
+                                    constants::EMPTY,
+                                ))
+                                .map_into_right_body();
+                            Box::pin(async { Ok(ServiceResponse::new(request, response)) })
+                        }
                     }
                 } else {
-                    error!("Authorization header not a bearer token");
+                    error!("Tenant '{}' not found for token", tenant_id);
+                    let (request, _pl) = req.into_parts();
+                    let response = HttpResponse::Unauthorized()
+                        .json(ResponseBody::new(
+                            constants::MESSAGE_INVALID_TOKEN,
+                            constants::EMPTY,
+                        ))
+                        .map_into_right_body();
+                    Box::pin(async { Ok(ServiceResponse::new(request, response)) })
                 }
             }
-
-            // Call the inner service and handle the result
-            // NOTE: The service was called SYNCHRONOUSLY before entering this async block,
-            // but its future is only awaited here. This means we cannot conditionally prevent
-            // the service call based on validation - it always happens.
-            //
-            // If validation failed, the service still runs but we should have rejected the
-            // request earlier (before calling service_fut).
-            if !should_call_service {
-                return Err(Error::from(actix_web::error::ErrorUnauthorized(
-                    constants::MESSAGE_INVALID_TOKEN,
-                )));
+            Err(e) => {
+                error!("Token decode failed: {}", e);
+                let (request, _pl) = req.into_parts();
+                let response = HttpResponse::Unauthorized()
+                    .json(ResponseBody::new(
+                        constants::MESSAGE_INVALID_TOKEN,
+                        constants::EMPTY,
+                    ))
+                    .map_into_right_body();
+                Box::pin(async { Ok(ServiceResponse::new(request, response)) })
             }
-
-            service_fut.await.map(ServiceResponse::map_into_left_body)
-        })
+        }
     }
 }
 
@@ -355,7 +371,7 @@ pub mod functional_auth {
         /// let _res = fut.await;
         /// # }
         /// ```
-        fn call(&self, req: ServiceRequest) -> Self::Future {
+        fn call(&self, mut req: ServiceRequest) -> Self::Future {
             let registry = self.registry.clone();
 
             if Self::should_skip_authentication(&req) {
@@ -383,8 +399,23 @@ pub mod functional_auth {
                 }
             };
 
-            let (tenant_id, user_id, tenant_pool) =
-                match Self::process_authentication(&req, manager.get_ref()) {
+            let keycloak_client = match req.app_data::<Data<KeycloakClient>>() {
+                Some(client) => client.clone(),
+                None => {
+                    error!("KeycloakClient not found in app data");
+                    let (request, _pl) = req.into_parts();
+                    let response = HttpResponse::Unauthorized()
+                        .json(ResponseBody::new(
+                            constants::MESSAGE_INVALID_TOKEN,
+                            constants::EMPTY,
+                        ))
+                        .map_into_right_body();
+                    return Box::pin(async move { Ok(ServiceResponse::new(request, response)) });
+                }
+            };
+
+            let (tenant_id, user_id, token, tenant_pool) =
+                match Self::process_authentication(&keycloak_client, &req, manager.get_ref()) {
                     Ok(data) => data,
                     Err(auth_error) => {
                         error!("Functional authentication failed: {:?}", auth_error);
@@ -404,6 +435,25 @@ pub mod functional_auth {
             req.extensions_mut().insert(tenant_pool);
             // Store tenant_id in extensions for later retrieval by controllers
             req.extensions_mut().insert(TenantId(tenant_id.clone()));
+
+            // Set Authorization header for endpoints that expect it via AuthContext
+            let auth_header_value = format!("Bearer {}", token);
+            match actix_web::http::header::HeaderValue::from_str(&auth_header_value) {
+                Ok(header_value) => {
+                    req.headers_mut().insert(
+                        actix_web::http::header::AUTHORIZATION,
+                        header_value,
+                    );
+                }
+                Err(e) => {
+                    log::debug!(
+                        "Failed to create Authorization header from token '{}': {}",
+                        token.chars().take(10).collect::<String>(),
+                        e
+                    );
+                }
+            }
+
             info!(
                 "Authentication successful for tenant: {}, user: {}",
                 tenant_id, user_id
@@ -433,10 +483,10 @@ pub mod functional_auth {
         }
 
         /// Functional pipeline for token extraction and validation
-        fn process_authentication(
+        fn process_authentication(keycloak_client: &Data<KeycloakClient>,
             req: &ServiceRequest,
             manager: &TenantPoolManager,
-        ) -> Result<(String, String, crate::config::db::Pool), &'static str> {
+        ) -> Result<(String, String, String, crate::config::db::Pool), &'static str> {
             // Extract token using functional approach
             let token = Self::extract_token(req)?;
 
@@ -452,13 +502,15 @@ pub mod functional_auth {
                 .get_tenant_pool(&tenant_id)
                 .ok_or("Tenant not found")?;
 
-            token_utils::verify_token(&token_data, &tenant_pool)
-                .map_err(|_| "Token verification failed")?;
-
-            Ok((tenant_id, user_id, tenant_pool.clone()))
+            match crate::utils::token_utils::verify_token(&token_data, &tenant_pool, Some(keycloak_client)) {
+                Ok(_) => Ok((tenant_id, user_id, token, tenant_pool.clone())),
+                Err(_) => Err("Token verification failed"),
+            }
         }
 
-        /// Extracts the bearer token from the `Authorization` header of the request.
+        /// Extracts the bearer token from the `auth_token` cookie or `Authorization` header of the request.
+        ///
+        /// Prefers the cookie over the header to support OAuth flows where tokens are stored in cookies.
         ///
         /// Returns the token string on success, or a static error message describing the failure.
         ///
@@ -476,25 +528,29 @@ pub mod functional_auth {
         /// assert_eq!(token, "abc.def.ghi");
         /// ```
         pub fn extract_token(req: &ServiceRequest) -> Result<String, &'static str> {
-            let auth_header = req
-                .headers()
-                .get(constants::AUTHORIZATION)
-                .ok_or("Missing authorization header")?;
-
-            let auth_str = auth_header
-                .to_str()
-                .map_err(|_| "Invalid header encoding")?;
-
-            if !auth_str.to_lowercase().starts_with("bearer ") {
-                return Err("Invalid authorization scheme");
+            // First try auth_token cookie (preferred for OAuth)
+            if let Some(cookie) = req.cookie("auth_token") {
+                let token = cookie.value().trim();
+                if !token.is_empty() {
+                    return Ok(token.to_string());
+                }
             }
 
-            let token = auth_str[7..].trim();
-            if token.is_empty() {
-                return Err("Empty token");
+            // Fallback to Authorization header
+            if let Some(auth_header) = req.headers().get(constants::AUTHORIZATION) {
+                let auth_str = auth_header
+                    .to_str()
+                    .map_err(|_| "Invalid header encoding")?;
+
+                if auth_str.to_lowercase().starts_with("bearer ") {
+                    let token = auth_str[7..].trim();
+                    if !token.is_empty() {
+                        return Ok(token.to_string());
+                    }
+                }
             }
 
-            Ok(token.to_string())
+            Err("Missing authorization header or auth_token cookie")
         }
 
         /// Registers authentication-related pure functions into the provided registry.
