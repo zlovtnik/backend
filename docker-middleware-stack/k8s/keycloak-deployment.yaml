@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f docker-compose.yml -o k8s/
+    kompose.version: 1.37.0 (HEAD)
+  labels:
+    io.kompose.service: keycloak
+  name: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: keycloak
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: kompose convert -f docker-compose.yml -o k8s/
+        kompose.version: 1.37.0 (HEAD)
+      labels:
+        io.kompose.service: keycloak
+    spec:
+      containers:
+        - args:
+            - start
+          env:
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-secrets
+                  key: db-password
+            - name: KC_DB_URL
+              value: jdbc:postgresql://postgres:5432/middleware
+            - name: KC_DB_USERNAME
+              value: middleware
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: KC_HOSTNAME_STRICT
+              value: "false"
+            - name: KC_HOSTNAME_STRICT_HTTPS
+              value: "false"
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_METRICS_ENABLED
+              value: "true"
+            - name: KC_SPI_THEME_CACHE_TEMPLATES
+              value: "false"
+            - name: KC_SPI_THEME_CACHE_THEMES
+              value: "false"
+            - name: KEYCLOAK_ADMIN
+              value: admin
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-secrets
+                  key: admin-password
+          image: quay.io/keycloak/keycloak:22.0
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+              scheme: HTTP
+            failureThreshold: 3
+            periodSeconds: 30
+            timeoutSeconds: 10
+            initialDelaySeconds: 60
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          name: middleware-keycloak
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /opt/keycloak/data
+              name: keycloak-data
+            - mountPath: /opt/keycloak/data/import/realm-export.json
+              name: keycloak-cm1
+              subPath: realm-export.json
+      restartPolicy: Always
+      volumes:
+        - name: keycloak-data
+          persistentVolumeClaim:
+            claimName: keycloak-data
+        - configMap:
+            items:
+              - key: realm-export.json
+                path: realm-export.json
+            name: keycloak-cm1
+          name: keycloak-cm1

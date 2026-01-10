@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  labels:
+    io.kompose.service: otel-collector
+data:
+  # Service version - update this per release
+  service-version: "1.0.0"
+  
+  # Environment name - should be development, staging, or production
+  environment: "development"

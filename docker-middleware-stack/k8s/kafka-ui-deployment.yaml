@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f docker-compose.yml -o k8s/
+    kompose.version: 1.37.0 (HEAD)
+  labels:
+    io.kompose.service: kafka-ui
+  name: kafka-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: kafka-ui
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: kompose convert -f docker-compose.yml -o k8s/
+        kompose.version: 1.37.0 (HEAD)
+      labels:
+        io.kompose.service: kafka-ui
+    spec:
+      containers:
+        - env:
+            - name: DYNAMIC_CONFIG_ENABLED
+              value: "true"
+            - name: KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS
+              value: kafka:9093
+            - name: KAFKA_CLUSTERS_0_KAFKAVERSION
+              value: 3.5.0
+            - name: KAFKA_CLUSTERS_0_NAME
+              value: local
+            - name: KAFKA_CLUSTERS_0_SCHEMAREGISTRY
+              value: http://schema-registry:8081
+          image: docker.io/provectuslabs/kafka-ui:latest
+          name: middleware-kafka-ui
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+      restartPolicy: Always

@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-entrypoint
+data:
+  kafka-entrypoint.sh: |
+    #!/bin/bash
+    
+    # Start Kafka in background
+    echo "Starting Kafka..." >&2
+    /etc/confluent/docker/run > /var/log/kafka/startup.log 2>&1 &
+    KAFKA_PID=$!
+    echo "Kafka PID: $KAFKA_PID" >&2
+    
+    # Tail the log to stdout  
+    tail -f /var/log/kafka/startup.log &
+    TAIL_PID=$!
+    
+    # Wait for Kafka to finish
+    wait $KAFKA_PID
+    EXIT_CODE=$?
+    
+    echo ""
+    echo "Kafka process finished with exit code: $EXIT_CODE" >&2
+    
+    # Kill the tail process
+    kill $TAIL_PID 2>/dev/null || true
+    
+    # Keep pod alive for debugging
+    echo "Sleeping for 1 hour for debugging..."
+    sleep 3600

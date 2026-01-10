@@ -1,0 +1,370 @@
+apiVersion: v1
+data:
+  realm-export.json: |
+    {
+      "realm": "middleware",
+      "displayName": "Middleware Stack",
+      "enabled": true,
+      "sslRequired": "all",
+      "registrationAllowed": false,
+      "loginWithEmailAllowed": true,
+      "duplicateEmailsAllowed": false,
+      "resetPasswordAllowed": false,
+      "editUsernameAllowed": false,
+      "bruteForceProtected": true,
+      "clients": [
+        {
+          "clientId": "middleware-app",
+          "name": "Middleware Application",
+          "description": "Main application client",
+          "enabled": true,
+          "clientAuthenticatorType": "client-secret",
+          "secret": "${KEYCLOAK_MIDDLEWARE_APP_SECRET}",
+          "directAccessGrantsEnabled": true,
+          "serviceAccountsEnabled": true,
+          "implicitFlowEnabled": false,
+          "standardFlowEnabled": true,
+          "publicClient": false,
+          "protocol": "openid-connect",
+          "attributes": {
+            "saml.assertion.signature": "false",
+            "saml.multivalued.roles": "false",
+            "saml.force.post.binding": "false",
+            "saml.encrypt": "false",
+            "saml.server.signature": "false",
+            "saml.server.signature.keyinfo.ext": "false",
+            "exclude.session.state.from.auth.response": "false",
+            "saml_force_name_id_format": "false",
+            "saml.client.signature": "false",
+            "tls.client.certificate.bound.access.tokens": "false",
+            "saml.authnstatement": "false",
+            "display.on.consent.screen": "false",
+            "saml.onetimeuse.condition": "false"
+          },
+          "authenticationFlowBindingOverrides": {},
+          "fullScopeAllowed": true,
+          "nodeReRegistrationTimeout": -1,
+          "protocolMappers": [
+            {
+              "name": "realm roles",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-usermodel-realm-role-mapper",
+              "consentRequired": false,
+              "config": {
+                "access.token.claim": "true",
+                "claim.name": "realm_access.roles",
+                "jsonType.label": "String",
+                "multivalued": "true"
+              }
+            },
+            {
+              "name": "client roles",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-usermodel-client-role-mapper",
+              "consentRequired": false,
+              "config": {
+                "access.token.claim": "true",
+                "claim.name": "resource_access.${client_id}.roles",
+                "jsonType.label": "String",
+                "multivalued": "true"
+              }
+            },
+            {
+              "name": "groups",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-group-membership-mapper",
+              "consentRequired": false,
+              "config": {
+                "full.path": "false",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "claim.name": "groups",
+                "userinfo.token.claim": "true"
+              }
+            }
+          ],
+          "defaultClientScopes": [
+            "web-origins",
+            "role_list",
+            "roles",
+            "profile",
+            "email"
+          ],
+          "optionalClientScopes": [
+            "address",
+            "phone",
+            "offline_access",
+            "microprofile-jwt"
+          ],
+          "redirectUris": [
+            "http://localhost:8000/api/callback"
+          ],
+          "webOrigins": [
+            "http://localhost:8000",
+            "http://localhost:8080",
+            "http://localhost:3000",
+            "http://localhost:5173"
+          ]
+        },
+        {
+          "clientId": "grafana",
+          "name": "Grafana",
+          "description": "Grafana OAuth client",
+          "enabled": true,
+          "clientAuthenticatorType": "client-secret",
+          "secret": "${KEYCLOAK_GRAFANA_SECRET}",
+          "directAccessGrantsEnabled": false,
+          "serviceAccountsEnabled": false,
+          "implicitFlowEnabled": false,
+          "standardFlowEnabled": true,
+          "publicClient": false,
+          "protocol": "openid-connect",
+          "attributes": {
+            "saml.assertion.signature": "false",
+            "saml.multivalued.roles": "false",
+            "saml.force.post.binding": "false",
+            "saml.encrypt": "false",
+            "saml.server.signature": "false",
+            "saml.server.signature.keyinfo.ext": "false",
+            "exclude.session.state.from.auth.response": "false",
+            "saml_force_name_id_format": "false",
+            "saml.client.signature": "false",
+            "tls.client.certificate.bound.access.tokens": "false",
+            "saml.authnstatement": "false",
+            "display.on.consent.screen": "false",
+            "saml.onetimeuse.condition": "false"
+          },
+          "authenticationFlowBindingOverrides": {},
+          "fullScopeAllowed": true,
+          "nodeReRegistrationTimeout": -1,
+          "protocolMappers": [
+            {
+              "name": "realm roles",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-usermodel-realm-role-mapper",
+              "consentRequired": false,
+              "config": {
+                "access.token.claim": "true",
+                "claim.name": "realm_access.roles",
+                "jsonType.label": "String",
+                "multivalued": "true"
+              }
+            },
+            {
+              "name": "groups",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-group-membership-mapper",
+              "consentRequired": false,
+              "config": {
+                "full.path": "false",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "claim.name": "groups",
+                "userinfo.token.claim": "true"
+              }
+            }
+          ],
+          "defaultClientScopes": [
+            "web-origins",
+            "role_list",
+            "roles",
+            "profile",
+            "email"
+          ],
+          "optionalClientScopes": [
+            "address",
+            "phone",
+            "offline_access",
+            "microprofile-jwt"
+          ],
+          "redirectUris": [
+            "${GRAFANA_BASE_URL}/login/generic_oauth"
+          ],
+          "webOrigins": [
+            "${GRAFANA_BASE_URL}"
+          ]
+        }
+      ],
+      "clientScopes": [
+        {
+          "name": "role_list",
+          "description": "SAML role list",
+          "protocol": "saml",
+          "attributes": {
+            "consent.screen.text": "${samlRoleListScopeConsentText}",
+            "display.on.consent.screen": "true"
+          },
+          "protocolMappers": [
+            {
+              "name": "role list",
+              "protocol": "saml",
+              "protocolMapper": "saml-role-list-mapper",
+              "consentRequired": false,
+              "config": {
+                "single": "false",
+                "attribute.nameformat": "Basic",
+                "attribute.name": "Role"
+              }
+            }
+          ]
+        },
+        {
+          "name": "roles",
+          "description": "OpenID Connect scope for add user roles to the access token",
+          "protocol": "openid-connect",
+          "attributes": {
+            "include.in.token.scope": "false",
+            "display.on.consent.screen": "true",
+            "consent.screen.text": "${rolesScopeConsentText}"
+          },
+          "protocolMappers": [
+            {
+              "name": "realm roles",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-usermodel-realm-role-mapper",
+              "consentRequired": false,
+              "config": {
+                "access.token.claim": "true",
+                "claim.name": "realm_access.roles",
+                "jsonType.label": "String",
+                "multivalued": "true"
+              }
+            },
+            {
+              "name": "client roles",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-usermodel-client-role-mapper",
+              "consentRequired": false,
+              "config": {
+                "access.token.claim": "true",
+                "claim.name": "resource_access.${client_id}.roles",
+                "jsonType.label": "String",
+                "multivalued": "true"
+              }
+            },
+            {
+              "name": "audience resolve",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-resolve-mapper",
+              "consentRequired": false,
+              "config": {}
+            }
+          ]
+        }
+      ],
+      "defaultDefaultClientScopes": [
+        "role_list",
+        "roles",
+        "profile",
+        "email",
+        "web-origins"
+      ],
+      "roles": {
+        "realm": [
+          {
+            "name": "admin",
+            "description": "Administrator role",
+            "composite": false,
+            "clientRole": false,
+            "containerId": "middleware"
+          },
+          {
+            "name": "user",
+            "description": "Regular user role",
+            "composite": false,
+            "clientRole": false,
+            "containerId": "middleware"
+          },
+          {
+            "name": "viewer",
+            "description": "Read-only access role",
+            "composite": false,
+            "clientRole": false,
+            "containerId": "middleware"
+          }
+        ]
+      },
+      "groups": [
+        {
+          "name": "admins",
+          "path": "/admins",
+          "attributes": {},
+          "realmRoles": ["admin"],
+          "clientRoles": {}
+        },
+        {
+          "name": "users",
+          "path": "/users",
+          "attributes": {},
+          "realmRoles": ["user"],
+          "clientRoles": {}
+        },
+        {
+          "name": "viewers",
+          "path": "/viewers",
+          "attributes": {},
+          "realmRoles": ["viewer"],
+          "clientRoles": {}
+        }
+      ],
+      "users": [
+        {
+          "username": "admin",
+          "enabled": true,
+          "emailVerified": true,
+          "firstName": "Admin",
+          "lastName": "User",
+          "email": "admin@middleware.local",
+          "credentials": [
+            {
+              "type": "password",
+              "value": "${KEYCLOAK_ADMIN_PASSWORD}",
+              "temporary": false
+            }
+          ],
+          "realmRoles": ["admin"],
+          "groups": ["/admins"]
+        },
+        {
+          "username": "user",
+          "enabled": true,
+          "emailVerified": true,
+          "firstName": "Regular",
+          "lastName": "User",
+          "email": "user@middleware.local",
+          "credentials": [
+            {
+              "type": "password",
+              "value": "${KEYCLOAK_USER_PASSWORD}",
+              "temporary": false
+            }
+          ],
+          "realmRoles": ["user"],
+          "groups": ["/users"]
+        },
+        {
+          "username": "viewer",
+          "enabled": true,
+          "emailVerified": true,
+          "firstName": "Viewer",
+          "lastName": "User",
+          "email": "viewer@middleware.local",
+          "credentials": [
+            {
+              "type": "password",
+              "value": "${KEYCLOAK_VIEWER_PASSWORD}",
+              "temporary": false
+            }
+          ],
+          "realmRoles": ["viewer"],
+          "groups": ["/viewers"]
+        }
+      ]
+    }
+kind: ConfigMap
+metadata:
+  annotations:
+    use-subpath: "true"
+  labels:
+    io.kompose.service: keycloak
+  name: keycloak-cm1
