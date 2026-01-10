@@ -75,6 +75,10 @@ utoipa-swagger-ui = { version = "7", features = ["actix-web", "reqwest"] }
 version = "2.2.0"
 features = ["postgres", "r2d2"]
 
+[dependencies.oracle]
+version = "0.6"
+optional = true
+
 [dependencies.chrono]
 version = "0.4.26"
 features = ["serde"]
@@ -89,6 +93,7 @@ default = ["functional", "performance_monitoring", "datetime"]  # Enable functio
 functional = ["rcs-functional"]
 performance_monitoring = []
 datetime = ["dep:chrono", "diesel/chrono"]
+hybrid-db = ["dep:oracle"]  # Enable Oracle support for hybrid database mode
 
 [dev-dependencies]
 testcontainers = "0.14.0"

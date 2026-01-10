@@ -52,14 +52,13 @@ impl CrudContext {
 pub trait CrudOperations: Sized + Serialize {
     type CreateDto: for<'de> Deserialize<'de> + Validate;
     type UpdateDto: for<'de> Deserialize<'de> + Validate;
-    type Conn;
 
-    fn create(dto: Self::CreateDto, tenant_id: &str, conn: &mut Self::Conn) -> Result<Self, DieselError>;
-    fn find_all(tenant_id: &str, limit: i64, offset: i64, conn: &mut Self::Conn) -> Result<Vec<Self>, DieselError>;
-    fn count(tenant_id: &str, conn: &mut Self::Conn) -> Result<i64, DieselError>;
-    fn find_by_id(id: i32, tenant_id: &str, conn: &mut Self::Conn) -> Result<Self, DieselError>;
-    fn update(id: i32, dto: Self::UpdateDto, tenant_id: &str, conn: &mut Self::Conn) -> Result<Self, DieselError>;
-    fn delete(id: i32, tenant_id: &str, conn: &mut Self::Conn) -> Result<(), DieselError>;
+    fn create(dto: Self::CreateDto, tenant_id: &str, conn: &mut crate::config::db::Connection) -> Result<Self, DieselError>;
+    fn find_all(tenant_id: &str, limit: i64, offset: i64, conn: &mut crate::config::db::Connection) -> Result<Vec<Self>, DieselError>;
+    fn count(tenant_id: &str, conn: &mut crate::config::db::Connection) -> Result<i64, DieselError>;
+    fn find_by_id(id: i32, tenant_id: &str, conn: &mut crate::config::db::Connection) -> Result<Self, DieselError>;
+    fn update(id: i32, dto: Self::UpdateDto, tenant_id: &str, conn: &mut crate::config::db::Connection) -> Result<Self, DieselError>;
+    fn delete(id: i32, tenant_id: &str, conn: &mut crate::config::db::Connection) -> Result<(), DieselError>;
 }
 
 /// Generic CRUD handler builder
@@ -67,15 +66,24 @@ pub struct CrudHandler<T: CrudOperations> {
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T: CrudOperations<Conn = diesel::r2d2::PooledConnection<diesel::r2d2::ConnectionManager<diesel::PgConnection>>>> CrudHandler<T> {
+impl<T: CrudOperations> CrudHandler<T> {
     /// Generic create handler
     pub async fn create(
         req: HttpRequest,
         dto: web::Json<T::CreateDto>,
     ) -> Result<HttpResponse, ServiceError> {
         dto.validate().map_err(|e| {
+            let error_messages: Vec<String> = e.field_errors()
+                .iter()
+                .map(|(field, errors)| {
+                    let messages: Vec<String> = errors.iter()
+                        .filter_map(|err| err.message.as_ref().map(|m| m.to_string()))
+                        .collect();
+                    format!("{}: {}", field, messages.join(", "))
+                })
+                .collect();
             ServiceError::bad_request("Validation failed")
-                .with_detail(format!("{:?}", e))
+                .with_detail(error_messages.join("; "))
                 .with_tag("validation")
         })?;
 
@@ -166,8 +174,17 @@ impl<T: CrudOperations<Conn = diesel::r2d2::PooledConnection<diesel::r2d2::Conne
         dto: web::Json<T::UpdateDto>,
     ) -> Result<HttpResponse, ServiceError> {
         dto.validate().map_err(|e| {
+            let error_messages: Vec<String> = e.field_errors()
+                .iter()
+                .map(|(field, errors)| {
+                    let messages: Vec<String> = errors.iter()
+                        .filter_map(|err| err.message.as_ref().map(|m| m.to_string()))
+                        .collect();
+                    format!("{}: {}", field, messages.join(", "))
+                })
+                .collect();
             ServiceError::bad_request("Validation failed")
-                .with_detail(format!("{:?}", e))
+                .with_detail(error_messages.join("; "))
                 .with_tag("validation")
         })?;
 
@@ -204,8 +221,6 @@ impl<T: CrudOperations<Conn = diesel::r2d2::PooledConnection<diesel::r2d2::Conne
                 .with_tag("database"),
         })?;
 
-        Ok(HttpResponse::Ok().json(json!({
-            "message": "Deleted successfully"
-        })))
+        Ok(HttpResponse::NoContent().finish())
     }
 }

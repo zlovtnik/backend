@@ -1,4 +1,4 @@
-use crate::schema::*;
+use crate::{api::crud_engine::CrudOperations, schema::*};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -131,5 +131,73 @@ impl Nfag {
             .filter(nfag::tenant_id.eq(tenant_id_))
             .count()
             .get_result(conn)
+    }
+}
+
+// Implement CrudOperations to eliminate controller boilerplate
+impl CrudOperations for Nfag {
+    type CreateDto = CreateNfagRequest;
+    type UpdateDto = UpdateNfagRequest;
+
+    fn create(
+        dto: Self::CreateDto,
+        tenant_id: &str,
+        conn: &mut crate::config::db::Connection,
+    ) -> Result<Self, diesel::result::Error> {
+        let new_nfag = NewNfag {
+            chave: dto.chave,
+            tenant_id: tenant_id.to_string(),
+            versao: dto.versao,
+            xml_content: dto.xml_content,
+            status: dto.status,
+        };
+        Self::create(new_nfag, conn)
+    }
+
+    fn find_all(
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        conn: &mut crate::config::db::Connection,
+    ) -> Result<Vec<Self>, diesel::result::Error> {
+        Self::find_all_by_tenant(tenant_id, limit, offset, conn)
+    }
+
+    fn count(
+        tenant_id: &str,
+        conn: &mut crate::config::db::Connection,
+    ) -> Result<i64, diesel::result::Error> {
+        Self::count_by_tenant(tenant_id, conn)
+    }
+
+    fn find_by_id(
+        id: i32,
+        tenant_id: &str,
+        conn: &mut crate::config::db::Connection,
+    ) -> Result<Self, diesel::result::Error> {
+        Self::find_by_id_and_tenant(id, tenant_id, conn)
+    }
+
+    fn update(
+        id: i32,
+        dto: Self::UpdateDto,
+        tenant_id: &str,
+        conn: &mut crate::config::db::Connection,
+    ) -> Result<Self, diesel::result::Error> {
+        let update_data = UpdateNfag {
+            versao: dto.versao,
+            xml_content: dto.xml_content,
+            status: dto.status,
+            updated_at: Some(Utc::now()),
+        };
+        Self::update_by_id_and_tenant(id, tenant_id, update_data, conn)
+    }
+
+    fn delete(
+        id: i32,
+        tenant_id: &str,
+        conn: &mut crate::config::db::Connection,
+    ) -> Result<(), diesel::result::Error> {
+        Self::delete_by_id_and_tenant(id, tenant_id, conn).map(|_| ())
     }
 }
