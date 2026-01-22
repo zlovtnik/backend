@@ -227,7 +227,7 @@ services:
 
   # Redis Exporter
   redis-exporter:
-    image: oliver006/redis_exporter:latest
+    image: oliver006/redis_exporter:v1.59.0
     container_name: middleware-redis-exporter
     depends_on:
       - redis

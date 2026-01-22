@@ -40,7 +40,7 @@ base64 = "0.21.2"
 redis = "0.32.7"
 r2d2 = "0.8.10"
 openidconnect = "4.0.1"
-reqwest = { version = "0.12.26", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12.26", default-features = false, features = ["rustls-tls", "json", "blocking"] }
 tokio = { version = "1.35.0", features = ["rt", "rt-multi-thread", "fs", "io-util", "sync", "time", "macros"] }
 notify = "6.1"
 tokio-stream = "0.1"
@@ -75,6 +75,10 @@ utoipa-swagger-ui = { version = "7", features = ["actix-web", "reqwest"] }
 version = "2.2.0"
 features = ["postgres", "r2d2"]
 
+[dependencies.oracle]
+version = "0.6"
+optional = true
+
 [dependencies.chrono]
 version = "0.4.26"
 features = ["serde"]
@@ -89,6 +93,7 @@ default = ["functional", "performance_monitoring", "datetime"]  # Enable functio
 functional = ["rcs-functional"]
 performance_monitoring = []
 datetime = ["dep:chrono", "diesel/chrono"]
+hybrid-db = ["dep:oracle"]  # Enable Oracle support for hybrid database mode
 
 [dev-dependencies]
 testcontainers = "0.14.0"

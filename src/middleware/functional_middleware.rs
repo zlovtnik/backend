@@ -197,7 +197,7 @@ pub mod functional_middleware_impl {
 
             // Verify token against tenant database
             if let Some(tenant_pool) = manager.get_tenant_pool(&tenant_id) {
-                token_utils::verify_token(&token_data, &tenant_pool).map_err(|e| {
+                token_utils::verify_token(&token_data, &tenant_pool, None).map_err(|e| {
                     MiddlewareError::TokenInvalid(format!("Token verification failed: {}", e))
                 })?;
             } else {

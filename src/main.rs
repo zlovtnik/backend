@@ -26,8 +26,7 @@ use std::sync::Arc;
 ///
 /// ```no_run
 /// // התחל יישום (מחייב משתני סביבה מתאימים).
-/// // בדרך כלל מופעל על ידי סביבת ריצה; מוצג כאן למטרות אילוסטרטיביות בלבד.
-/// let _ = futures::executor::block_on(crate::main());
+/// // let _ = futures::executor::block_on(crate::main());
 /// ```
 #[actix_rt::main]
 async fn main() -> io::Result<()> {
@@ -217,7 +216,7 @@ async fn main() -> io::Result<()> {
         Arc::new(rcs::functional::pure_function_registry::PureFunctionRegistry::new());
 
     // Start the main HTTP server
-    let main_server = HttpServer::new(move || {
+    HttpServer::new(move || {
         // Use shared CORS origin configuration from middleware::ws_security
         let allowed_origins = rcs::middleware::ws_security::get_allowed_origins();
         let mut cors_builder = Cors::default();
@@ -293,10 +292,8 @@ async fn main() -> io::Result<()> {
             .configure(config::app::config_services)
     })
     .bind(&app_url)?
-    .run();
-
-    // Run the main server
-    main_server.await
+    .run()
+    .await
 }
 
 #[cfg(test)]
@@ -413,7 +410,7 @@ mod tests {
             "failed to initialize websocket logging in test_startup_without_auth_middleware_ok",
         );
 
-        HttpServer::new(move || {
+        let _ = HttpServer::new(move || {
             App::new()
                 .wrap(
                     Cors::default() // allowed_origin return access-control-allow-origin: * by default
@@ -432,8 +429,9 @@ mod tests {
         })
         .bind("localhost:8001".to_string())
         .unwrap()
-        .run();
+        .run()
+        .await;
+    }
 
         // Test passes if server starts without panicking - HTTP binding success is the verification
-    }
 }

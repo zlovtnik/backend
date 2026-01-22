@@ -63,8 +63,7 @@ curl -s -X GET http://localhost:8080/admin/realms/middleware/clients \
 # {
 #   "clientId": "middleware-app",
 #   "redirectUris": [
-#     "http://localhost:8000/api/callback",
-#     "http://localhost:8080/api/auth/callback"
+#     "http://localhost:8000/api/callback"
 #   ]
 # }
 ```

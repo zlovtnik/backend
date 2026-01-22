@@ -1,0 +1,103 @@
+apiVersion: v1
+data:
+  init.sql: |
+    -- PostgreSQL initialization script for middleware stack
+    -- This script creates additional databases and users for different services
+
+    -- Enable Debezium logical replication (required for CDC)
+    -- Note: These settings require superuser and will be applied at the instance level
+    -- ALTER SYSTEM SET wal_level = logical;
+    -- ALTER SYSTEM SET max_wal_senders = 4;
+    -- ALTER SYSTEM SET max_replication_slots = 4;
+    -- (These are set via docker environment variables in docker-compose.yml)
+
+    -- Create database for Keycloak
+    CREATE DATABASE keycloak;
+    CREATE USER keycloak WITH ENCRYPTED PASSWORD 'keycloak123';
+    GRANT ALL PRIVILEGES ON DATABASE keycloak TO keycloak;
+
+    -- Connect to keycloak database to grant schema permissions
+    \c keycloak
+    GRANT USAGE, CREATE ON SCHEMA public TO keycloak;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE, REFERENCES ON TABLES TO keycloak;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO keycloak;
+
+    -- Create database for application data
+    CREATE DATABASE app;
+    CREATE USER app_user WITH ENCRYPTED PASSWORD 'app123';
+    GRANT ALL PRIVILEGES ON DATABASE app TO app_user;
+
+    -- Connect to app database to grant schema permissions
+    \c app
+    GRANT USAGE, CREATE ON SCHEMA public TO app_user;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE, REFERENCES ON TABLES TO app_user;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO app_user;
+
+    -- Create database for analytics/monitoring
+    CREATE DATABASE analytics;
+    CREATE USER analytics_user WITH ENCRYPTED PASSWORD 'analytics123';
+    GRANT ALL PRIVILEGES ON DATABASE analytics TO analytics_user;
+
+    -- Connect to analytics database to grant schema permissions
+    \c analytics
+    GRANT USAGE, CREATE ON SCHEMA public TO analytics_user;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE, REFERENCES ON TABLES TO analytics_user;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO analytics_user;
+
+    -- Create database for RCL (Rust CDC Loader)
+    CREATE DATABASE warehouse;
+    CREATE USER rcl WITH ENCRYPTED PASSWORD 'rcl';
+    GRANT ALL PRIVILEGES ON DATABASE warehouse TO rcl;
+
+    -- Connect to warehouse database to grant schema permissions
+    \c warehouse
+    GRANT USAGE, CREATE ON SCHEMA public TO rcl;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE, REFERENCES ON TABLES TO rcl;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO rcl;
+
+    -- Enable required extensions
+    \c middleware
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+    CREATE EXTENSION IF NOT EXISTS "pg_stat_statements";
+    CREATE EXTENSION IF NOT EXISTS "pg_buffercache";
+
+    \c keycloak
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+    \c app
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+    CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+    CREATE EXTENSION IF NOT EXISTS "hstore";
+
+    \c warehouse
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+    -- Create staging table for example data
+    CREATE TABLE IF NOT EXISTS staging_example (
+        payload JSONB NOT NULL,
+        ingest_system_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        _meta_topic TEXT,
+        _meta_partition BIGINT,
+        _meta_offset BIGINT,
+        _meta_ingest_ts BIGINT,
+        id TEXT,
+        operation_type TEXT
+    );
+
+    -- Create heartbeat table for Debezium connector health monitoring
+    -- This table is required by the Debezium PostgreSQL connector's heartbeat.action.query
+    -- The connector periodically inserts heartbeat records to detect database connectivity issues
+    -- See: docker-middleware-stack/configs/kafka/debezium-postgres-connector.json for heartbeat configuration
+    CREATE TABLE IF NOT EXISTS heartbeat (
+        ts TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+
+    -- Create a superuser for administrative tasks (use with caution)
+    CREATE USER middleware_admin WITH SUPERUSER ENCRYPTED PASSWORD 'admin123';
+kind: ConfigMap
+metadata:
+  annotations:
+    use-subpath: "true"
+  labels:
+    io.kompose.service: postgres
+  name: postgres-cm1

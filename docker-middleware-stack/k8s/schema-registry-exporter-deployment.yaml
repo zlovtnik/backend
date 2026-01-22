@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f docker-compose.yml -o k8s/
+    kompose.version: 1.37.0 (HEAD)
+  labels:
+    io.kompose.service: schema-registry-exporter
+  name: schema-registry-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: schema-registry-exporter
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: kompose convert -f docker-compose.yml -o k8s/
+        kompose.version: 1.37.0 (HEAD)
+      labels:
+        io.kompose.service: schema-registry-exporter
+    spec:
+      containers:
+        - args:
+            - "5556"
+            - /opt/bitnami/jmx-exporter/config.yml
+          image: docker.io/bitnami/jmx-exporter:latest
+          name: middleware-schema-registry-exporter
+          ports:
+            - containerPort: 5556
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /opt/bitnami/jmx-exporter/config.yml
+              name: schema-registry-exporter-cm0
+              subPath: config.yml
+      hostname: schema-registry-exporter
+      restartPolicy: Always
+      volumes:
+        - configMap:
+            items:
+              - key: jmx_exporter_config.yml
+                path: config.yml
+            name: schema-registry-exporter-cm0
+          name: schema-registry-exporter-cm0

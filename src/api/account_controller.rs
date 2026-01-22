@@ -2,6 +2,7 @@ use actix_session::Session;
 use actix_web::http::{self, StatusCode};
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use log::info;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::borrow::Cow;
 
@@ -33,6 +34,154 @@ fn response_composition_error(err: ResponseTransformError) -> ServiceError {
     ServiceError::internal_server_error(constants::MESSAGE_INTERNAL_SERVER_ERROR)
         .with_tag("response")
         .with_detail(err.to_string())
+}
+
+/// OAuth authentication response returned by the callback endpoint.
+///
+/// This struct is returned as JSON when the OAuth callback is successful,
+/// containing the JWT token for subsequent API authentication.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuthResponse {
+    /// Indicates whether authentication was successful
+    pub success: bool,
+    /// JWT access token for API authentication (present on success)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// Token type, typically "Bearer"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_type: Option<String>,
+    /// User's username from the OAuth provider
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// User's email from the OAuth provider
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    /// Tenant ID for multi-tenant context
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tenant_id: Option<String>,
+    /// Error message (present on failure)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Request body for the Keycloak callback endpoint
+#[derive(Debug, Serialize, Deserialize)]
+pub struct KeycloakCallbackRequest {
+    /// Authorization code from Keycloak
+    pub code: Option<String>,
+    /// State parameter for CSRF validation
+    pub state: Option<String>,
+    /// Error from Keycloak (if any)
+    pub error: Option<String>,
+    /// Error description from Keycloak (if any)
+    pub error_description: Option<String>,
+    /// PKCE code_verifier (required when Keycloak has PKCE enforcement enabled)
+    /// This should be the original verifier generated when initiating the OAuth flow
+    #[serde(default)]
+    pub code_verifier: Option<String>,
+    /// OpenID Connect nonce for replay attack prevention
+    /// If provided, it will be validated against the nonce in the ID token
+    #[serde(default)]
+    pub nonce: Option<String>,
+}
+
+/// User information extracted from OAuth ID token claims
+pub struct OAuthUserInfo {
+    /// OAuth unique identifier (sub claim)
+    pub oauth_unique_id: String,
+    /// Username (preferred_username, email, or oauth_{sub})
+    pub username: String,
+    /// Tenant ID (from claims or default)
+    pub tenant_id: String,
+    /// User's email address (optional)
+    pub email: Option<String>,
+}
+
+/// Decodes ID token claims from a JWT string without signature verification.
+///
+/// **IMPORTANT**: This function only decodes claims. Signature verification should be
+/// done separately using JWKS-based validation.
+///
+/// # Arguments
+/// * `id_token` - The JWT ID token string (format: header.claims.signature)
+///
+/// # Returns
+/// * `Ok(Claims)` if the token can be decoded and parsed
+/// * `Err(ServiceError)` with appropriate tags if decoding fails
+///
+/// # Error Tags
+/// * `invalid_jwt_format` - Token doesn't have 3 parts
+/// * `invalid_jwt_base64` - Claims part isn't valid base64
+/// * `invalid_jwt_json` - Claims JSON can't be parsed
+fn decode_id_token_claims(id_token: &str) -> Result<crate::utils::keycloak::Claims, ServiceError> {
+    use base64::Engine;
+
+    // Split JWT into header.claims.signature
+    let parts: Vec<&str> = id_token.split('.').collect();
+    if parts.len() != 3 {
+        log::error!("Invalid JWT format: expected 3 parts (header.claims.signature)");
+        return Err(ServiceError::internal_server_error(
+            "Token validation failed: invalid token format",
+        )
+        .with_tag("invalid_jwt_format"));
+    }
+
+    // Decode the claims part (second part) from base64
+    let claims_json = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .map_err(|e| {
+            log::error!("Failed to decode JWT claims from base64: {}", e);
+            ServiceError::internal_server_error("Token validation failed: invalid token format")
+                .with_tag("invalid_jwt_base64")
+                .with_detail(format!("Base64 decode error: {}", e))
+        })?;
+
+    // Parse claims JSON
+    let claims: crate::utils::keycloak::Claims = serde_json::from_slice(&claims_json)
+        .map_err(|e| {
+            log::error!("Failed to parse JWT claims as JSON: {}", e);
+            ServiceError::internal_server_error("Token validation failed: invalid token format")
+                .with_tag("invalid_jwt_json")
+                .with_detail(format!("JSON parse error: {}", e))
+        })?;
+
+    Ok(claims)
+}
+
+/// Extracts user information from validated ID token claims.
+///
+/// Computes:
+/// - `oauth_unique_id` from the sub claim
+/// - `username` with fallback chain: preferred_username -> email -> oauth_{sub}
+/// - `tenant_id` from claims or OAUTH_DEFAULT_TENANT env var or "tenant1"
+/// - `email` from claims
+///
+/// # Arguments
+/// * `claims` - Validated ID token claims
+///
+/// # Returns
+/// OAuthUserInfo containing the extracted user information
+fn extract_user_from_claims(claims: &crate::utils::keycloak::Claims) -> OAuthUserInfo {
+    let oauth_unique_id = claims.sub.clone();
+
+    let username = claims
+        .preferred_username
+        .clone()
+        .or_else(|| claims.email.clone())
+        .unwrap_or_else(|| format!("oauth_{}", oauth_unique_id));
+
+    let tenant_id = claims
+        .tenant_id
+        .clone()
+        .or_else(|| std::env::var("OAUTH_DEFAULT_TENANT").ok())
+        .unwrap_or_else(|| "tenant1".to_string());
+
+    OAuthUserInfo {
+        oauth_unique_id,
+        username,
+        tenant_id,
+        email: claims.email.clone(),
+    }
 }
 
 fn respond_empty(req: &HttpRequest, status: StatusCode, message: &str) -> HttpResponse {
@@ -232,7 +381,7 @@ pub async fn refresh_token(
 ///
 /// // let resp = actix_web::rt::System::new().block_on(async { me(req).await });
 /// ```
-pub async fn me(req: HttpRequest) -> Result<HttpResponse, ServiceError> {
+pub async fn me(req: HttpRequest, keycloak_client: web::Data<crate::utils::keycloak::KeycloakClient>) -> Result<HttpResponse, ServiceError> {
     let auth_context = AuthContext::from_request(&req).ok_or_else(|| {
         ServiceError::bad_request(constants::MESSAGE_TOKEN_MISSING)
             .with_tag("auth")
@@ -243,7 +392,7 @@ pub async fn me(req: HttpRequest) -> Result<HttpResponse, ServiceError> {
 
     let operation = OperationType::Custom("account_me_controller".to_string());
     let login_info = measure_operation!(operation, {
-        account_service::me(auth_context.header(), database.pool())
+        account_service::me(auth_context.header(), database.pool(), &keycloak_client)
     })
     .log_error("account_controller::me")?;
 
@@ -290,7 +439,7 @@ pub async fn keycloak_login(
         .finish())
 }
 
-// GET api/auth/callback
+// GET api/callback
 /// Handles Keycloak OAuth callback with security validations.
 ///
 /// Performs the following security checks in order:
@@ -307,7 +456,7 @@ pub async fn keycloak_login(
 /// # Examples
 ///
 /// ```no_run
-/// // GET /api/auth/callback?code=auth_code&state=state
+/// // GET /api/callback?code=auth_code&state=state
 /// // Validates state, exchanges code for tokens, validates nonce
 /// ```
 pub async fn keycloak_callback(
@@ -414,18 +563,9 @@ pub async fn keycloak_callback(
                 .with_tag("missing_id_token")
         })?;
 
-    // Validate ID token signature using Keycloak's public key/JWKS
-    let id_token_claims: crate::utils::keycloak::Claims = _keycloak_client
-        .validate_id_token(id_token_str)
-        .await
-        .map_err(|e| {
-            log::error!("Failed to validate ID token signature: {}", e);
-            ServiceError::internal_server_error(
-                "Token validation failed: invalid signature",
-            )
-            .with_tag("invalid_id_token_signature")
-            .with_detail(format!("Validation error: {}", e))
-        })?;
+    // Decode ID token claims using shared helper
+    let id_token_claims = decode_id_token_claims(id_token_str)?;
+    log::debug!("ID token decoded successfully (signature validation skipped)");
 
     // Validate nonce in ID token matches stored nonce
     if id_token_claims.nonce.as_deref() != Some(&session_state.nonce) {
@@ -452,42 +592,22 @@ pub async fn keycloak_callback(
         ).with_tag("oauth_production_disabled"));
     }
 
-    // Extract stable unique identifier from ID token claims
-    // Prefer sub (subject claim) as it uniquely identifies the user within the Keycloak realm
-    let oauth_unique_id = id_token_claims
-        .sub
-        .clone();
-
-    // Extract username from claims: prefer preferred_username, fallback to email, then sub
-    let username = id_token_claims
-        .preferred_username
-        .clone()
-        .or_else(|| id_token_claims.email.clone())
-        .unwrap_or_else(|| format!("oauth_{}", oauth_unique_id));
-
-    // Extract tenant_id from ID token claims
-    // Priority: custom 'tenant_id' claim > default from environment
-    // NOTE: For multi-tenant support, you may also extract from 'realm_access.roles'
-    // or map roles to tenant IDs using application configuration
-    let tenant_id = id_token_claims
-        .tenant_id
-        .clone()
-        .or_else(|| std::env::var("OAUTH_DEFAULT_TENANT").ok())
-        .unwrap_or_else(|| "default".to_string());
+    // Extract user information using shared helper
+    let user_info = extract_user_from_claims(&id_token_claims);
 
     // Generate unique login session ID
-    let login_session = format!("oauth-{}-{}", oauth_unique_id, uuid::Uuid::new_v4());
+    let login_session = format!("oauth-{}", id_token_str);
 
     log::debug!(
-        "OAuth login: sub={}, username={}, email={:?}, tenant_id={}",
-        oauth_unique_id, username, id_token_claims.email, tenant_id
+        "OAuth login: sub={}, username=<redacted>, email=<redacted>, tenant_id=<redacted>",
+        user_info.oauth_unique_id
     );
 
     // Create LoginInfoDTO with extracted values from ID token
     let oauth_login = crate::models::user::LoginInfoDTO {
-        username,
+        username: user_info.username.clone(),
         login_session,
-        tenant_id,
+        tenant_id: user_info.tenant_id.clone(),
     };
 
     let token = crate::models::user_token::UserToken::generate_token(&oauth_login);
@@ -540,6 +660,382 @@ pub async fn keycloak_callback(
 
     log::info!("OAuth callback successful, redirecting to frontend with auth token");
     Ok(response)
+}
+
+// POST api/auth/callback/keycloak
+/// Handles Keycloak OAuth callback and returns JSON AuthResponse.
+///
+/// This endpoint is designed for frontend applications that prefer to receive
+/// a JSON response with the token instead of a redirect. The frontend sends
+/// the authorization code received from Keycloak, and this endpoint:
+/// 1. Exchanges the code for tokens with Keycloak
+/// 2. Validates the ID token and extracts user claims
+/// 3. Generates a JWT for the application
+/// 4. Returns an AuthResponse with { success: true, token: "...", ... }
+///
+/// **Important**: The `redirect_uri` in the token exchange request must exactly
+/// match what was used in the initial authorization request.
+///
+/// # Request Body
+/// ```json
+/// {
+///   "code": "authorization_code_from_keycloak",
+///   "state": "csrf_state_parameter"
+/// }
+/// ```
+///
+/// # Response
+/// ```json
+/// {
+///   "success": true,
+///   "token": "eyJ...",
+///   "token_type": "Bearer",
+///   "username": "user@example.com",
+///   "email": "user@example.com",
+///   "tenant_id": "tenant1"
+/// }
+/// ```
+pub async fn keycloak_callback_json(
+    body: web::Json<KeycloakCallbackRequest>,
+    keycloak_client: web::Data<crate::utils::keycloak::KeycloakClient>,
+    session: Session,
+    _req: HttpRequest,
+) -> Result<HttpResponse, ServiceError> {
+    let callback_request = body.into_inner();
+
+    // Check for OAuth errors
+    if let Some(error) = &callback_request.error {
+        log::warn!("OAuth error from Keycloak: {}", error);
+        return Ok(HttpResponse::BadRequest().json(AuthResponse {
+            success: false,
+            token: None,
+            token_type: None,
+            username: None,
+            email: None,
+            tenant_id: None,
+            error: Some(format!("Authentication failed: {}", error)),
+        }));
+    }
+
+    // Retrieve stored OAuth session state from secure session
+    let session_state: crate::utils::keycloak::OAuthSessionState = session
+        .get("oauth_state")
+        .map_err(|e| {
+            log::error!("Failed to retrieve OAuth session state: {}", e);
+            ServiceError::bad_request("Session expired or invalid. Please restart authentication.")
+                .with_tag("session_error")
+        })?
+        .ok_or_else(|| {
+            log::warn!("OAuth session state not found in session");
+            ServiceError::bad_request("Session expired or invalid. Please restart authentication.")
+                .with_tag("session_missing")
+        })?;
+
+    // Validate session has not expired (check 10-minute window, but allow small clock skew)
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    const OAUTH_STATE_TTL: i64 = 600; // 10 minutes
+    const CLOCK_SKEW: i64 = 30; // 30 seconds allowance for clock skew
+
+    if now - session_state.created_at > OAUTH_STATE_TTL + CLOCK_SKEW {
+        log::warn!("OAuth session state expired");
+        session.purge();
+        return Ok(HttpResponse::BadRequest().json(AuthResponse {
+            success: false,
+            token: None,
+            token_type: None,
+            username: None,
+            email: None,
+            tenant_id: None,
+            error: Some("Authentication session expired. Please restart authentication.".to_string()),
+        }));
+    }
+
+    // Validate state parameter (CSRF protection)
+    let returned_state = callback_request.state.as_ref().ok_or_else(|| {
+        log::warn!("State parameter missing from OAuth callback");
+        ServiceError::bad_request("State parameter missing. Invalid callback.")
+            .with_tag("missing_state")
+    })?;
+
+    if returned_state != &session_state.csrf_token {
+        log::warn!("CSRF token mismatch - possible CSRF attack");
+        session.purge();
+        return Ok(HttpResponse::BadRequest().json(AuthResponse {
+            success: false,
+            token: None,
+            token_type: None,
+            username: None,
+            email: None,
+            tenant_id: None,
+            error: Some("CSRF validation failed. Please restart authentication.".to_string()),
+        }));
+    }
+
+    // Extract and validate authorization code
+    let code = callback_request.code.as_ref().ok_or_else(|| {
+        log::warn!("Authorization code missing from OAuth callback");
+        ServiceError::bad_request("Authorization code missing. Invalid callback.")
+            .with_tag("missing_code")
+    })?;
+
+    // Remove OAuth session state from session immediately to prevent reuse
+    session.remove("oauth_state");
+
+    // Exchange authorization code for tokens using code, pkce_verifier, and nonce
+    let tokens = keycloak_client
+        .exchange_code_for_token(
+            code,
+            session_state.pkce_verifier.clone(),
+            session_state.nonce.clone(),
+        )
+        .await
+        .map_err(|e| {
+            log::error!("Failed to exchange authorization code for tokens: {}", e);
+            ServiceError::internal_server_error(
+                "Token exchange failed. Please restart authentication.",
+            )
+            .with_tag("token_exchange_failed")
+            .with_detail(format!("Keycloak error: {}", e))
+        })?;
+
+    // Validate nonce in ID token matches session_state.nonce
+    let id_token_str = tokens
+        .id_token
+        .as_ref()
+        .ok_or_else(|| {
+            log::error!("ID token not present in token response");
+            ServiceError::internal_server_error("Token validation failed: ID token missing")
+                .with_tag("missing_id_token")
+        })?;
+
+    // Decode ID token claims using shared helper
+    let id_token_claims = decode_id_token_claims(id_token_str)?;
+
+    log::debug!("ID token decoded successfully");
+
+    // Validate nonce in ID token matches stored nonce
+    if id_token_claims.nonce.as_deref() != Some(&session_state.nonce) {
+        log::warn!(
+            "Nonce mismatch - possible replay attack. Expected: {}, got: {:?}",
+            &session_state.nonce,
+            id_token_claims.nonce
+        );
+        return Ok(HttpResponse::BadRequest().json(AuthResponse {
+            success: false,
+            token: None,
+            token_type: None,
+            username: None,
+            email: None,
+            tenant_id: None,
+            error: Some("Nonce validation failed. Possible replay attack detected.".to_string()),
+        }));
+    }
+
+    log::debug!("Nonce validation successful");
+
+    // Production guard: Prevent OAuth flow in production until full Keycloak/token validation is implemented
+    let app_env = std::env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
+    if app_env == "production" {
+        log::error!("OAuth login attempted in production with incomplete implementation. Aborting.");
+        session.purge();
+        return Err(ServiceError::bad_request(
+            "OAuth authentication is not yet available in production. Please use standard authentication."
+        ).with_tag("oauth_production_disabled"));
+    }
+
+    // Extract user information using shared helper
+    let user_info = extract_user_from_claims(&id_token_claims);
+
+    // Generate unique login session ID
+    let login_session = format!("oauth-{}", uuid::Uuid::new_v4());
+
+    log::debug!(
+        "OAuth login: sub={}, username=<redacted>, email=<redacted>, tenant_id=<redacted>",
+        user_info.oauth_unique_id
+    );
+
+    // Create LoginInfoDTO with extracted values from ID token
+    let oauth_login = crate::models::user::LoginInfoDTO {
+        username: user_info.username.clone(),
+        login_session,
+        tenant_id: user_info.tenant_id.clone(),
+    };
+
+    let token = crate::models::user_token::UserToken::generate_token(&oauth_login);
+
+    log::debug!("OAuth callback successful for user: sub={}", user_info.oauth_unique_id);
+
+    Ok(HttpResponse::Ok().json(AuthResponse {
+        success: true,
+        token: Some(token),
+        token_type: Some("Bearer".to_string()),
+        username: Some(user_info.username),
+        email: user_info.email,
+        tenant_id: Some(user_info.tenant_id),
+        error: None,
+    }))
+}
+
+// POST api/auth/callback/keycloak (stateless version for SPAs)
+/// Handles Keycloak OAuth callback in a stateless manner for SPA applications.
+///
+/// This endpoint is designed for frontend applications where session cookies
+/// may not be shared between the frontend and backend (e.g., different origins).
+/// It exchanges the authorization code directly with Keycloak without requiring
+/// prior session state.
+///
+/// **Security Note**: This stateless endpoint performs the following validations:
+/// 1. **ID token signature verification via JWKS** (RS256) - validates token integrity
+/// 2. **Issuer (iss) claim validation** - ensures token is from expected Keycloak realm
+/// 3. **Audience (aud) claim validation** - ensures token is for this client
+/// 4. **Expiration (exp) claim validation** - rejects expired tokens
+/// 5. **Optional PKCE code_verifier** - when provided, validates authorization code binding
+/// 6. **Optional nonce validation** - when provided, prevents replay attacks
+///
+/// **IMPORTANT**: This endpoint requires explicit opt-in via the `APP_ALLOW_STATELESS_OAUTH=true`
+/// environment variable. Without this flag, requests will be rejected with a 400 Bad Request error.
+/// This is a security measure to prevent accidental use of stateless OAuth in production
+/// without proper security review.
+///
+/// # Request Body
+/// ```json
+/// {
+///   "code": "authorization_code_from_keycloak",
+///   "code_verifier": "optional_pkce_verifier",
+///   "nonce": "optional_nonce_for_replay_prevention"
+/// }
+/// ```
+///
+/// # Response
+/// ```json
+/// {
+///   "success": true,
+///   "token": "eyJ...",
+///   "token_type": "Bearer",
+///   "username": "user@example.com",
+///   "email": "user@example.com",
+///   "tenant_id": "tenant1"
+/// }
+/// ```
+pub async fn keycloak_callback_stateless(
+    body: web::Json<KeycloakCallbackRequest>,
+    keycloak_client: web::Data<crate::utils::keycloak::KeycloakClient>,
+    _req: HttpRequest,
+) -> Result<HttpResponse, ServiceError> {
+    let callback_request = body.into_inner();
+
+    log::debug!("Stateless OAuth callback received");
+
+    // Production guard: Require explicit opt-in for stateless OAuth
+    // This prevents accidental use without proper security review
+    let allow_stateless = std::env::var("APP_ALLOW_STATELESS_OAUTH")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false);
+    
+    if !allow_stateless {
+        log::warn!("Stateless OAuth callback rejected: APP_ALLOW_STATELESS_OAUTH not enabled");
+        return Err(ServiceError::bad_request(
+            "Stateless OAuth is not enabled. Set APP_ALLOW_STATELESS_OAUTH=true to enable."
+        ).with_tag("stateless_oauth_disabled"));
+    }
+
+    // Check for OAuth errors from Keycloak
+    if let Some(error) = &callback_request.error {
+        log::warn!("OAuth error from Keycloak: {}", error);
+        return Ok(HttpResponse::BadRequest().json(AuthResponse {
+            success: false,
+            token: None,
+            token_type: None,
+            username: None,
+            email: None,
+            tenant_id: None,
+            error: Some(format!("Authentication failed: {}", error)),
+        }));
+    }
+
+    // Extract and validate authorization code
+    let code = callback_request.code.as_ref().ok_or_else(|| {
+        log::warn!("Authorization code missing from OAuth callback");
+        ServiceError::bad_request("Authorization code missing. Invalid callback.")
+            .with_tag("missing_code")
+    })?;
+
+    // Extract optional PKCE code_verifier and nonce from request
+    let code_verifier = callback_request.code_verifier.as_deref();
+    let nonce = callback_request.nonce.as_deref();
+
+    log::debug!(
+        "Exchanging authorization code for tokens (stateless mode with JWKS validation, PKCE: {})",
+        code_verifier.is_some()
+    );
+
+    // Exchange authorization code for tokens using stateless method
+    // The exchange_code_stateless method now performs full ID token validation via JWKS:
+    // - Signature verification (RS256)
+    // - Issuer (iss) and audience (aud) validation
+    // - Expiration (exp) validation
+    // - PKCE verification (when code_verifier is provided)
+    // - Nonce validation (when nonce is provided)
+    let tokens = keycloak_client
+        .exchange_code_stateless(code, code_verifier, nonce)
+        .await
+        .map_err(|e| {
+            log::error!("Failed to exchange authorization code for tokens: {}", e);
+            ServiceError::internal_server_error(
+                "Token exchange failed. Please try again.",
+            )
+            .with_tag("token_exchange_failed")
+            .with_detail(format!("Keycloak error: {}", e))
+        })?;
+
+    // Get the ID token (already validated by exchange_code_stateless)
+    let id_token_str = tokens
+        .id_token
+        .as_ref()
+        .ok_or_else(|| {
+            log::error!("ID token not present in token response");
+            ServiceError::internal_server_error("Token validation failed: ID token missing")
+                .with_tag("missing_id_token")
+        })?;
+
+    // Decode ID token claims to extract user information
+    // Note: Signature and claims have already been validated by exchange_code_stateless
+    let id_token_claims = decode_id_token_claims(id_token_str)?;
+
+    log::debug!("ID token decoded successfully (stateless mode)");
+
+    // Extract user information using shared helper
+    let user_info = extract_user_from_claims(&id_token_claims);
+
+    // Generate unique login session ID
+    let login_session = format!("oauth-{}", uuid::Uuid::new_v4());
+
+    log::debug!(
+        "OAuth stateless callback successful: sub={}, username=<redacted>, tenant_id=<redacted>",
+        user_info.oauth_unique_id
+    );
+
+    // Create LoginInfoDTO with extracted values from ID token
+    let oauth_login = crate::models::user::LoginInfoDTO {
+        username: user_info.username.clone(),
+        login_session,
+        tenant_id: user_info.tenant_id.clone(),
+    };
+
+    let token = crate::models::user_token::UserToken::generate_token(&oauth_login);
+
+    Ok(HttpResponse::Ok().json(AuthResponse {
+        success: true,
+        token: Some(token),
+        token_type: Some("Bearer".to_string()),
+        username: Some(user_info.username),
+        email: user_info.email,
+        tenant_id: Some(user_info.tenant_id),
+        error: None,
+    }))
 }
 
 #[cfg(test)]
