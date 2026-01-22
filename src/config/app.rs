@@ -203,6 +203,10 @@ fn configure_auth_routes(cfg: &mut web::ServiceConfig) {
             cfg.service(web::resource("/login/keycloak").route(web::get().to(account_controller::keycloak_login)));
         })
         .add_route(|cfg| {
+            // Stateless callback for SPA applications (doesn't require session cookies)
+            cfg.service(web::resource("/callback/keycloak").route(web::post().to(account_controller::keycloak_callback_stateless)));
+        })
+        .add_route(|cfg| {
             cfg.service(web::resource("/logout").route(web::post().to(account_controller::logout)));
         })
         .add_route(|cfg| {

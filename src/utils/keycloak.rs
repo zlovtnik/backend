@@ -7,11 +7,22 @@ use reqwest::Client as ReqwestClient;
 use reqwest::blocking::Client as BlockingClient;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::RwLock;
+use std::time::{Duration, Instant};
 use url::Url;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+use once_cell::sync::Lazy;
 
-#[derive(Deserialize)]
+/// TTL-based JWKS cache to avoid fetching on every validation.
+/// Key: JWKS URL, Value: (cached_at timestamp, Jwks data)
+static JWKS_CACHE: Lazy<RwLock<HashMap<String, (Instant, Jwks)>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// JWKS cache TTL: 10 minutes (Keycloak keys rotate infrequently)
+const JWKS_CACHE_TTL: Duration = Duration::from_secs(600);
+
+#[derive(Clone, Deserialize)]
 struct Jwk {
     kid: String,
     kty: String,
@@ -19,7 +30,7 @@ struct Jwk {
     e: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Jwks {
     keys: Vec<Jwk>,
 }
@@ -169,67 +180,84 @@ fn build_metadata_url(
     Ok(base_url)
 }
 
+/// Fetches OpenID Connect provider metadata from Keycloak's well-known endpoint.
+///
+/// This helper creates an HTTP client with the standard timeouts, fetches the metadata,
+/// validates the response status, and parses the JSON response.
+///
+/// # Arguments
+/// * `issuer_url` - The Keycloak realm issuer URL
+/// * `caller` - Name of the calling function for log context
+///
+/// # Returns
+/// The parsed CoreProviderMetadata on success
+///
+/// # Errors
+/// Returns an error if the HTTP request fails, returns a non-success status, or the response cannot be parsed
+async fn fetch_provider_metadata(
+    issuer_url: &str,
+    caller: &str,
+) -> Result<CoreProviderMetadata, Box<dyn std::error::Error + Send + Sync>> {
+    let http_client = ReqwestClient::builder()
+        .timeout(KEYCLOAK_TIMEOUT)
+        .connect_timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+    let metadata_url = build_metadata_url(issuer_url)?;
+
+    log::debug!("{}: Fetching metadata from {}", caller, metadata_url);
+    let response = http_client.get(&metadata_url).send().await.map_err(|e| {
+        log::error!("{}: Failed to fetch metadata: {}", caller, e);
+        Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+    })?;
+
+    let status = response.status();
+    let body_text = response.text().await.unwrap_or_default();
+
+    if !status.is_success() {
+        let error_msg = if body_text.chars().count() > 200 {
+            format!("{}...", body_text.chars().take(200).collect::<String>())
+        } else {
+            body_text.clone()
+        };
+        log::error!(
+            "{}: Metadata request failed with status {}: {}",
+            caller,
+            status,
+            error_msg
+        );
+        return Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Keycloak metadata request failed: {}", status),
+        )) as Box<dyn std::error::Error + Send + Sync>);
+    }
+
+    log::trace!(
+        "{}: Metadata response (truncated): {}",
+        caller,
+        if body_text.chars().count() > 200 {
+            format!("{}...", body_text.chars().take(200).collect::<String>())
+        } else {
+            body_text.clone()
+        }
+    );
+
+    let provider_metadata: CoreProviderMetadata =
+        serde_json::from_str(&body_text).map_err(|e| {
+            log::error!("{}: Failed to parse metadata as JSON: {}", caller, e);
+            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+        })?;
+
+    Ok(provider_metadata)
+}
+
 impl KeycloakClient {
     pub async fn new(
         config: KeycloakConfig,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         // Validate configuration by attempting discovery
-        let http_client = ReqwestClient::builder()
-            .timeout(KEYCLOAK_TIMEOUT)
-            .connect_timeout(Duration::from_secs(5))
-            .build()
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-
-        // Construct metadata URL robustly using URL::join
-        let metadata_url = build_metadata_url(&config.issuer_url)?;
-
-        log::debug!("Keycloak: Fetching metadata from {}", metadata_url);
-        let response = http_client.get(&metadata_url).send().await.map_err(|e| {
-            log::error!("Keycloak: Failed to fetch metadata: {}", e);
-            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
-        })?;
-
-        let status = response.status();
-        log::debug!("Keycloak: Metadata response status: {}", status);
-
-        let body_text = response.text().await.map_err(|e| {
-            log::error!("Keycloak: Failed to read metadata response body: {}", e);
-            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
-        })?;
-
-        // Check HTTP status before attempting JSON parse
-        if !status.is_success() {
-            let error_msg = if body_text.len() > 200 {
-                format!("{}...", &body_text[..200])
-            } else {
-                body_text.clone()
-            };
-            log::error!(
-                "Keycloak: Metadata request failed with status {}: {}",
-                status,
-                error_msg
-            );
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Keycloak metadata request failed: {}", status),
-            )) as Box<dyn std::error::Error + Send + Sync>);
-        }
-
-        // Log only a truncated preview for security (avoid exposing internal URLs/config)
-        log::trace!(
-            "Keycloak: Metadata response (truncated): {}",
-            if body_text.len() > 200 {
-                format!("{}...", &body_text[..200])
-            } else {
-                body_text.clone()
-            }
-        );
-
-        let _provider_metadata: CoreProviderMetadata =
-            serde_json::from_str(&body_text).map_err(|e| {
-                log::error!("Keycloak: Failed to parse metadata response as JSON: {}", e);
-                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
-            })?;
+        let _provider_metadata = fetch_provider_metadata(&config.issuer_url, "KeycloakClient::new").await?;
 
         log::info!(
             "Keycloak: Successfully initialized with issuer: {}",
@@ -246,25 +274,7 @@ impl KeycloakClient {
 
     #[allow(dead_code)]
     async fn validate_configuration(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Validate configuration by attempting discovery
-        let http_client = ReqwestClient::builder()
-            .timeout(KEYCLOAK_TIMEOUT)
-            .connect_timeout(Duration::from_secs(5))
-            .build()
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-        let metadata_url = build_metadata_url(&self.issuer_url)?;
-
-        let response = http_client
-            .get(metadata_url)
-            .send()
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-
-        let _provider_metadata: CoreProviderMetadata = response
-            .json()
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-
+        let _provider_metadata = fetch_provider_metadata(&self.issuer_url, "validate_configuration").await?;
         Ok(())
     }
 
@@ -281,61 +291,7 @@ impl KeycloakClient {
     pub async fn get_authorization_url(
         &self,
     ) -> Result<(String, OAuthSessionState), Box<dyn std::error::Error + Send + Sync>> {
-        // Fetch provider metadata
-        let http_client = ReqwestClient::builder()
-            .timeout(KEYCLOAK_TIMEOUT)
-            .connect_timeout(Duration::from_secs(5))
-            .build()
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-
-        // Construct metadata URL robustly using URL::join (same as initialization)
-        let metadata_url = build_metadata_url(&self.issuer_url)?;
-
-        let response = http_client
-            .get(metadata_url)
-            .send()
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-
-        let status = response.status();
-        let body_text = response.text().await.unwrap_or_default();
-
-        // Check HTTP status before attempting JSON parse
-        if !status.is_success() {
-            let error_msg = if body_text.len() > 200 {
-                format!("{}...", &body_text[..200])
-            } else {
-                body_text.clone()
-            };
-            log::error!(
-                "get_authorization_url: Metadata request failed with status {}: {}",
-                status,
-                error_msg
-            );
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Keycloak metadata request failed: {}", status),
-            )) as Box<dyn std::error::Error + Send + Sync>);
-        }
-
-        // Log only a truncated preview for security (avoid exposing internal URLs/config)
-        log::trace!(
-            "get_authorization_url: Metadata response (truncated): {}",
-            if body_text.len() > 200 {
-                format!("{}...", &body_text[..200])
-            } else {
-                body_text.clone()
-            }
-        );
-
-        let provider_metadata: CoreProviderMetadata =
-            serde_json::from_str(&body_text).map_err(|e| {
-                log::error!(
-                    "get_authorization_url: Failed to parse metadata as JSON: {}",
-                    e
-                );
-                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
-            })?;
+        let provider_metadata = fetch_provider_metadata(&self.issuer_url, "get_authorization_url").await?;
 
         // Parse the redirect_url into RedirectUrl type required by OpenID Connect
         let redirect_url = RedirectUrl::new(self.redirect_url.clone())
@@ -403,43 +359,7 @@ impl KeycloakClient {
         use openidconnect::{AuthorizationCode, PkceCodeVerifier};
 
         // Fetch provider metadata
-        let http_client = ReqwestClient::builder()
-            .timeout(KEYCLOAK_TIMEOUT)
-            .connect_timeout(Duration::from_secs(5))
-            .build()
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-
-        // Construct metadata URL robustly using URL::join
-        let metadata_url = build_metadata_url(&self.issuer_url)?;
-
-        let response = http_client.get(&metadata_url).send().await.map_err(|e| {
-            log::error!("exchange_code_for_token: Failed to fetch metadata: {}", e);
-            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
-        })?;
-
-        let status = response.status();
-        let body_text = response.text().await.unwrap_or_default();
-
-        if !status.is_success() {
-            log::error!(
-                "exchange_code_for_token: Metadata request failed with status {}: {}",
-                status,
-                body_text
-            );
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Keycloak metadata request failed: {}", status),
-            )) as Box<dyn std::error::Error + Send + Sync>);
-        }
-
-        let provider_metadata: CoreProviderMetadata =
-            serde_json::from_str(&body_text).map_err(|e| {
-                log::error!(
-                    "exchange_code_for_token: Failed to parse metadata as JSON: {}",
-                    e
-                );
-                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
-            })?;
+        let provider_metadata = fetch_provider_metadata(&self.issuer_url, "exchange_code_for_token").await?;
 
         // Parse the redirect_url into RedirectUrl type required by OpenID Connect
         let redirect_url = RedirectUrl::new(self.redirect_url.clone())
@@ -454,6 +374,13 @@ impl KeycloakClient {
             )),
         )
         .set_redirect_uri(redirect_url);
+
+        // Create an HTTP client for token exchange
+        let http_client = ReqwestClient::builder()
+            .timeout(KEYCLOAK_TIMEOUT)
+            .connect_timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
         // Exchange authorization code for tokens using PKCE verifier
         let token_response = client
@@ -515,6 +442,350 @@ impl KeycloakClient {
             id_token: Some(id_token_jwt),
             refresh_token: refresh_token_opt,
         })
+    }
+
+    /// Exchange authorization code for tokens in stateless mode with mandatory security validation.
+    ///
+    /// This method exchanges the authorization code and **enforces token integrity** by either:
+    /// 1. Using PKCE code_verifier (when provided) - validates the authorization code binding
+    /// 2. Performing full ID token JWT validation using Keycloak's JWKS (always applied)
+    ///
+    /// **Security guarantees**:
+    /// - ID token signature is validated against Keycloak's JWKS (RS256)
+    /// - Issuer (iss) and audience (aud) claims are verified
+    /// - Expiration (exp) claim is validated
+    /// - Nonce is validated if provided (for replay attack prevention)
+    /// - PKCE is validated when code_verifier is provided (for authorization code binding)
+    ///
+    /// # Arguments
+    /// * `code` - Authorization code from OAuth callback
+    /// * `code_verifier` - Optional PKCE code_verifier. When provided, validates the code binding.
+    ///                     Strongly recommended for public clients (SPAs).
+    /// * `expected_nonce` - Optional nonce to validate in the ID token. If provided and the
+    ///                      ID token contains a nonce claim, they must match.
+    ///
+    /// # Returns
+    /// TokenResponse containing validated id_token (with claims), access_token, and refresh_token
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - Token exchange fails
+    /// - ID token JWT signature validation fails
+    /// - Issuer or audience claims don't match configuration
+    /// - Token is expired
+    /// - Nonce validation fails (when expected_nonce is provided)
+    /// - PKCE validation fails (when code_verifier is provided but doesn't match)
+    pub async fn exchange_code_stateless(
+        &self,
+        code: &str,
+        code_verifier: Option<&str>,
+        expected_nonce: Option<&str>,
+    ) -> Result<TokenResponse, Box<dyn std::error::Error + Send + Sync>> {
+        use openidconnect::{AuthorizationCode, PkceCodeVerifier};
+
+        // Fetch provider metadata
+        let provider_metadata = fetch_provider_metadata(&self.issuer_url, "exchange_code_stateless").await?;
+
+        // Parse the redirect_url into RedirectUrl type
+        let redirect_url = RedirectUrl::new(self.redirect_url.clone())
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+        // Create client from metadata
+        let client = CoreClient::from_provider_metadata(
+            provider_metadata,
+            ClientId::new(self.client_id.clone()),
+            Some(ClientSecret::new(
+                self.client_secret.expose_secret().to_string(),
+            )),
+        )
+        .set_redirect_uri(redirect_url);
+
+        // Create an HTTP client for token exchange
+        let http_client = ReqwestClient::builder()
+            .timeout(KEYCLOAK_TIMEOUT)
+            .connect_timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+        // Build token exchange request
+        log::debug!(
+            "exchange_code_stateless: Exchanging code for tokens (PKCE: {})",
+            code_verifier.is_some()
+        );
+        
+        let mut exchange_request = client.exchange_code(AuthorizationCode::new(code.to_string()))?;
+        
+        // Apply PKCE code_verifier if provided
+        if let Some(verifier) = code_verifier {
+            log::debug!("exchange_code_stateless: Applying PKCE code_verifier");
+            exchange_request = exchange_request.set_pkce_verifier(PkceCodeVerifier::new(verifier.to_string()));
+        }
+
+        let token_response = exchange_request
+            .request_async(&http_client)
+            .await
+            .map_err(|e| {
+                log::error!("exchange_code_stateless: Token exchange failed: {}", e);
+                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+            })?;
+
+        log::debug!("exchange_code_stateless: Successfully exchanged code for tokens");
+
+        // Extract ID token
+        let id_token_jwt = token_response
+            .extra_fields()
+            .id_token()
+            .ok_or_else(|| {
+                log::error!("exchange_code_stateless: ID token missing from token response");
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "ID token not present in token response",
+                )) as Box<dyn std::error::Error + Send + Sync>
+            })?
+            .to_string();
+
+        // **MANDATORY**: Validate ID token signature and claims using JWKS
+        // This ensures token integrity even when PKCE is not used
+        log::debug!("exchange_code_stateless: Validating ID token signature via JWKS");
+        let validated_claims = self.validate_id_token_internal(&id_token_jwt).await.map_err(|e| {
+            log::error!("exchange_code_stateless: ID token validation failed: {}", e);
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("ID token validation failed: {}", e),
+            )) as Box<dyn std::error::Error + Send + Sync>
+        })?;
+
+        // Validate nonce if expected_nonce is provided
+        if let Some(expected) = expected_nonce {
+            match &validated_claims.nonce {
+                Some(token_nonce) => {
+                    if token_nonce != expected {
+                        log::warn!(
+                            "exchange_code_stateless: Nonce mismatch - expected '{}', got '{}'",
+                            expected,
+                            token_nonce
+                        );
+                        return Err(Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!(
+                                "Nonce mismatch: token contains '{}' but expected '{}' (possible replay attack)",
+                                token_nonce, expected
+                            ),
+                        )) as Box<dyn std::error::Error + Send + Sync>);
+                    }
+                    log::debug!("exchange_code_stateless: Nonce validation successful");
+                }
+                None => {
+                    log::warn!("exchange_code_stateless: Expected nonce but ID token has no nonce claim");
+                    return Err(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Expected nonce validation but ID token contains no nonce claim",
+                    )) as Box<dyn std::error::Error + Send + Sync>);
+                }
+            }
+        }
+
+        log::info!(
+            "exchange_code_stateless: Token exchange and validation successful for sub={}",
+            validated_claims.sub
+        );
+
+        // Extract access token
+        let access_token_str = token_response.access_token().secret().to_string();
+
+        // Extract refresh token if present
+        let refresh_token_opt = token_response
+            .refresh_token()
+            .map(|token| token.secret().to_string());
+
+        Ok(TokenResponse {
+            access_token: access_token_str,
+            id_token: Some(id_token_jwt),
+            refresh_token: refresh_token_opt,
+        })
+    }
+
+    /// Fetch JWKS with TTL-based caching and stale fallback.
+    ///
+    /// This method:
+    /// 1. Checks the cache for a valid (non-expired) JWKS
+    /// 2. If expired or missing, fetches fresh JWKS from Keycloak
+    /// 3. On fetch failure, returns stale cached JWKS if available (fallback)
+    /// 4. Only errors if both fetch fails AND no cached JWKS exists
+    async fn get_cached_jwks(
+        &self,
+        jwks_url: &str,
+    ) -> Result<Jwks, Box<dyn std::error::Error + Send + Sync>> {
+        // Check cache first
+        {
+            let cache = JWKS_CACHE.read().map_err(|e| {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("JWKS cache read lock poisoned: {}", e),
+                )) as Box<dyn std::error::Error + Send + Sync>
+            })?;
+
+            if let Some((cached_at, jwks)) = cache.get(jwks_url) {
+                if cached_at.elapsed() < JWKS_CACHE_TTL {
+                    log::debug!("JWKS cache hit for {} (age: {:?})", jwks_url, cached_at.elapsed());
+                    return Ok(jwks.clone());
+                }
+                log::debug!("JWKS cache expired for {} (age: {:?})", jwks_url, cached_at.elapsed());
+            }
+        }
+
+        // Fetch fresh JWKS
+        let http_client = ReqwestClient::builder()
+            .timeout(KEYCLOAK_TIMEOUT)
+            .build()
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+        let fetch_result: Result<Jwks, Box<dyn std::error::Error + Send + Sync>> = async {
+            let response = http_client.get(jwks_url).send().await.map_err(|e| {
+                log::error!("Failed to fetch JWKS from {}: {}", jwks_url, e);
+                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+            })?;
+
+            let jwks: Jwks = response.json().await.map_err(|e| {
+                log::error!("Failed to parse JWKS response: {}", e);
+                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+            })?;
+
+            Ok(jwks)
+        }
+        .await;
+
+        match fetch_result {
+            Ok(jwks) => {
+                // Update cache with fresh JWKS
+                {
+                    let mut cache = JWKS_CACHE.write().map_err(|e| {
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("JWKS cache write lock poisoned: {}", e),
+                        )) as Box<dyn std::error::Error + Send + Sync>
+                    })?;
+                    cache.insert(jwks_url.to_string(), (Instant::now(), jwks.clone()));
+                }
+                log::debug!("JWKS cache updated for {}", jwks_url);
+                Ok(jwks)
+            }
+            Err(fetch_error) => {
+                // Fallback: try to use stale cached JWKS
+                let cache = JWKS_CACHE.read().map_err(|e| {
+                    Box::new(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("JWKS cache read lock poisoned: {}", e),
+                    )) as Box<dyn std::error::Error + Send + Sync>
+                })?;
+
+                if let Some((cached_at, stale_jwks)) = cache.get(jwks_url) {
+                    log::warn!(
+                        "JWKS fetch failed, using stale cache (age: {:?}): {}",
+                        cached_at.elapsed(),
+                        fetch_error
+                    );
+                    return Ok(stale_jwks.clone());
+                }
+
+                // No cache available, propagate error
+                Err(fetch_error)
+            }
+        }
+    }
+
+    /// Internal helper for ID token validation (reused by exchange_code_stateless).
+    ///
+    /// This performs full JWKS-based signature and claims validation.
+    async fn validate_id_token_internal(
+        &self,
+        id_token: &str,
+    ) -> Result<Claims, Box<dyn std::error::Error + Send + Sync>> {
+        // Decode JWT header to get key ID
+        let header = decode_header(id_token).map_err(|e| {
+            log::error!("Failed to decode JWT header: {}", e);
+            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+        })?;
+
+        let kid = header.kid.ok_or_else(|| {
+            log::error!("JWT header missing 'kid' (key ID) claim");
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "JWT header missing 'kid' claim",
+            )) as Box<dyn std::error::Error + Send + Sync>
+        })?;
+
+        // Fetch JWKS from Keycloak (with TTL-based caching)
+        let jwks_url = format!(
+            "{}/protocol/openid-connect/certs",
+            self.issuer_url.trim_end_matches('/')
+        );
+
+        let jwks = self.get_cached_jwks(&jwks_url).await?;
+
+        // Find the matching key
+        let jwk = jwks
+            .keys
+            .into_iter()
+            .find(|k| k.kid == kid)
+            .ok_or_else(|| {
+                log::error!("No JWK found matching kid: {}", kid);
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("No JWK found for key ID: {}", kid),
+                )) as Box<dyn std::error::Error + Send + Sync>
+            })?;
+
+        // Validate JWK is RSA type and has required components
+        if jwk.kty != "RSA" {
+            let error_msg = format!(
+                "JWK with kid {} has unsupported kty {}, expected RSA",
+                kid, jwk.kty
+            );
+            log::error!("{}", error_msg);
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                error_msg,
+            )) as Box<dyn std::error::Error + Send + Sync>);
+        }
+        if jwk.n.is_empty() || jwk.e.is_empty() {
+            let error_msg = format!(
+                "JWK with kid {} is missing required RSA components (n or e)",
+                kid
+            );
+            log::error!("{}", error_msg);
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                error_msg,
+            )) as Box<dyn std::error::Error + Send + Sync>);
+        }
+
+        // Convert JWK to DecodingKey
+        let decoding_key = DecodingKey::from_rsa_components(&jwk.n, &jwk.e).map_err(|e| {
+            log::error!("Failed to create decoding key from JWK: {}", e);
+            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+        })?;
+
+        // Create validation settings
+        let mut validation = Validation::new(Algorithm::RS256);
+        validation.set_issuer(&[&self.issuer_url]);
+        validation.set_audience(&[&self.client_id]);
+
+        // Decode and validate the token
+        let token_data = decode::<Claims>(id_token, &decoding_key, &validation).map_err(|e| {
+            log::error!("JWT signature validation failed: {}", e);
+            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+        })?;
+
+        // Defense-in-depth: These checks duplicate what jsonwebtoken::Validation already
+        // performs during decode(). They are intentionally retained as a second layer of
+        // verification in case Validation settings are misconfigured or the library behavior
+        // changes in a future version. Remove if you prefer DRY over defense-in-depth.
+        let claims = token_data.claims;
+        claims.validate_issuer(&self.issuer_url)?;
+        claims.validate_audience(&self.client_id)?;
+
+        Ok(claims)
     }
 
     /// Validate JWT token signature and claims using RS256 and JWKS.
@@ -579,91 +850,7 @@ impl KeycloakClient {
         &self,
         id_token: &str,
     ) -> Result<Claims, Box<dyn std::error::Error + Send + Sync>> {
-        // Decode JWT header to get key ID
-        let header = decode_header(id_token).map_err(|e| {
-            log::error!("Failed to decode JWT header: {}", e);
-            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
-        })?;
-
-        let kid = header.kid.ok_or_else(|| {
-            log::error!("JWT header missing 'kid' (key ID) claim");
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "JWT header missing 'kid' claim",
-            )) as Box<dyn std::error::Error + Send + Sync>
-        })?;
-
-        // Fetch JWKS from Keycloak
-        let jwks_url = format!("{}/protocol/openid-connect/certs", self.issuer_url.trim_end_matches('/'));
-        let http_client = ReqwestClient::builder()
-            .timeout(KEYCLOAK_TIMEOUT)
-            .build()
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-
-        let jwks_response = http_client
-            .get(&jwks_url)
-            .send()
-            .await
-            .map_err(|e| {
-                log::error!("Failed to fetch JWKS from {}: {}", jwks_url, e);
-                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
-            })?;
-
-        let jwks: Jwks = jwks_response.json().await.map_err(|e| {
-            log::error!("Failed to parse JWKS response: {}", e);
-            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
-        })?;
-
-        // Find the matching key
-        let jwk = jwks.keys.into_iter().find(|k| k.kid == kid).ok_or_else(|| {
-            log::error!("No JWK found matching kid: {}", kid);
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("No JWK found for key ID: {}", kid),
-            )) as Box<dyn std::error::Error + Send + Sync>
-        })?;
-
-        // Validate JWK is RSA type and has required components
-        if jwk.kty != "RSA" {
-            let error_msg = format!("JWK with kid {} has unsupported kty {}, expected RSA", kid, jwk.kty);
-            log::error!("{}", error_msg);
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                error_msg,
-            )) as Box<dyn std::error::Error + Send + Sync>);
-        }
-        if jwk.n.is_empty() || jwk.e.is_empty() {
-            let error_msg = format!("JWK with kid {} is missing required RSA components (n or e)", kid);
-            log::error!("{}", error_msg);
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                error_msg,
-            )) as Box<dyn std::error::Error + Send + Sync>);
-        }
-
-        // Convert JWK to DecodingKey
-        let decoding_key = DecodingKey::from_rsa_components(&jwk.n, &jwk.e).map_err(|e| {
-            log::error!("Failed to create decoding key from JWK: {}", e);
-            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
-        })?;
-
-        // Create validation settings
-        let mut validation = Validation::new(Algorithm::RS256);
-        validation.set_issuer(&[&self.issuer_url]);
-        validation.set_audience(&[&self.client_id]);
-
-        // Decode and validate the token
-        let token_data = decode::<Claims>(id_token, &decoding_key, &validation).map_err(|e| {
-            log::error!("JWT signature validation failed: {}", e);
-            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
-        })?;
-
-        // Additional claim validation (defense-in-depth: validate claims again after decode
-        // to ensure library validation was applied correctly and catch any edge cases)
-        let claims = token_data.claims;
-        claims.validate_issuer(&self.issuer_url)?;
-        claims.validate_audience(&self.client_id)?;
-
+        let claims = self.validate_id_token_internal(id_token).await?;
         log::debug!("ID token signature validation successful");
         Ok(claims)
     }
