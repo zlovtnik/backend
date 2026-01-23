@@ -463,6 +463,20 @@ impl KeycloakClient {
     ///                     Strongly recommended for public clients (SPAs).
     /// * `expected_nonce` - Optional nonce to validate in the ID token. If provided and the
     ///                      ID token contains a nonce claim, they must match.
+    /// * `redirect_uri_override` - Optional redirect URI to use instead of the configured default.
+    ///                             **SECURITY WARNING**: This parameter must only be used with trusted values.
+    ///                             Callers receiving this value from user input MUST validate it against an
+    ///                             allowlist of permitted redirect URIs before passing it here.
+    ///                             Keycloak performs server-side validation of the redirect URI (it must match
+    ///                             one of the Valid Redirect URIs configured in the client settings), but this
+    ///                             does not prevent open redirect vulnerabilities if arbitrary URIs are accepted.
+    ///                             Pass `None` to use the configured `KEYCLOAK_REDIRECT_URL` environment variable.
+    ///
+    /// # API Change Notice
+    /// This function signature was extended to include `redirect_uri_override`. Existing callers should:
+    /// - Pass `None` to maintain previous behavior (uses configured redirect URL)
+    /// - Pass a validated override only when the frontend provides a different redirect URI
+    ///   (common in stateless SPA flows where the frontend initiates OAuth with its own callback URL)
     ///
     /// # Returns
     /// TokenResponse containing validated id_token (with claims), access_token, and refresh_token
@@ -480,14 +494,20 @@ impl KeycloakClient {
         code: &str,
         code_verifier: Option<&str>,
         expected_nonce: Option<&str>,
+        redirect_uri_override: Option<&str>,
     ) -> Result<TokenResponse, Box<dyn std::error::Error + Send + Sync>> {
         use openidconnect::{AuthorizationCode, PkceCodeVerifier};
 
         // Fetch provider metadata
         let provider_metadata = fetch_provider_metadata(&self.issuer_url, "exchange_code_stateless").await?;
 
+        // Use provided redirect_uri or fall back to configured default
+        let redirect_uri = redirect_uri_override
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| self.redirect_url.clone());
+        
         // Parse the redirect_url into RedirectUrl type
-        let redirect_url = RedirectUrl::new(self.redirect_url.clone())
+        let redirect_url = RedirectUrl::new(redirect_uri)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
         // Create client from metadata

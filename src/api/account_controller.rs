@@ -83,6 +83,10 @@ pub struct KeycloakCallbackRequest {
     /// If provided, it will be validated against the nonce in the ID token
     #[serde(default)]
     pub nonce: Option<String>,
+    /// Redirect URI used when initiating the OAuth flow (required for stateless flow)
+    /// Must match exactly what was used in the authorization request to Keycloak
+    #[serde(default)]
+    pub redirect_uri: Option<String>,
 }
 
 /// User information extracted from OAuth ID token claims
@@ -985,10 +989,12 @@ pub async fn keycloak_callback_stateless(
     // Extract optional PKCE code_verifier and nonce from request
     let code_verifier = callback_request.code_verifier.as_deref();
     let nonce = callback_request.nonce.as_deref();
+    let redirect_uri = callback_request.redirect_uri.as_deref();
 
     log::debug!(
-        "Exchanging authorization code for tokens (stateless mode with JWKS validation, PKCE: {})",
-        code_verifier.is_some()
+        "Exchanging authorization code for tokens (stateless mode with JWKS validation, PKCE: {}, redirect_uri: {:?})",
+        code_verifier.is_some(),
+        redirect_uri
     );
 
     // Exchange authorization code for tokens using stateless method
@@ -999,7 +1005,7 @@ pub async fn keycloak_callback_stateless(
     // - PKCE verification (when code_verifier is provided)
     // - Nonce validation (when nonce is provided)
     let tokens = keycloak_client
-        .exchange_code_stateless(code, code_verifier, nonce)
+        .exchange_code_stateless(code, code_verifier, nonce, redirect_uri)
         .await
         .map_err(|e| {
             log::error!("Failed to exchange authorization code for tokens: {}", e);
