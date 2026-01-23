@@ -7,10 +7,8 @@ use actix_session::storage::CookieSessionStore;
 use actix_session::SessionMiddleware;
 use actix_web::cookie::time::Duration;
 use actix_web::cookie::SameSite;
-use actix_web::dev::Service;
 use actix_web::web;
 use actix_web::{http, App, HttpServer};
-use futures::FutureExt;
 use rcs::config;
 use rcs::utils::ws_logger::{init_websocket_logging, LogBroadcaster};
 use std::sync::Arc;
@@ -115,14 +113,22 @@ async fn main() -> io::Result<()> {
         )
     })?;
     
-    // Try to initialize Redis client - if it fails, continue without cache
-    let redis_client: Option<config::cache::Pool> = redis_url
-        .as_ref()
-        .and_then(|url| config::cache::try_init_redis_client(url));
-    
-    if redis_client.is_none() {
-        log::warn!("Redis is not available. Cache features will be disabled.");
-    }
+    // Try to initialize Redis client - distinguish between "not configured" and "connection failed"
+    let redis_client: Option<config::cache::Pool> = match &redis_url {
+        None => {
+            log::warn!("Redis not configured (REDIS_URL missing). Cache features will be disabled.");
+            None
+        }
+        Some(url) => {
+            match config::cache::try_init_redis_client(url) {
+                Some(pool) => Some(pool),
+                None => {
+                    log::warn!("Redis connection failed for configured URL. Cache features will be disabled.");
+                    None
+                }
+            }
+        }
+    };
 
     // Initialize Keycloak client
     let keycloak_config = rcs::utils::keycloak::KeycloakConfig {
@@ -263,7 +269,6 @@ async fn main() -> io::Result<()> {
         };
 
         let app = App::new()
-            .wrap(cors)
             // Configure secure session middleware for OAuth state storage
             // Uses HttpOnly, Secure (HTTPS only in production), SameSite=Strict cookies
             .wrap(
@@ -292,8 +297,10 @@ async fn main() -> io::Result<()> {
         #[cfg(feature = "functional")]
         let app = app.wrap(rcs::middleware::auth_middleware::functional_auth::FunctionalAuthentication::with_registry(pure_registry.clone()));
 
-        app.wrap_fn(|req, srv| srv.call(req).map(|res| res))
-            .configure(config::app::config_services)
+        // CORS must be applied LAST so it wraps all other middleware and executes FIRST
+        // This ensures CORS headers are added to ALL responses including auth errors (401/403)
+        app.configure(config::app::config_services)
+            .wrap(cors)
     })
     .bind(&app_url)?
     .run()
