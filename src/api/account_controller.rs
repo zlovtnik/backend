@@ -86,6 +86,7 @@ pub struct KeycloakCallbackRequest {
 }
 
 /// User information extracted from OAuth ID token claims
+#[derive(Clone, Debug, PartialEq)]
 pub struct OAuthUserInfo {
     /// OAuth unique identifier (sub claim)
     pub oauth_unique_id: String,
@@ -587,9 +588,15 @@ pub async fn keycloak_callback(
     if app_env == "production" {
         log::error!("OAuth login attempted in production with incomplete implementation. Aborting.");
         session.purge();
-        return Err(ServiceError::bad_request(
-            "OAuth authentication is not yet available in production. Please use standard authentication."
-        ).with_tag("oauth_production_disabled"));
+        return Ok(HttpResponse::BadRequest().json(AuthResponse {
+            success: false,
+            token: None,
+            token_type: None,
+            username: None,
+            email: None,
+            tenant_id: None,
+            error: Some("OAuth authentication is not yet available in production. Please use standard authentication.".to_string()),
+        }));
     }
 
     // Extract user information using shared helper
@@ -841,9 +848,15 @@ pub async fn keycloak_callback_json(
     if app_env == "production" {
         log::error!("OAuth login attempted in production with incomplete implementation. Aborting.");
         session.purge();
-        return Err(ServiceError::bad_request(
-            "OAuth authentication is not yet available in production. Please use standard authentication."
-        ).with_tag("oauth_production_disabled"));
+        return Ok(HttpResponse::BadRequest().json(AuthResponse {
+            success: false,
+            token: None,
+            token_type: None,
+            username: None,
+            email: None,
+            tenant_id: None,
+            error: Some("OAuth authentication is not yet available in production. Please use standard authentication.".to_string()),
+        }));
     }
 
     // Extract user information using shared helper
@@ -937,9 +950,15 @@ pub async fn keycloak_callback_stateless(
     
     if !allow_stateless {
         log::warn!("Stateless OAuth callback rejected: APP_ALLOW_STATELESS_OAUTH not enabled");
-        return Err(ServiceError::bad_request(
-            "Stateless OAuth is not enabled. Set APP_ALLOW_STATELESS_OAUTH=true to enable."
-        ).with_tag("stateless_oauth_disabled"));
+        return Ok(HttpResponse::BadRequest().json(AuthResponse {
+            success: false,
+            token: None,
+            token_type: None,
+            username: None,
+            email: None,
+            tenant_id: None,
+            error: Some("Stateless OAuth is not enabled. Set APP_ALLOW_STATELESS_OAUTH=true to enable.".to_string()),
+        }));
     }
 
     // Check for OAuth errors from Keycloak
