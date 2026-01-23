@@ -24,11 +24,17 @@ enum Status {
     Healthy,
     #[serde(rename = "unhealthy")]
     Unhealthy,
+    #[serde(rename = "unavailable")]
+    Unavailable,
 }
 
 impl Status {
     fn is_healthy(&self) -> bool {
         matches!(self, Status::Healthy)
+    }
+    
+    fn is_available(&self) -> bool {
+        !matches!(self, Status::Unavailable)
     }
 }
 
@@ -115,7 +121,7 @@ async fn check_cache_health_async(
 #[get("/health")]
 async fn health(
     pool: web::Data<DatabasePool>,
-    redis_pool: web::Data<RedisPool>,
+    redis_pool: Option<web::Data<Option<RedisPool>>>,
 ) -> Result<HttpResponse, ServiceError> {
     info!("Health check requested");
 
@@ -132,21 +138,31 @@ async fn health(
         }
     };
 
-    // Check cache with timeout
-    let cache_status =
-        match timeout(Duration::from_secs(3), check_cache_health_async(redis_pool)).await {
-            Ok(Ok(())) => Status::Healthy,
-            Ok(Err(e)) => {
-                error!("Cache health check failed: {}", e);
-                Status::Unhealthy
+    // Check cache with timeout - handle optional Redis gracefully
+    let cache_status = match redis_pool.as_ref().and_then(|d| d.get_ref().as_ref()) {
+        Some(pool) => {
+            let pool_clone = pool.clone();
+            let pool_data = web::Data::new(pool_clone);
+            match timeout(Duration::from_secs(3), check_cache_health_async(pool_data)).await {
+                Ok(Ok(())) => Status::Healthy,
+                Ok(Err(e)) => {
+                    error!("Cache health check failed: {}", e);
+                    Status::Unhealthy
+                }
+                Err(_) => {
+                    error!("Cache health check timeout");
+                    Status::Unhealthy
+                }
             }
-            Err(_) => {
-                error!("Cache health check timeout");
-                Status::Unhealthy
-            }
-        };
+        }
+        None => {
+            info!("Redis cache is not configured - marking as unavailable");
+            Status::Unavailable
+        }
+    };
 
-    let overall_status = if db_status.is_healthy() && cache_status.is_healthy() {
+    // System is healthy if database is healthy and cache is either healthy or unavailable (not configured)
+    let overall_status = if db_status.is_healthy() && (cache_status.is_healthy() || !cache_status.is_available()) {
         Status::Healthy
     } else {
         Status::Unhealthy
@@ -196,7 +212,7 @@ async fn health(
 async fn health_detailed(
     req: HttpRequest,
     pool: web::Data<DatabasePool>,
-    redis_pool: web::Data<RedisPool>,
+    redis_pool: Option<web::Data<Option<RedisPool>>>,
     main_conn: web::Data<DatabasePool>,
 ) -> Result<HttpResponse, ServiceError> {
     let manager = req.app_data::<web::Data<TenantPoolManager>>();
@@ -215,19 +231,28 @@ async fn health_detailed(
         }
     };
 
-    // Check cache with timeout
-    let cache_status =
-        match timeout(Duration::from_secs(3), check_cache_health_async(redis_pool)).await {
-            Ok(Ok(())) => Status::Healthy,
-            Ok(Err(e)) => {
-                error!("Cache health check failed: {}", e);
-                Status::Unhealthy
+    // Check cache with timeout - handle optional Redis gracefully
+    let cache_status = match redis_pool.as_ref().and_then(|d| d.get_ref().as_ref()) {
+        Some(rpool) => {
+            let pool_clone = rpool.clone();
+            let pool_data = web::Data::new(pool_clone);
+            match timeout(Duration::from_secs(3), check_cache_health_async(pool_data)).await {
+                Ok(Ok(())) => Status::Healthy,
+                Ok(Err(e)) => {
+                    error!("Cache health check failed: {}", e);
+                    Status::Unhealthy
+                }
+                Err(_) => {
+                    error!("Cache health check timeout");
+                    Status::Unhealthy
+                }
             }
-            Err(_) => {
-                error!("Cache health check timeout");
-                Status::Unhealthy
-            }
-        };
+        }
+        None => {
+            info!("Redis cache is not configured - marking as unavailable");
+            Status::Unavailable
+        }
+    };
 
     // Check tenant health if tenant manager is available
     let tenants = if let Some(manager_ref) = manager {
@@ -267,8 +292,12 @@ async fn health_detailed(
         None
     };
 
+    // System is healthy if:
+    // - database is healthy
+    // - cache is healthy OR unavailable (not configured)
+    // - all tenants are healthy (if any)
     let overall_status = if db_status.is_healthy()
-        && cache_status.is_healthy()
+        && (cache_status.is_healthy() || !cache_status.is_available())
         && tenants
             .as_ref()
             .map_or(true, |t| t.iter().all(|th| th.status.is_healthy()))

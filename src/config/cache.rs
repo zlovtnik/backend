@@ -83,10 +83,65 @@ impl r2d2::ManageConnection for RedisManager {
     }
 }
 
+/// Attempts to initialize a Redis connection pool, returning None if Redis is unavailable.
+///
+/// This is the recommended function for production deployments where Redis may be optional.
+/// Uses Either pattern for error handling and functional URL masking.
+///
+/// # Examples
+///
+/// ```no_run
+/// if let Some(pool) = try_init_redis_client("redis://localhost:6379") {
+///     println!("Redis connected");
+/// } else {
+///     println!("Redis unavailable, continuing without cache");
+/// }
+/// ```
+pub fn try_init_redis_client(url: &str) -> Option<Pool> {
+    use log::{info, warn};
+    info!("Attempting to initialize Redis client with functional patterns...");
+
+    // Use functional URL masking
+    let masked_url = mask_redis_url_functional(url);
+
+    // Functional client creation with Either pattern
+    let client_result = Either::from_result(redis::Client::open(url));
+    let client = match client_result {
+        Either::Right(client) => client,
+        Either::Left(e) => {
+            warn!("Failed to create Redis client for {}: {}. Redis cache will be disabled.", masked_url, e);
+            return None;
+        }
+    };
+
+    // Functional pool creation with composition - use shorter timeout for optional Redis
+    let manager = RedisManager { client };
+    let pool_result = Either::from_result(
+        r2d2::Pool::builder()
+            .connection_timeout(std::time::Duration::from_secs(5))
+            .build(manager)
+    );
+
+    match pool_result {
+        Either::Right(pool) => {
+            info!("Redis pool created successfully for {}", masked_url);
+            Some(pool)
+        }
+        Either::Left(e) => {
+            warn!("Failed to create Redis pool for {}: {}. Redis cache will be disabled.", masked_url, e);
+            None
+        }
+    }
+}
+
 /// Initializes a Redis connection pool using functional composition patterns.
 ///
 /// Uses Either pattern for error handling and functional URL masking.
 /// Applies functional composition for pool creation with proper error handling.
+///
+/// # Panics
+/// Panics if Redis connection cannot be established. For optional Redis,
+/// use `try_init_redis_client` instead.
 ///
 /// # Examples
 ///
