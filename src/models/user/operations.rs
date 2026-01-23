@@ -352,7 +352,7 @@ async fn validate_oauth_token(token: &str, user_name: &str, client: &KeycloakCli
 /// let valid = is_valid_login_session(&token, &mut conn, None);
 /// println!("session valid: {}", valid);
 /// ```
-pub fn is_valid_login_session(user_token: &UserToken, conn: &mut Connection, keycloak_client: Option<&KeycloakClient>) -> bool {
+pub fn is_valid_login_session(user_token: &UserToken, conn: &mut Connection, _keycloak_client: Option<&KeycloakClient>) -> bool {
     let username_trimmed = user_token.user.trim();
     let session_trimmed = user_token.login_session.trim();
 
@@ -435,7 +435,7 @@ pub async fn is_valid_login_session_async(user_token: &UserToken, conn: &mut Con
 pub fn find_login_info_by_token(
     user_token: &UserToken,
     conn: &mut Connection,
-    keycloak_client: Option<&KeycloakClient>,
+    _keycloak_client: Option<&KeycloakClient>,
 ) -> Result<LoginInfoDTO, ServiceError> {
     let username_trimmed = user_token.user.trim();
     let session_trimmed = user_token.login_session.trim();

@@ -11,10 +11,10 @@ WORKDIR /app
 # install build dependencies required by Diesel and tools used by build.rs
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        libpq-dev=15.14-0+deb12u1 \
-        libssl-dev=3.0.17-1~deb12u3 \
-        pkg-config=1.8.1-1 \
-        ca-certificates=20230311+deb12u1 \
+        libpq-dev \
+        libssl-dev \
+        pkg-config \
+        ca-certificates \
         curl \
         unzip \
     && rm -rf /var/lib/apt/lists/*
@@ -48,8 +48,8 @@ ENV APP_HOME=/app \
 # install runtime dependencies and create non-root user
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        curl=7.88.1-10+deb12u14 \
-        libpq5=15.14-0+deb12u1 \
+        curl \
+        libpq5 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --create-home --home-dir ${APP_HOME} ${APP_USER}
 
