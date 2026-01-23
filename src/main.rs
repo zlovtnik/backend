@@ -104,12 +104,8 @@ async fn main() -> io::Result<()> {
             format!("DATABASE_URL not found: {}", e),
         )
     })?;
-    let redis_url = env::var("REDIS_URL").map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("REDIS_URL not found: {}", e),
-        )
-    })?;
+    // Redis is optional - if REDIS_URL is not set or connection fails, cache features will be disabled
+    let redis_url = env::var("REDIS_URL").ok();
 
     let main_pool = config::db::init_db_pool(&db_url);
     config::db::run_migration(&mut main_pool.get().unwrap()).map_err(|e| {
@@ -118,7 +114,15 @@ async fn main() -> io::Result<()> {
             format!("Database migration failed: {}", e),
         )
     })?;
-    let redis_client = config::cache::init_redis_client(&redis_url);
+    
+    // Try to initialize Redis client - if it fails, continue without cache
+    let redis_client: Option<config::cache::Pool> = redis_url
+        .as_ref()
+        .and_then(|url| config::cache::try_init_redis_client(url));
+    
+    if redis_client.is_none() {
+        log::warn!("Redis is not available. Cache features will be disabled.");
+    }
 
     // Initialize Keycloak client
     let keycloak_config = rcs::utils::keycloak::KeycloakConfig {
