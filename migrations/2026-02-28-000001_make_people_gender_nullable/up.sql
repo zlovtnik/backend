@@ -1,0 +1,2 @@
+ALTER TABLE people
+ALTER COLUMN gender DROP NOT NULL;

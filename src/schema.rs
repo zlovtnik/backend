@@ -670,7 +670,7 @@ diesel::table! {
     people (id) {
         id -> Int4,
         name -> Varchar,
-        gender -> Bool,
+        gender -> Nullable<crate::models::person::GenderMapping>,
         age -> Int4,
         address -> Varchar,
         #[max_length = 11]

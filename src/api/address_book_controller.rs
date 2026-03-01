@@ -282,7 +282,7 @@ mod tests {
 
     use crate::config;
     use crate::config::db::TenantPoolManager;
-    use crate::models::person::{Person, PersonDTO};
+    use crate::models::person::{Gender, Person, PersonDTO};
     use crate::models::user::{LoginDTO, UserDTO};
     use crate::services::{account_service, address_book_service};
 
@@ -354,7 +354,11 @@ mod tests {
                 PersonDTO {
                     email: format!("user{}@example.com", x),
                     name: format!("user{}", x),
-                    gender: x % 2 == 0,
+                    gender: Some(if x % 2 == 0 {
+                        Gender::Male
+                    } else {
+                        Gender::Female
+                    }),
                     age: x * 10,
                     address: "US".to_string(),
                     phone: format!("012345678{}", x),
@@ -465,7 +469,7 @@ mod tests {
 
         let payload = json!({
             "name": "test",
-            "gender": true,
+            "gender": "male",
             "age": 20_i32,
             "address": "US",
             "phone": "0123456789",
@@ -552,7 +556,7 @@ mod tests {
 
         let req_missing_email = json!({
             "name": "test",
-            "gender": true,
+            "gender": "male",
             "age": 20_i32,
             "address": "US",
             "phone": "0123456789"
@@ -654,7 +658,7 @@ mod tests {
         let update_request = json!({
             "email": "email1@example.com",
             "name": "Nguyen Van Teo",
-            "gender": false,
+            "gender": "female",
             "age": 10_i32,
             "address": "US",
             "phone": "0123456781"

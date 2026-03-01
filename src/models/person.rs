@@ -1,4 +1,5 @@
 use diesel::{prelude::*, AsChangeset, BoxableExpression, Insertable, Queryable};
+use diesel_derive_enum::DbEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -10,11 +11,20 @@ use super::{filters::PersonFilter, pagination::HasId, response::Page};
 
 pub mod validators;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, DbEnum)]
+#[DbValueStyle = "snake_case"]
+pub enum Gender {
+    Male,
+    Female,
+    NonBinary,
+    PreferNotToSay,
+}
+
 #[derive(Clone, Queryable, Serialize, Deserialize)]
 pub struct Person {
     pub id: i32,
     pub name: String,
-    pub gender: bool,
+    pub gender: Option<Gender>,
     pub age: i32,
     pub address: String,
     pub phone: String,
@@ -25,7 +35,9 @@ pub struct Person {
 #[diesel(table_name = people)]
 pub struct PersonDTO {
     pub name: String,
-    pub gender: bool,
+    /// Gender field represented as an enum. Missing/null becomes None.
+    #[serde(default)]
+    pub gender: Option<Gender>,
     pub age: i32,
     pub address: String,
     pub phone: String,
@@ -79,7 +91,7 @@ impl Person {
     /// Applies the following optional filters from `PersonFilter`:
     /// - `age`: exact match.
     /// - `email`, `name`, `phone`: partial match using SQL `LIKE` with surrounding `%` wildcards (case-sensitive).
-    /// - `gender`: accepts `"male"` or `"female"` (case-insensitive) and maps to the stored boolean.
+    /// - `gender`: accepts `"male"`, `"female"`, `"non_binary"`, `"prefer_not_to_say"` (case-insensitive).
     ///
     /// Pagination uses `filter.cursor` as the page cursor (defaults to `0`) and `filter.page_size` as items per page (defaults to `crate::constants::DEFAULT_PER_PAGE`).
     ///
@@ -112,59 +124,59 @@ impl Person {
                 dyn BoxableExpression<
                     people::table,
                     diesel::pg::Pg,
-                    SqlType = diesel::sql_types::Bool,
+                    SqlType = diesel::sql_types::Nullable<diesel::sql_types::Bool>,
                 >,
             >,
         > = vec![
-            filter.age.map(|age| people::age.eq(age)).map(|expr| {
+            filter.age.map(|age| people::age.eq(age).nullable()).map(|expr| {
                 Box::new(expr)
                     as Box<
                         dyn BoxableExpression<
                             people::table,
                             diesel::pg::Pg,
-                            SqlType = diesel::sql_types::Bool,
+                            SqlType = diesel::sql_types::Nullable<diesel::sql_types::Bool>,
                         >,
                     >
             }),
             filter
                 .email
                 .as_ref()
-                .map(|email| people::email.like(format!("%{}%", email)))
+                .map(|email| people::email.like(format!("%{}%", email)).nullable())
                 .map(|expr| {
                     Box::new(expr)
                         as Box<
                             dyn BoxableExpression<
                                 people::table,
                                 diesel::pg::Pg,
-                                SqlType = diesel::sql_types::Bool,
+                                SqlType = diesel::sql_types::Nullable<diesel::sql_types::Bool>,
                             >,
                         >
                 }),
             filter
                 .name
                 .as_ref()
-                .map(|name| people::name.like(format!("%{}%", name)))
+                .map(|name| people::name.like(format!("%{}%", name)).nullable())
                 .map(|expr| {
                     Box::new(expr)
                         as Box<
                             dyn BoxableExpression<
                                 people::table,
                                 diesel::pg::Pg,
-                                SqlType = diesel::sql_types::Bool,
+                                SqlType = diesel::sql_types::Nullable<diesel::sql_types::Bool>,
                             >,
                         >
                 }),
             filter
                 .phone
                 .as_ref()
-                .map(|phone| people::phone.like(format!("%{}%", phone)))
+                .map(|phone| people::phone.like(format!("%{}%", phone)).nullable())
                 .map(|expr| {
                     Box::new(expr)
                         as Box<
                             dyn BoxableExpression<
                                 people::table,
                                 diesel::pg::Pg,
-                                SqlType = diesel::sql_types::Bool,
+                                SqlType = diesel::sql_types::Nullable<diesel::sql_types::Bool>,
                             >,
                         >
                 }),
@@ -172,8 +184,14 @@ impl Person {
                 .gender
                 .as_ref()
                 .and_then(|gender| match gender.to_lowercase().as_str() {
-                    "male" => Some(people::gender.eq(true)),
-                    "female" => Some(people::gender.eq(false)),
+                    "male" => Some(people::gender.eq(Some(Gender::Male))),
+                    "female" => Some(people::gender.eq(Some(Gender::Female))),
+                    "non_binary" | "nonbinary" => {
+                        Some(people::gender.eq(Some(Gender::NonBinary)))
+                    }
+                    "prefer_not_to_say" | "prefernottosay" | "prefer-not-to-say" => {
+                        Some(people::gender.eq(Some(Gender::PreferNotToSay)))
+                    }
                     _ => None,
                 })
                 .map(|expr| {
@@ -182,7 +200,7 @@ impl Person {
                             dyn BoxableExpression<
                                 people::table,
                                 diesel::pg::Pg,
-                                SqlType = diesel::sql_types::Bool,
+                                SqlType = diesel::sql_types::Nullable<diesel::sql_types::Bool>,
                             >,
                         >
                 }),
@@ -228,7 +246,7 @@ impl Person {
     /// // `conn` is a mutable database connection available in your test/setup.
     /// let new_person = PersonDTO {
     ///     name: "Alice".into(),
-    ///     gender: true,
+    ///     gender: Some(Gender::Female),
     ///     age: 30,
     ///     address: "123 Main St".into(),
     ///     phone: "555-1234".into(),
@@ -259,7 +277,7 @@ impl Person {
     /// let mut conn: Connection = /* obtain connection */;
     /// let dto = PersonDTO {
     ///     name: "Alice".into(),
-    ///     gender: true,
+    ///     gender: Some(Gender::Female),
     ///     age: 30,
     ///     address: "123 Main St".into(),
     ///     phone: "555-0100".into(),
