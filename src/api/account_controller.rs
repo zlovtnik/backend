@@ -243,6 +243,7 @@ pub async fn login(
     manager: web::Data<TenantPoolManager>,
     req: HttpRequest,
 ) -> Result<HttpResponse, ServiceError> {
+    // HOT PATH: primary authentication entrypoint for token issuance.
     let login_payload = login_dto.into_inner();
     validators::validate_login(&login_payload)?;
     let tenant_id = login_payload.tenant_id.clone();
@@ -303,6 +304,7 @@ pub async fn logout(req: HttpRequest) -> Result<HttpResponse, ServiceError> {
 /// # }
 /// ```
 pub async fn refresh(req: HttpRequest) -> Result<HttpResponse, ServiceError> {
+    // HOT PATH: high-frequency token refresh path for active sessions.
     let auth_context = AuthContext::from_request(&req).ok_or_else(|| {
         ServiceError::bad_request(constants::MESSAGE_TOKEN_MISSING)
             .with_tag("auth")

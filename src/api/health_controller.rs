@@ -215,6 +215,7 @@ async fn health_detailed(
     redis_pool: Option<web::Data<Option<RedisPool>>>,
     main_conn: web::Data<DatabasePool>,
 ) -> Result<HttpResponse, ServiceError> {
+    // HOT PATH: operational health endpoint frequently polled by orchestrators.
     let manager = req.app_data::<web::Data<TenantPoolManager>>();
     info!("Detailed health check requested");
 

@@ -721,6 +721,7 @@ impl KeycloakClient {
         &self,
         id_token: &str,
     ) -> Result<Claims, Box<dyn std::error::Error + Send + Sync>> {
+        // HOT PATH: OAuth token verification on authenticated request flows.
         // Decode JWT header to get key ID
         let header = decode_header(id_token).map_err(|e| {
             log::error!("Failed to decode JWT header: {}", e);

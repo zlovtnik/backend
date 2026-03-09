@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package nexus.core;
+
+service HealthService {
+  rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+message HealthCheckRequest {
+  string request_id = 1;
+}
+
+message HealthCheckResponse {
+  string status = 1;
+  string service = 2;
+  string timestamp = 3;
+}

@@ -4,9 +4,13 @@
 //! with JWT authentication and advanced functional programming capabilities.
 
 pub mod api;
+pub mod adapters;
+pub mod app_error;
 pub mod config;
 pub mod constants;
+pub mod domain;
 pub mod error;
+pub mod ports;
 pub mod types;
 #[cfg(feature = "functional")]
 pub use rcs_functional as functional;
@@ -145,6 +149,7 @@ pub mod models;
 pub mod pagination; // Legacy index-based pagination
 pub mod schema;
 pub mod services;
+pub mod state;
 #[cfg(feature = "functional")]
 pub use functional::unified_pagination; // Recommended cursor-based pagination
 pub mod utils;

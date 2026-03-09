@@ -73,6 +73,7 @@ where
     /// // }
     /// ```
     fn call(&self, req: ServiceRequest) -> Self::Future {
+        // HOT PATH: every protected HTTP request passes through this authentication path.
         // Let CORS middleware handle preflight requests without auth checks
         if Method::OPTIONS == *req.method() {
             let fut = self.service.call(req);

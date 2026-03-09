@@ -48,6 +48,7 @@ pub async fn create(
     req: HttpRequest,
     dto: web::Json<CreateNfagRequest>,
 ) -> Result<HttpResponse, ServiceError> {
+    // HOT PATH: NFAg write path used by upstream document ingestion.
     dto.validate().map_err(|e| {
         ServiceError::bad_request("Validation failed")
             .with_detail(format!("{:?}", e))
@@ -100,6 +101,7 @@ pub async fn find_all(
     query: web::Query<std::collections::HashMap<String, String>>,
     req: HttpRequest,
 ) -> Result<HttpResponse, ServiceError> {
+    // HOT PATH: NFAg list/read path with tenant pagination.
     let pool = extract_pool(&req)?;
     let tenant_id = extract_tenant_id(&req)?;
 
