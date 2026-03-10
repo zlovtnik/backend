@@ -7,6 +7,8 @@ use crate::{
     constants,
     error::ServiceError,
     services::functional_patterns::{run_query, QueryReader},
+    state::AppState,
+    types::TenantId,
 };
 
 use crate::functional::pagination::Pagination;
@@ -26,10 +28,21 @@ impl DatabaseContext {
             })
         })?;
 
-        // Attempt to extract tenant_id from request extensions (set by auth middleware)
-        let tenant_id = req.extensions().get::<String>().cloned();
+        // Auth middleware stores the tenant in request extensions as TenantId.
+        let tenant_id = req
+            .extensions()
+            .get::<TenantId>()
+            .map(|tenant_id| tenant_id.as_str().to_string())
+            .or_else(|| req.extensions().get::<String>().cloned());
 
         Ok(Self { pool, tenant_id })
+    }
+
+    pub fn from_state(
+        state: &AppState,
+        tenant_id: impl Into<String>,
+    ) -> Result<Self, ServiceError> {
+        Self::from_manager(&state.tenant_manager(), tenant_id)
     }
 
     pub fn from_manager(
@@ -181,5 +194,32 @@ impl ControllerContext {
 
     pub fn run_query<T>(&self, reader: QueryReader<T>) -> Result<T, ServiceError> {
         self.database.run_query(reader)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use actix_web::{test::TestRequest, HttpMessage};
+    use diesel::r2d2::ConnectionManager;
+
+    use super::DatabaseContext;
+    use crate::config::db;
+    use crate::types::TenantId;
+
+    #[test]
+    fn from_request_reads_tenant_id_newtype() {
+        let manager = ConnectionManager::<db::Connection>::new("postgres://localhost/test");
+        let pool = db::Pool::builder()
+            .max_size(1)
+            .build_unchecked(manager);
+
+        let req = TestRequest::default().to_http_request();
+        req.extensions_mut().insert(pool.clone());
+        req.extensions_mut().insert(TenantId::from("tenant-42"));
+
+        let ctx = DatabaseContext::from_request(&req).expect("request context should build");
+
+        let _ = ctx.pool();
+        assert_eq!(ctx.tenant_id(), Some("tenant-42"));
     }
 }

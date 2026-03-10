@@ -348,6 +348,7 @@ pub async fn get_system_stats(
     pool: web::Data<DatabasePool>,
     manager: web::Data<TenantPoolManager>,
 ) -> Result<HttpResponse, ServiceError> {
+    // HOT PATH: tenant-wide operational stats endpoint used for admin dashboards and probes.
     info!("Fetching tenant statistics with pool metrics");
 
     // Use functional QueryReader pattern to get base stats

@@ -123,15 +123,28 @@ Scope: `/src` (backend crate), pre-refactor baseline and migration scaffolding.
 
 ## 4) gRPC Surface Audit
 
-- Pre-audit baseline: no `.proto` files and no Tonic server in crate.
-- Added new `proto/core.proto` with `HealthService.Check` (unary) as first transport slice.
-- Added generated module wiring in build script and gRPC server runner.
+- Current baseline includes additive gRPC scaffolding only:
+  - `proto/core.proto` with `HealthService.Check` (unary).
+  - generated module wiring in `build.rs`.
+  - Tonic server bootstrap in `src/adapters/grpc/server.rs`.
+- No existing auth/user/tenant/nfag parity RPCs are implemented yet; HTTP remains the only business transport.
+
+### Target RPC Matrix (wave 1 additive scope)
+
+| Domain | Existing HTTP surface | Target gRPC service | Notes |
+| --- | --- | --- | --- |
+| Health | `/health`, `/health/detailed` | `HealthService.Check` | Already partially implemented; can stay coarse-grained. |
+| Auth | `/api/auth/login`, `/logout`, `/refresh`, `/refresh-token`, `/me` | `AuthService` | Preserve HTTP envelope/status mapping; gRPC remains additive. |
+| User | `/api/users/*` | `UserService` | Reuse same service layer as HTTP. |
+| Tenant | `/api/admin/*`, `/api/tenants/*` | `TenantService` | Preserve per-tenant pool resolution semantics. |
+| NFAg | `/api/nfag/*` | `NfagService` | Core CRUD parity first, no functional module spillover. |
 
 ## 5) Hot Path Markers Added
 
 - `src/middleware/auth_middleware.rs`: authentication middleware `call` path.
 - `src/api/account_controller.rs`: `login` and `refresh`.
 - `src/api/health_controller.rs`: `health_detailed`.
+- `src/api/tenant_controller.rs`: `get_system_stats`.
 - `src/api/nfag_controller.rs`: `create` and `find_all`.
 - `src/utils/keycloak.rs`: `validate_id_token_internal`.
 

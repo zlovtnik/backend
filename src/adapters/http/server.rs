@@ -62,6 +62,7 @@ pub async fn run_http_server(
         };
 
         let app = App::new()
+            .app_data(web::Data::new(state.clone()))
             .wrap(
                 SessionMiddleware::builder(CookieSessionStore::default(), state.session_key())
                     .session_lifecycle(
