@@ -1,5 +1,3 @@
-
-
 //! Lazy Evaluation Pipeline System
 //!
 //! Provides memory-efficient lazy evaluation patterns for processing large datasets,
@@ -388,7 +386,7 @@ where
     /// Note: Metrics tracking is not preserved when the item type changes.
     /// The new pipeline will start with fresh metrics.
     /// Adds a type-changing map operation.
-    /// 
+    ///
     /// NOTE: Metrics are reset for the new pipeline because the item type has changed,
     /// making previous performance metrics (like memory usage per item) invalid for the new type.
     pub fn map<U, F>(self, f: F) -> LazyPipeline<U, impl Iterator<Item = U>>
@@ -476,7 +474,11 @@ where
             for op in &mut self.ops {
                 match op {
                     LazyOp::Filter(f) => {
-                        let start = if enable_metrics { Some(Instant::now()) } else { None };
+                        let start = if enable_metrics {
+                            Some(Instant::now())
+                        } else {
+                            None
+                        };
                         let pass = f(&current);
                         if let Some(start) = start {
                             self.metrics.record_operation("filter", start.elapsed());
@@ -486,7 +488,11 @@ where
                         }
                     }
                     LazyOp::Map(f) => {
-                        let start = if enable_metrics { Some(Instant::now()) } else { None };
+                        let start = if enable_metrics {
+                            Some(Instant::now())
+                        } else {
+                            None
+                        };
                         current = f(current);
                         if let Some(start) = start {
                             self.metrics.record_operation("map", start.elapsed());
@@ -525,7 +531,7 @@ where
             // Memory check based on actual result size
             let estimated_memory = (result.len() * std::mem::size_of::<T>()) as u64;
             self.metrics.update_memory(estimated_memory);
-            
+
             if estimated_memory > (self.config.max_memory_mb as u64 * 1024 * 1024) {
                 return Err(LazyPipelineError::MemoryLimitExceeded(estimated_memory));
             }
@@ -772,8 +778,7 @@ where
                         * std::mem::size_of::<T>() as u64;
                     self.pipeline.metrics.update_memory(estimated_memory);
 
-                    if estimated_memory
-                        > (self.pipeline.config.max_memory_mb as u64 * 1024 * 1024)
+                    if estimated_memory > (self.pipeline.config.max_memory_mb as u64 * 1024 * 1024)
                     {
                         return Err(LazyPipelineError::MemoryLimitExceeded(estimated_memory));
                     }
