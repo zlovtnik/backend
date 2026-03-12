@@ -4,12 +4,12 @@ use std::path::Path;
 use std::process::Command;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    println!("cargo:rerun-if-changed=proto/core.proto");
+    println!("cargo:rerun-if-changed=proto/nexus/core/core.proto");
     println!("cargo:rerun-if-changed=proto/");
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
-        .compile(&["proto/core.proto"], &["proto"])?;
+        .compile(&["proto/nexus/core/core.proto"], &["proto"])?;
 
     // Only run diesel print-schema in development builds
     if env::var("PROFILE").unwrap_or_default() == "debug" {
