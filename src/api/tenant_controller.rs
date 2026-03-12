@@ -115,9 +115,11 @@ async fn collect_pool_metrics(
         for tenant in tenants {
             let permit = Arc::clone(&semaphore).acquire_owned().await.map_err(|e| {
                 log::error!("Failed to acquire semaphore permit: {}", e);
-                ServiceError::internal_server_error("Failed to acquire concurrency permit".to_string())
-                    .with_tag("concurrency")
-                    .with_metadata("operation", operation)
+                ServiceError::internal_server_error(
+                    "Failed to acquire concurrency permit".to_string(),
+                )
+                .with_tag("concurrency")
+                .with_metadata("operation", operation)
             })?;
 
             let manager_clone = manager.clone();
@@ -130,8 +132,10 @@ async fn collect_pool_metrics(
                     Duration::from_secs(5),
                     tokio::task::spawn_blocking(move || {
                         check_tenant_pool_health(&tenant_id, &manager_clone)
-                    })
-                ).await {
+                    }),
+                )
+                .await
+                {
                     Ok(Ok(metric)) => metric,
                     Ok(Err(_)) => {
                         log::warn!("Health check task panicked for tenant {}", tenant_id_clone);
@@ -254,9 +258,11 @@ async fn collect_tenant_health(
         for tenant in tenants {
             let permit = Arc::clone(&semaphore).acquire_owned().await.map_err(|e| {
                 log::error!("Failed to acquire semaphore permit: {}", e);
-                ServiceError::internal_server_error("Failed to acquire concurrency permit".to_string())
-                    .with_tag("concurrency")
-                    .with_metadata("operation", operation)
+                ServiceError::internal_server_error(
+                    "Failed to acquire concurrency permit".to_string(),
+                )
+                .with_tag("concurrency")
+                .with_metadata("operation", operation)
             })?;
 
             let manager_clone = manager.clone();
@@ -277,16 +283,22 @@ async fn collect_tenant_health(
                                         // Simple health check: SELECT 1
                                         match diesel::sql_query("SELECT 1").execute(&mut conn) {
                                             Ok(_) => (true, None),
-                                            Err(e) => (false, Some(format!("DB query failed: {}", e))),
+                                            Err(e) => {
+                                                (false, Some(format!("DB query failed: {}", e)))
+                                            }
                                         }
                                     }
-                                    Err(e) => (false, Some(format!("Pool connection failed: {}", e))),
+                                    Err(e) => {
+                                        (false, Some(format!("Pool connection failed: {}", e)))
+                                    }
                                 }
                             }
                             None => (false, Some("No connection pool configured".to_string())),
                         }
-                    })
-                ).await {
+                    }),
+                )
+                .await
+                {
                     Ok(Ok((status, error_msg))) => TenantHealth {
                         tenant_id: tenant_id_clone,
                         name: tenant_name_clone,
@@ -348,6 +360,7 @@ pub async fn get_system_stats(
     pool: web::Data<DatabasePool>,
     manager: web::Data<TenantPoolManager>,
 ) -> Result<HttpResponse, ServiceError> {
+    // HOT PATH: tenant-wide operational stats endpoint used for admin dashboards and probes.
     info!("Fetching tenant statistics with pool metrics");
 
     // Use functional QueryReader pattern to get base stats
@@ -407,7 +420,8 @@ pub async fn get_tenant_health(
             .with_metadata("operation", "get_tenant_health")
     })?;
 
-    let tenant_health_status = collect_tenant_health(&mut conn, &manager, "get_tenant_health").await?;
+    let tenant_health_status =
+        collect_tenant_health(&mut conn, &manager, "get_tenant_health").await?;
 
     Ok(HttpResponse::Ok().json(tenant_health_status))
 }

@@ -1,15 +1,23 @@
 use std::env;
+use std::error::Error;
 use std::path::Path;
 use std::process::Command;
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
+    println!("cargo:rerun-if-changed=proto/nexus/core/core.proto");
+    println!("cargo:rerun-if-changed=proto/");
+    tonic_build::configure()
+        .build_server(true)
+        .build_client(true)
+        .compile(&["proto/nexus/core/core.proto"], &["proto"])?;
+
     // Only run diesel print-schema in development builds
     if env::var("PROFILE").unwrap_or_default() == "debug" {
         println!("cargo:rerun-if-changed=migrations/");
 
         // Check if diesel CLI is available
         if Command::new("diesel").arg("--version").output().is_ok() {
-            let output = Command::new("diesel").args(&["print-schema"]).output();
+            let output = Command::new("diesel").args(["print-schema"]).output();
 
             match output {
                 Ok(output) if output.status.success() => {
@@ -35,4 +43,6 @@ fn main() {
             println!("cargo:warning=diesel CLI not found, skipping schema generation");
         }
     }
+
+    Ok(())
 }

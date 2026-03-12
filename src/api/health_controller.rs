@@ -1,5 +1,6 @@
 use actix_web::{get, web, HttpRequest, HttpResponse};
 use serde::Serialize;
+use std::sync::OnceLock;
 use tokio::time::{timeout, Duration};
 
 use crate::config::cache::Pool as RedisPool;
@@ -8,6 +9,8 @@ use crate::constants;
 use crate::error::ServiceError;
 use crate::models::response::ResponseBody;
 use crate::models::tenant::Tenant;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use chrono::Utc;
 use diesel::prelude::*;
@@ -32,7 +35,7 @@ impl Status {
     fn is_healthy(&self) -> bool {
         matches!(self, Status::Healthy)
     }
-    
+
     fn is_available(&self) -> bool {
         !matches!(self, Status::Unavailable)
     }
@@ -54,11 +57,95 @@ struct HealthResponse {
     performance: Option<PerformanceHealthSummary>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct TenantHealth {
     tenant_id: String,
     name: String,
     status: Status,
+}
+
+struct TenantHealthCache {
+    tenants: RwLock<Option<Vec<TenantHealth>>>,
+}
+
+impl TenantHealthCache {
+    fn new() -> Self {
+        Self {
+            tenants: RwLock::new(None),
+        }
+    }
+}
+
+static TENANT_HEALTH_CACHE: OnceLock<Arc<TenantHealthCache>> = OnceLock::new();
+static TENANT_HEALTH_POLL_HANDLE: OnceLock<tokio::task::JoinHandle<()>> = OnceLock::new();
+
+fn tenant_health_cache() -> &'static Arc<TenantHealthCache> {
+    TENANT_HEALTH_CACHE.get_or_init(|| Arc::new(TenantHealthCache::new()))
+}
+
+fn ensure_tenant_health_probe_running(
+    manager: TenantPoolManager,
+    main_conn: web::Data<DatabasePool>,
+) {
+    let cache = tenant_health_cache().clone();
+    let _ = TENANT_HEALTH_POLL_HANDLE.get_or_init(|| {
+        tokio::spawn(async move {
+            loop {
+                let tenant_healths =
+                    collect_tenant_health(manager.clone(), main_conn.clone()).await;
+                let mut cached = cache.tenants.write().await;
+                *cached = tenant_healths;
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            }
+        })
+    });
+}
+
+async fn collect_tenant_health(
+    manager: TenantPoolManager,
+    main_conn: web::Data<DatabasePool>,
+) -> Option<Vec<TenantHealth>> {
+    match tokio::task::spawn_blocking(move || {
+        let mut main_conn = main_conn
+            .get()
+            .map_err(|e| format!("Failed to get db connection: {e}"))?;
+        let tenants =
+            Tenant::list_all(&mut main_conn).map_err(|e| format!("Failed to list tenants: {e}"))?;
+
+        let mut tenant_healths = Vec::new();
+        for tenant in tenants {
+            let status = match manager.get_pool(&tenant.id) {
+                Ok(pool) => match pool.get() {
+                    Ok(mut conn) => match diesel::sql_query("SELECT 1").execute(&mut conn) {
+                        Ok(_) => Status::Healthy,
+                        Err(_) => Status::Unhealthy,
+                    },
+                    Err(_) => Status::Unhealthy,
+                },
+                Err(_) => Status::Unhealthy,
+            };
+
+            tenant_healths.push(TenantHealth {
+                tenant_id: tenant.id,
+                name: tenant.name,
+                status,
+            });
+        }
+
+        Ok::<Vec<TenantHealth>, String>(tenant_healths)
+    })
+    .await
+    {
+        Ok(Ok(healths)) => Some(healths),
+        Ok(Err(err)) => {
+            error!("Tenant health probe failed: {}", err);
+            None
+        }
+        Err(err) => {
+            error!("Tenant health probe task failed: {}", err);
+            None
+        }
+    }
 }
 
 /// Check whether the database accepts a simple health query using the provided connection pool.
@@ -162,11 +249,12 @@ async fn health(
     };
 
     // System is healthy if database is healthy and cache is either healthy or unavailable (not configured)
-    let overall_status = if db_status.is_healthy() && (cache_status.is_healthy() || !cache_status.is_available()) {
-        Status::Healthy
-    } else {
-        Status::Unhealthy
-    };
+    let overall_status =
+        if db_status.is_healthy() && (cache_status.is_healthy() || !cache_status.is_available()) {
+            Status::Healthy
+        } else {
+            Status::Unhealthy
+        };
 
     let response = HealthResponse {
         status: overall_status,
@@ -215,6 +303,7 @@ async fn health_detailed(
     redis_pool: Option<web::Data<Option<RedisPool>>>,
     main_conn: web::Data<DatabasePool>,
 ) -> Result<HttpResponse, ServiceError> {
+    // HOT PATH: operational health endpoint frequently polled by orchestrators.
     let manager = req.app_data::<web::Data<TenantPoolManager>>();
     info!("Detailed health check requested");
 
@@ -254,40 +343,11 @@ async fn health_detailed(
         }
     };
 
-    // Check tenant health if tenant manager is available
     let tenants = if let Some(manager_ref) = manager {
-        let manager_data = manager_ref.clone();
-        match tokio::task::spawn_blocking(move || {
-            let mut main_conn = main_conn
-                .get()
-                .map_err(|e| format!("Failed to get db connection: {}", e))?;
-            let tenants = Tenant::list_all(&mut main_conn).unwrap_or_else(|_| Vec::new());
-            let mut tenant_healths = Vec::new();
-
-            for tenant in tenants {
-                let status = match manager_data.get_tenant_pool(&tenant.id) {
-                    Some(pool) => match pool.get() {
-                        Ok(mut conn) => match diesel::sql_query("SELECT 1").execute(&mut conn) {
-                            Ok(_) => Status::Healthy,
-                            Err(_) => Status::Unhealthy,
-                        },
-                        Err(_) => Status::Unhealthy,
-                    },
-                    None => Status::Unhealthy,
-                };
-                tenant_healths.push(TenantHealth {
-                    tenant_id: tenant.id,
-                    name: tenant.name,
-                    status,
-                });
-            }
-            Ok::<Vec<TenantHealth>, String>(tenant_healths)
-        })
-        .await
-        {
-            Ok(Ok(healths)) if !healths.is_empty() => Some(healths),
-            _ => None,
-        }
+        ensure_tenant_health_probe_running(manager_ref.get_ref().clone(), main_conn.clone());
+        let cache = tenant_health_cache().clone();
+        let cached_tenants = cache.tenants.read().await.clone();
+        cached_tenants
     } else {
         None
     };
@@ -300,7 +360,7 @@ async fn health_detailed(
         && (cache_status.is_healthy() || !cache_status.is_available())
         && tenants
             .as_ref()
-            .map_or(true, |t| t.iter().all(|th| th.status.is_healthy()))
+            .map_or(false, |t| t.iter().all(|th| th.status.is_healthy()))
     {
         Status::Healthy
     } else {

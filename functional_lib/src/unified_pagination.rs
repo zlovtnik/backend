@@ -33,32 +33,31 @@ use once_cell::sync::Lazy;
 use rand::RngCore;
 use std::fmt;
 
-static CURSOR_KEY: Lazy<Result<Key<Aes256Gcm>, CursorError>> =
-    Lazy::new(|| {
-        let key_b64 = std::env::var("CURSOR_ENCRYPTION_KEY").ok();
-        
-        let final_key_b64 = match key_b64 {
-            Some(k) => k,
-            None => {
-                // Fallback for tests if env var is missing
-                if cfg!(test) {
-                    "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=".to_string()
-                } else {
-                    return Err(CursorError::KeyLoad(
-                        "CURSOR_ENCRYPTION_KEY not set".to_string(),
-                    ));
-                }
-            }
-        };
+static CURSOR_KEY: Lazy<Result<Key<Aes256Gcm>, CursorError>> = Lazy::new(|| {
+    let key_b64 = std::env::var("CURSOR_ENCRYPTION_KEY").ok();
 
-        let key_bytes = general_purpose::STANDARD
-            .decode(&final_key_b64)
-            .map_err(|e| CursorError::KeyLoad(format!("Base64 decode failed: {}", e)))?;
-        if key_bytes.len() != 32 {
-            return Err(CursorError::KeyLoad("Key must be 32 bytes".to_string()));
+    let final_key_b64 = match key_b64 {
+        Some(k) => k,
+        None => {
+            // Fallback for tests if env var is missing
+            if cfg!(test) {
+                "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=".to_string()
+            } else {
+                return Err(CursorError::KeyLoad(
+                    "CURSOR_ENCRYPTION_KEY not set".to_string(),
+                ));
+            }
         }
-        Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes))
-    });
+    };
+
+    let key_bytes = general_purpose::STANDARD
+        .decode(&final_key_b64)
+        .map_err(|e| CursorError::KeyLoad(format!("Base64 decode failed: {}", e)))?;
+    if key_bytes.len() != 32 {
+        return Err(CursorError::KeyLoad("Key must be 32 bytes".to_string()));
+    }
+    Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes))
+});
 
 /// Represents a cursor that can be serialized and deserialized
 pub trait Cursor: Clone + fmt::Debug + Send + Sync {

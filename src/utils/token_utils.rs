@@ -40,7 +40,11 @@ pub fn decode_token(token: String) -> jsonwebtoken::errors::Result<TokenData<Use
 /// // Given a decoded `token_data: jsonwebtoken::TokenData<UserToken>` and a `pool: Pool`
 /// // let user_id = verify_token(&token_data, &pool, None)?;
 /// ```
-pub fn verify_token(token_data: &TokenData<UserToken>, pool: &Pool, keycloak_client: Option<&KeycloakClient>) -> Result<String, String> {
+pub fn verify_token(
+    token_data: &TokenData<UserToken>,
+    pool: &Pool,
+    keycloak_client: Option<&KeycloakClient>,
+) -> Result<String, String> {
     let mut conn = pool
         .get()
         .map_err(|e| format!("Failed to get db connection: {}", e))?;

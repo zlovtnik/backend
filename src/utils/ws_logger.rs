@@ -144,7 +144,11 @@ impl<S> tracing_subscriber::Layer<S> for WebSocketLogLayer
 where
     S: tracing::Subscriber,
 {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
         let metadata = event.metadata();
         let level = metadata.level();
         let span_name = metadata.name().to_string();
@@ -274,10 +278,24 @@ impl tracing::field::Visit for LogVisitor {
 pub fn init_websocket_logging(
     broadcaster: LogBroadcaster,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    init_websocket_logging_with_filter(broadcaster, None)
+}
+
+/// Initializes the tracing subscriber with an explicit filter string override.
+///
+/// When `filter_override` is `Some`, the provided value is used directly instead of
+/// reading `RUST_LOG` from the process environment.
+pub fn init_websocket_logging_with_filter(
+    broadcaster: LogBroadcaster,
+    filter_override: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     use tracing_log::LogTracer;
     use tracing_subscriber::fmt;
 
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = match filter_override {
+        Some(filter) => EnvFilter::new(filter.to_string()),
+        None => EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+    };
 
     // Determine output format from environment
     let format = LogFormat::from_env_or_default();

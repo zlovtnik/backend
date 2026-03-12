@@ -5,6 +5,8 @@ use log::info;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::borrow::Cow;
+use std::env;
+use url::Url;
 
 use crate::{
     api::controller_context::{AuthContext, ControllerContext, DatabaseContext},
@@ -83,6 +85,10 @@ pub struct KeycloakCallbackRequest {
     /// If provided, it will be validated against the nonce in the ID token
     #[serde(default)]
     pub nonce: Option<String>,
+    /// Redirect URI used when initiating the OAuth flow (required for stateless flow)
+    /// Must match exactly what was used in the authorization request to Keycloak
+    #[serde(default)]
+    pub redirect_uri: Option<String>,
 }
 
 /// User information extracted from OAuth ID token claims
@@ -138,8 +144,8 @@ fn decode_id_token_claims(id_token: &str) -> Result<crate::utils::keycloak::Clai
         })?;
 
     // Parse claims JSON
-    let claims: crate::utils::keycloak::Claims = serde_json::from_slice(&claims_json)
-        .map_err(|e| {
+    let claims: crate::utils::keycloak::Claims =
+        serde_json::from_slice(&claims_json).map_err(|e| {
             log::error!("Failed to parse JWT claims as JSON: {}", e);
             ServiceError::internal_server_error("Token validation failed: invalid token format")
                 .with_tag("invalid_jwt_json")
@@ -192,6 +198,68 @@ fn respond_empty(req: &HttpRequest, status: StatusCode, message: &str) -> HttpRe
         .respond_to(req)
 }
 
+fn normalize_redirect_uri(uri: &str) -> Result<String, ServiceError> {
+    let trimmed_uri = uri.trim();
+    if trimmed_uri.is_empty() {
+        return Ok(String::new());
+    }
+
+    let normalized = Url::parse(trimmed_uri)
+        .map_err(|e| {
+            log::warn!("Invalid redirect_uri received: {}", e);
+            ServiceError::bad_request("Invalid redirect_uri format")
+                .with_tag("invalid_redirect_uri")
+                .with_detail(format!("Failed to parse redirect_uri: {e}"))
+        })?
+        .to_string();
+
+    Ok(normalized)
+}
+
+fn validate_redirect_uri(redirect_uri: Option<&str>) -> Result<Option<String>, ServiceError> {
+    let allowlist = match env::var("ALLOWED_REDIRECT_URIS") {
+        Ok(values) => {
+            let mut normalized = Vec::new();
+            for value in values.split([',', ';']) {
+                let normalized_uri = normalize_redirect_uri(value)?;
+                if normalized_uri.is_empty() {
+                    continue;
+                }
+                normalized.push(normalized_uri);
+            }
+            normalized
+        }
+        Err(_) => Vec::new(),
+    }
+    .into_iter()
+    .filter(|uri| !uri.is_empty())
+    .collect::<Vec<_>>();
+
+    if let Some(uri) = redirect_uri {
+        let normalized_uri = normalize_redirect_uri(uri)?;
+        if normalized_uri.is_empty() {
+            return Ok(None);
+        }
+        if allowlist.is_empty() {
+            return Err(
+                ServiceError::bad_request("redirect_uri is not allowed by server policy")
+                    .with_tag("redirect_uri_not_allowed")
+                    .with_detail(format!("Provided redirect_uri: {normalized_uri}")),
+            );
+        }
+        if !allowlist.contains(&normalized_uri) {
+            return Err(
+                ServiceError::bad_request("redirect_uri is not allowed by server policy")
+                    .with_tag("redirect_uri_not_allowed")
+                    .with_detail(format!("Provided redirect_uri: {normalized_uri}")),
+            );
+        }
+        return Ok(Some(normalized_uri));
+    }
+
+    Ok(None)
+}
+
 /// Process a tenant-scoped user signup and produce an HTTP response.
 ///
 /// On success returns an `HttpResponse::Ok` with a JSON `ResponseBody` containing the signup message and an empty payload.
@@ -239,6 +307,7 @@ pub async fn login(
     manager: web::Data<TenantPoolManager>,
     req: HttpRequest,
 ) -> Result<HttpResponse, ServiceError> {
+    // HOT PATH: primary authentication entrypoint for token issuance.
     let login_payload = login_dto.into_inner();
     validators::validate_login(&login_payload)?;
     let tenant_id = login_payload.tenant_id.clone();
@@ -299,6 +368,7 @@ pub async fn logout(req: HttpRequest) -> Result<HttpResponse, ServiceError> {
 /// # }
 /// ```
 pub async fn refresh(req: HttpRequest) -> Result<HttpResponse, ServiceError> {
+    // HOT PATH: high-frequency token refresh path for active sessions.
     let auth_context = AuthContext::from_request(&req).ok_or_else(|| {
         ServiceError::bad_request(constants::MESSAGE_TOKEN_MISSING)
             .with_tag("auth")
@@ -382,7 +452,10 @@ pub async fn refresh_token(
 ///
 /// // let resp = actix_web::rt::System::new().block_on(async { me(req).await });
 /// ```
-pub async fn me(req: HttpRequest, keycloak_client: web::Data<crate::utils::keycloak::KeycloakClient>) -> Result<HttpResponse, ServiceError> {
+pub async fn me(
+    req: HttpRequest,
+    keycloak_client: web::Data<crate::utils::keycloak::KeycloakClient>,
+) -> Result<HttpResponse, ServiceError> {
     let auth_context = AuthContext::from_request(&req).ok_or_else(|| {
         ServiceError::bad_request(constants::MESSAGE_TOKEN_MISSING)
             .with_tag("auth")
@@ -555,14 +628,11 @@ pub async fn keycloak_callback(
         })?;
 
     // Validate nonce in ID token matches session_state.nonce
-    let id_token_str = tokens
-        .id_token
-        .as_ref()
-        .ok_or_else(|| {
-            log::error!("ID token not present in token response");
-            ServiceError::internal_server_error("Token validation failed: ID token missing")
-                .with_tag("missing_id_token")
-        })?;
+    let id_token_str = tokens.id_token.as_ref().ok_or_else(|| {
+        log::error!("ID token not present in token response");
+        ServiceError::internal_server_error("Token validation failed: ID token missing")
+            .with_tag("missing_id_token")
+    })?;
 
     // Decode ID token claims using shared helper
     let id_token_claims = decode_id_token_claims(id_token_str)?;
@@ -586,7 +656,9 @@ pub async fn keycloak_callback(
     // Production guard: Prevent OAuth flow in production until full Keycloak/token validation is implemented
     let app_env = std::env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
     if app_env == "production" {
-        log::error!("OAuth login attempted in production with incomplete implementation. Aborting.");
+        log::error!(
+            "OAuth login attempted in production with incomplete implementation. Aborting."
+        );
         session.purge();
         return Ok(HttpResponse::BadRequest().json(AuthResponse {
             success: false,
@@ -643,8 +715,9 @@ pub async fn keycloak_callback(
         .map_err(|_| {
             log::error!("OAUTH_FRONTEND_CALLBACK_URL not set and no development default available");
             ServiceError::internal_server_error(
-                "OAuth configuration incomplete: frontend callback URL not configured"
-            ).with_tag("oauth_config_missing")
+                "OAuth configuration incomplete: frontend callback URL not configured",
+            )
+            .with_tag("oauth_config_missing")
         })?
         .trim()
         .to_string();
@@ -654,9 +727,8 @@ pub async fn keycloak_callback(
     let _validated_url = Url::parse(&frontend_callback_url)
         .map_err(|e| {
             log::error!("Invalid OAUTH_FRONTEND_CALLBACK_URL: {}", e);
-            ServiceError::bad_request(
-                "OAuth configuration error: invalid callback URL format"
-            ).with_tag("oauth_invalid_callback_url")
+            ServiceError::bad_request("OAuth configuration error: invalid callback URL format")
+                .with_tag("oauth_invalid_callback_url")
         })?
         .to_string(); // Normalize and validate
 
@@ -756,7 +828,9 @@ pub async fn keycloak_callback_json(
             username: None,
             email: None,
             tenant_id: None,
-            error: Some("Authentication session expired. Please restart authentication.".to_string()),
+            error: Some(
+                "Authentication session expired. Please restart authentication.".to_string(),
+            ),
         }));
     }
 
@@ -809,14 +883,11 @@ pub async fn keycloak_callback_json(
         })?;
 
     // Validate nonce in ID token matches session_state.nonce
-    let id_token_str = tokens
-        .id_token
-        .as_ref()
-        .ok_or_else(|| {
-            log::error!("ID token not present in token response");
-            ServiceError::internal_server_error("Token validation failed: ID token missing")
-                .with_tag("missing_id_token")
-        })?;
+    let id_token_str = tokens.id_token.as_ref().ok_or_else(|| {
+        log::error!("ID token not present in token response");
+        ServiceError::internal_server_error("Token validation failed: ID token missing")
+            .with_tag("missing_id_token")
+    })?;
 
     // Decode ID token claims using shared helper
     let id_token_claims = decode_id_token_claims(id_token_str)?;
@@ -846,7 +917,9 @@ pub async fn keycloak_callback_json(
     // Production guard: Prevent OAuth flow in production until full Keycloak/token validation is implemented
     let app_env = std::env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
     if app_env == "production" {
-        log::error!("OAuth login attempted in production with incomplete implementation. Aborting.");
+        log::error!(
+            "OAuth login attempted in production with incomplete implementation. Aborting."
+        );
         session.purge();
         return Ok(HttpResponse::BadRequest().json(AuthResponse {
             success: false,
@@ -879,7 +952,10 @@ pub async fn keycloak_callback_json(
 
     let token = crate::models::user_token::UserToken::generate_token(&oauth_login);
 
-    log::debug!("OAuth callback successful for user: sub={}", user_info.oauth_unique_id);
+    log::debug!(
+        "OAuth callback successful for user: sub={}",
+        user_info.oauth_unique_id
+    );
 
     Ok(HttpResponse::Ok().json(AuthResponse {
         success: true,
@@ -947,7 +1023,7 @@ pub async fn keycloak_callback_stateless(
     let allow_stateless = std::env::var("APP_ALLOW_STATELESS_OAUTH")
         .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
         .unwrap_or(false);
-    
+
     if !allow_stateless {
         log::warn!("Stateless OAuth callback rejected: APP_ALLOW_STATELESS_OAUTH not enabled");
         return Ok(HttpResponse::BadRequest().json(AuthResponse {
@@ -957,7 +1033,10 @@ pub async fn keycloak_callback_stateless(
             username: None,
             email: None,
             tenant_id: None,
-            error: Some("Stateless OAuth is not enabled. Set APP_ALLOW_STATELESS_OAUTH=true to enable.".to_string()),
+            error: Some(
+                "Stateless OAuth is not enabled. Set APP_ALLOW_STATELESS_OAUTH=true to enable."
+                    .to_string(),
+            ),
         }));
     }
 
@@ -985,10 +1064,12 @@ pub async fn keycloak_callback_stateless(
     // Extract optional PKCE code_verifier and nonce from request
     let code_verifier = callback_request.code_verifier.as_deref();
     let nonce = callback_request.nonce.as_deref();
+    let redirect_uri = validate_redirect_uri(callback_request.redirect_uri.as_deref())?;
 
     log::debug!(
-        "Exchanging authorization code for tokens (stateless mode with JWKS validation, PKCE: {})",
-        code_verifier.is_some()
+        "Exchanging authorization code for tokens (stateless mode with JWKS validation, PKCE: {}, redirect_uri: {:?})",
+        code_verifier.is_some(),
+        redirect_uri
     );
 
     // Exchange authorization code for tokens using stateless method
@@ -999,26 +1080,21 @@ pub async fn keycloak_callback_stateless(
     // - PKCE verification (when code_verifier is provided)
     // - Nonce validation (when nonce is provided)
     let tokens = keycloak_client
-        .exchange_code_stateless(code, code_verifier, nonce)
+        .exchange_code_stateless(code, code_verifier, nonce, redirect_uri.as_deref())
         .await
         .map_err(|e| {
             log::error!("Failed to exchange authorization code for tokens: {}", e);
-            ServiceError::internal_server_error(
-                "Token exchange failed. Please try again.",
-            )
-            .with_tag("token_exchange_failed")
-            .with_detail(format!("Keycloak error: {}", e))
+            ServiceError::internal_server_error("Token exchange failed. Please try again.")
+                .with_tag("token_exchange_failed")
+                .with_detail(format!("Keycloak error: {}", e))
         })?;
 
     // Get the ID token (already validated by exchange_code_stateless)
-    let id_token_str = tokens
-        .id_token
-        .as_ref()
-        .ok_or_else(|| {
-            log::error!("ID token not present in token response");
-            ServiceError::internal_server_error("Token validation failed: ID token missing")
-                .with_tag("missing_id_token")
-        })?;
+    let id_token_str = tokens.id_token.as_ref().ok_or_else(|| {
+        log::error!("ID token not present in token response");
+        ServiceError::internal_server_error("Token validation failed: ID token missing")
+            .with_tag("missing_id_token")
+    })?;
 
     // Decode ID token claims to extract user information
     // Note: Signature and claims have already been validated by exchange_code_stateless

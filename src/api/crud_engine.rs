@@ -4,11 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use validator::Validate;
 
-use crate::{
-    config::db::Pool,
-    error::ServiceError,
-    types::TenantId,
-};
+use crate::{config::db::Pool, error::ServiceError, types::TenantId};
 
 /// Generic CRUD context extracted from request
 pub struct CrudContext {
@@ -39,7 +35,12 @@ impl CrudContext {
     }
 
     /// Get database connection
-    pub fn conn(&self) -> Result<diesel::r2d2::PooledConnection<diesel::r2d2::ConnectionManager<diesel::PgConnection>>, ServiceError> {
+    pub fn conn(
+        &self,
+    ) -> Result<
+        diesel::r2d2::PooledConnection<diesel::r2d2::ConnectionManager<diesel::PgConnection>>,
+        ServiceError,
+    > {
         self.pool.get().map_err(|e| {
             ServiceError::internal_server_error("Database connection failed")
                 .with_detail(e.to_string())
@@ -53,12 +54,35 @@ pub trait CrudOperations: Sized + Serialize {
     type CreateDto: for<'de> Deserialize<'de> + Validate;
     type UpdateDto: for<'de> Deserialize<'de> + Validate;
 
-    fn create(dto: Self::CreateDto, tenant_id: &str, conn: &mut crate::config::db::Connection) -> Result<Self, DieselError>;
-    fn find_all(tenant_id: &str, limit: i64, offset: i64, conn: &mut crate::config::db::Connection) -> Result<Vec<Self>, DieselError>;
-    fn count(tenant_id: &str, conn: &mut crate::config::db::Connection) -> Result<i64, DieselError>;
-    fn find_by_id(id: i32, tenant_id: &str, conn: &mut crate::config::db::Connection) -> Result<Self, DieselError>;
-    fn update(id: i32, dto: Self::UpdateDto, tenant_id: &str, conn: &mut crate::config::db::Connection) -> Result<Self, DieselError>;
-    fn delete(id: i32, tenant_id: &str, conn: &mut crate::config::db::Connection) -> Result<(), DieselError>;
+    fn create(
+        dto: Self::CreateDto,
+        tenant_id: &str,
+        conn: &mut crate::config::db::Connection,
+    ) -> Result<Self, DieselError>;
+    fn find_all(
+        tenant_id: &str,
+        limit: i64,
+        offset: i64,
+        conn: &mut crate::config::db::Connection,
+    ) -> Result<Vec<Self>, DieselError>;
+    fn count(tenant_id: &str, conn: &mut crate::config::db::Connection)
+        -> Result<i64, DieselError>;
+    fn find_by_id(
+        id: i32,
+        tenant_id: &str,
+        conn: &mut crate::config::db::Connection,
+    ) -> Result<Self, DieselError>;
+    fn update(
+        id: i32,
+        dto: Self::UpdateDto,
+        tenant_id: &str,
+        conn: &mut crate::config::db::Connection,
+    ) -> Result<Self, DieselError>;
+    fn delete(
+        id: i32,
+        tenant_id: &str,
+        conn: &mut crate::config::db::Connection,
+    ) -> Result<(), DieselError>;
 }
 
 /// Generic CRUD handler builder
@@ -73,10 +97,12 @@ impl<T: CrudOperations> CrudHandler<T> {
         dto: web::Json<T::CreateDto>,
     ) -> Result<HttpResponse, ServiceError> {
         dto.validate().map_err(|e| {
-            let error_messages: Vec<String> = e.field_errors()
+            let error_messages: Vec<String> = e
+                .field_errors()
                 .iter()
                 .map(|(field, errors)| {
-                    let messages: Vec<String> = errors.iter()
+                    let messages: Vec<String> = errors
+                        .iter()
                         .filter_map(|err| err.message.as_ref().map(|m| m.to_string()))
                         .collect();
                     format!("{}: {}", field, messages.join(", "))
@@ -174,10 +200,12 @@ impl<T: CrudOperations> CrudHandler<T> {
         dto: web::Json<T::UpdateDto>,
     ) -> Result<HttpResponse, ServiceError> {
         dto.validate().map_err(|e| {
-            let error_messages: Vec<String> = e.field_errors()
+            let error_messages: Vec<String> = e
+                .field_errors()
                 .iter()
                 .map(|(field, errors)| {
-                    let messages: Vec<String> = errors.iter()
+                    let messages: Vec<String> = errors
+                        .iter()
                         .filter_map(|err| err.message.as_ref().map(|m| m.to_string()))
                         .collect();
                     format!("{}: {}", field, messages.join(", "))
@@ -192,12 +220,13 @@ impl<T: CrudOperations> CrudHandler<T> {
         let ctx = CrudContext::from_request(&req)?;
         let mut conn = ctx.conn()?;
 
-        let entity = T::update(id, dto.into_inner(), &ctx.tenant_id, &mut conn).map_err(|e| match e {
-            DieselError::NotFound => ServiceError::not_found("Record not found"),
-            other => ServiceError::internal_server_error("Update failed")
-                .with_detail(other.to_string())
-                .with_tag("database"),
-        })?;
+        let entity =
+            T::update(id, dto.into_inner(), &ctx.tenant_id, &mut conn).map_err(|e| match e {
+                DieselError::NotFound => ServiceError::not_found("Record not found"),
+                other => ServiceError::internal_server_error("Update failed")
+                    .with_detail(other.to_string())
+                    .with_tag("database"),
+            })?;
 
         Ok(HttpResponse::Ok().json(json!({
             "message": "Updated successfully",

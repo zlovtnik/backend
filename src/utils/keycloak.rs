@@ -1,18 +1,18 @@
+use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+use once_cell::sync::Lazy;
 use openidconnect::{
     core::{CoreClient, CoreProviderMetadata, CoreResponseType},
     AuthenticationFlow, ClientId, ClientSecret, CsrfToken, Nonce, OAuth2TokenResponse,
     PkceCodeChallenge, RedirectUrl, Scope,
 };
-use reqwest::Client as ReqwestClient;
 use reqwest::blocking::Client as BlockingClient;
+use reqwest::Client as ReqwestClient;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 use url::Url;
-use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
-use once_cell::sync::Lazy;
 
 /// TTL-based JWKS cache to avoid fetching on every validation.
 /// Key: JWKS URL, Value: (cached_at timestamp, Jwks data)
@@ -257,7 +257,8 @@ impl KeycloakClient {
         config: KeycloakConfig,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         // Validate configuration by attempting discovery
-        let _provider_metadata = fetch_provider_metadata(&config.issuer_url, "KeycloakClient::new").await?;
+        let _provider_metadata =
+            fetch_provider_metadata(&config.issuer_url, "KeycloakClient::new").await?;
 
         log::info!(
             "Keycloak: Successfully initialized with issuer: {}",
@@ -274,7 +275,8 @@ impl KeycloakClient {
 
     #[allow(dead_code)]
     async fn validate_configuration(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let _provider_metadata = fetch_provider_metadata(&self.issuer_url, "validate_configuration").await?;
+        let _provider_metadata =
+            fetch_provider_metadata(&self.issuer_url, "validate_configuration").await?;
         Ok(())
     }
 
@@ -291,7 +293,8 @@ impl KeycloakClient {
     pub async fn get_authorization_url(
         &self,
     ) -> Result<(String, OAuthSessionState), Box<dyn std::error::Error + Send + Sync>> {
-        let provider_metadata = fetch_provider_metadata(&self.issuer_url, "get_authorization_url").await?;
+        let provider_metadata =
+            fetch_provider_metadata(&self.issuer_url, "get_authorization_url").await?;
 
         // Parse the redirect_url into RedirectUrl type required by OpenID Connect
         let redirect_url = RedirectUrl::new(self.redirect_url.clone())
@@ -359,7 +362,8 @@ impl KeycloakClient {
         use openidconnect::{AuthorizationCode, PkceCodeVerifier};
 
         // Fetch provider metadata
-        let provider_metadata = fetch_provider_metadata(&self.issuer_url, "exchange_code_for_token").await?;
+        let provider_metadata =
+            fetch_provider_metadata(&self.issuer_url, "exchange_code_for_token").await?;
 
         // Parse the redirect_url into RedirectUrl type required by OpenID Connect
         let redirect_url = RedirectUrl::new(self.redirect_url.clone())
@@ -463,6 +467,20 @@ impl KeycloakClient {
     ///                     Strongly recommended for public clients (SPAs).
     /// * `expected_nonce` - Optional nonce to validate in the ID token. If provided and the
     ///                      ID token contains a nonce claim, they must match.
+    /// * `redirect_uri_override` - Optional redirect URI to use instead of the configured default.
+    ///                             **SECURITY WARNING**: This parameter must only be used with trusted values.
+    ///                             Callers receiving this value from user input MUST validate it against an
+    ///                             allowlist of permitted redirect URIs before passing it here.
+    ///                             Keycloak performs server-side validation of the redirect URI (it must match
+    ///                             one of the Valid Redirect URIs configured in the client settings), but this
+    ///                             does not prevent open redirect vulnerabilities if arbitrary URIs are accepted.
+    ///                             Pass `None` to use the configured `KEYCLOAK_REDIRECT_URL` environment variable.
+    ///
+    /// # API Change Notice
+    /// This function signature was extended to include `redirect_uri_override`. Existing callers should:
+    /// - Pass `None` to maintain previous behavior (uses configured redirect URL)
+    /// - Pass a validated override only when the frontend provides a different redirect URI
+    ///   (common in stateless SPA flows where the frontend initiates OAuth with its own callback URL)
     ///
     /// # Returns
     /// TokenResponse containing validated id_token (with claims), access_token, and refresh_token
@@ -480,14 +498,21 @@ impl KeycloakClient {
         code: &str,
         code_verifier: Option<&str>,
         expected_nonce: Option<&str>,
+        redirect_uri_override: Option<&str>,
     ) -> Result<TokenResponse, Box<dyn std::error::Error + Send + Sync>> {
         use openidconnect::{AuthorizationCode, PkceCodeVerifier};
 
         // Fetch provider metadata
-        let provider_metadata = fetch_provider_metadata(&self.issuer_url, "exchange_code_stateless").await?;
+        let provider_metadata =
+            fetch_provider_metadata(&self.issuer_url, "exchange_code_stateless").await?;
+
+        // Use provided redirect_uri or fall back to configured default
+        let redirect_uri = redirect_uri_override
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| self.redirect_url.clone());
 
         // Parse the redirect_url into RedirectUrl type
-        let redirect_url = RedirectUrl::new(self.redirect_url.clone())
+        let redirect_url = RedirectUrl::new(redirect_uri)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
         // Create client from metadata
@@ -512,13 +537,15 @@ impl KeycloakClient {
             "exchange_code_stateless: Exchanging code for tokens (PKCE: {})",
             code_verifier.is_some()
         );
-        
-        let mut exchange_request = client.exchange_code(AuthorizationCode::new(code.to_string()))?;
-        
+
+        let mut exchange_request =
+            client.exchange_code(AuthorizationCode::new(code.to_string()))?;
+
         // Apply PKCE code_verifier if provided
         if let Some(verifier) = code_verifier {
             log::debug!("exchange_code_stateless: Applying PKCE code_verifier");
-            exchange_request = exchange_request.set_pkce_verifier(PkceCodeVerifier::new(verifier.to_string()));
+            exchange_request =
+                exchange_request.set_pkce_verifier(PkceCodeVerifier::new(verifier.to_string()));
         }
 
         let token_response = exchange_request
@@ -547,13 +574,16 @@ impl KeycloakClient {
         // **MANDATORY**: Validate ID token signature and claims using JWKS
         // This ensures token integrity even when PKCE is not used
         log::debug!("exchange_code_stateless: Validating ID token signature via JWKS");
-        let validated_claims = self.validate_id_token_internal(&id_token_jwt).await.map_err(|e| {
-            log::error!("exchange_code_stateless: ID token validation failed: {}", e);
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("ID token validation failed: {}", e),
-            )) as Box<dyn std::error::Error + Send + Sync>
-        })?;
+        let validated_claims = self
+            .validate_id_token_internal(&id_token_jwt)
+            .await
+            .map_err(|e| {
+                log::error!("exchange_code_stateless: ID token validation failed: {}", e);
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("ID token validation failed: {}", e),
+                )) as Box<dyn std::error::Error + Send + Sync>
+            })?;
 
         // Validate nonce if expected_nonce is provided
         if let Some(expected) = expected_nonce {
@@ -576,11 +606,14 @@ impl KeycloakClient {
                     log::debug!("exchange_code_stateless: Nonce validation successful");
                 }
                 None => {
-                    log::warn!("exchange_code_stateless: Expected nonce but ID token has no nonce claim");
+                    log::warn!(
+                        "exchange_code_stateless: Expected nonce but ID token has no nonce claim"
+                    );
                     return Err(Box::new(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "Expected nonce validation but ID token contains no nonce claim",
-                    )) as Box<dyn std::error::Error + Send + Sync>);
+                    ))
+                        as Box<dyn std::error::Error + Send + Sync>);
                 }
             }
         }
@@ -627,10 +660,18 @@ impl KeycloakClient {
 
             if let Some((cached_at, jwks)) = cache.get(jwks_url) {
                 if cached_at.elapsed() < JWKS_CACHE_TTL {
-                    log::debug!("JWKS cache hit for {} (age: {:?})", jwks_url, cached_at.elapsed());
+                    log::debug!(
+                        "JWKS cache hit for {} (age: {:?})",
+                        jwks_url,
+                        cached_at.elapsed()
+                    );
                     return Ok(jwks.clone());
                 }
-                log::debug!("JWKS cache expired for {} (age: {:?})", jwks_url, cached_at.elapsed());
+                log::debug!(
+                    "JWKS cache expired for {} (age: {:?})",
+                    jwks_url,
+                    cached_at.elapsed()
+                );
             }
         }
 
@@ -701,6 +742,7 @@ impl KeycloakClient {
         &self,
         id_token: &str,
     ) -> Result<Claims, Box<dyn std::error::Error + Send + Sync>> {
+        // HOT PATH: OAuth token verification on authenticated request flows.
         // Decode JWT header to get key ID
         let header = decode_header(id_token).map_err(|e| {
             log::error!("Failed to decode JWT header: {}", e);
@@ -868,25 +910,46 @@ impl KeycloakClient {
     /// Validate ID token signature and claims using Keycloak's JWKS endpoint (synchronous version).
     ///
     /// This method performs the same validation as validate_id_token but synchronously.
-    pub fn validate_id_token_sync(&self, id_token: &str) -> Result<Claims, Box<dyn std::error::Error + Send + Sync>> {
-        let header = decode_header(id_token).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+    pub fn validate_id_token_sync(
+        &self,
+        id_token: &str,
+    ) -> Result<Claims, Box<dyn std::error::Error + Send + Sync>> {
+        let header = decode_header(id_token)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
-        let kid = header.kid.ok_or_else(|| Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, "No kid in header")) as Box<dyn std::error::Error + Send + Sync>)?;
+        let kid = header.kid.ok_or_else(|| {
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "No kid in header",
+            )) as Box<dyn std::error::Error + Send + Sync>
+        })?;
 
         let jwks_url = format!("{}/protocol/openid-connect/certs", self.issuer_url);
 
         let client = BlockingClient::new();
-        let jwks: Jwks = client.get(&jwks_url).send().map_err(|e| Box::new(e))?.json().map_err(|e| Box::new(e))?;
+        let jwks: Jwks = client
+            .get(&jwks_url)
+            .send()
+            .map_err(|e| Box::new(e))?
+            .json()
+            .map_err(|e| Box::new(e))?;
 
-        let jwk = jwks.keys.iter().find(|j| j.kid == kid).ok_or_else(|| Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, format!("No JWK found for key ID: {}", kid))) as Box<dyn std::error::Error + Send + Sync>)?;
+        let jwk = jwks.keys.iter().find(|j| j.kid == kid).ok_or_else(|| {
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("No JWK found for key ID: {}", kid),
+            )) as Box<dyn std::error::Error + Send + Sync>
+        })?;
 
-        let decoding_key = DecodingKey::from_rsa_components(&jwk.n, &jwk.e).map_err(|e| Box::new(e))?;
+        let decoding_key =
+            DecodingKey::from_rsa_components(&jwk.n, &jwk.e).map_err(|e| Box::new(e))?;
 
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_issuer(&[&self.issuer_url]);
         validation.set_audience(&[&self.client_id]);
 
-        let token_data = decode::<Claims>(id_token, &decoding_key, &validation).map_err(|e| Box::new(e))?;
+        let token_data =
+            decode::<Claims>(id_token, &decoding_key, &validation).map_err(|e| Box::new(e))?;
 
         let claims = token_data.claims;
         claims.validate_issuer(&self.issuer_url)?;
@@ -918,7 +981,9 @@ where
             Ok(Some(vec))
         }
         Value::Null => Ok(None),
-        _ => Err(serde::de::Error::custom("aud must be a string or array of strings")),
+        _ => Err(serde::de::Error::custom(
+            "aud must be a string or array of strings",
+        )),
     }
 }
 

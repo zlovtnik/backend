@@ -12,9 +12,76 @@ use log::{error, info};
 use crate::config::db::TenantPoolManager;
 use crate::constants;
 use crate::models::response::ResponseBody;
+use crate::state::AppState;
 use crate::types::TenantId;
 use crate::utils::keycloak::KeycloakClient;
 use crate::utils::token_utils;
+
+fn tenant_manager_from_request(req: &ServiceRequest) -> Option<TenantPoolManager> {
+    req.app_data::<Data<AppState>>()
+        .map(|state| state.tenant_manager())
+        .or_else(|| {
+            req.app_data::<Data<TenantPoolManager>>()
+                .map(|manager| manager.get_ref().clone())
+        })
+}
+
+fn keycloak_client_from_request(req: &ServiceRequest) -> Option<KeycloakClient> {
+    req.app_data::<Data<AppState>>()
+        .map(|state| state.keycloak_client())
+        .or_else(|| {
+            req.app_data::<Data<KeycloakClient>>()
+                .map(|client| client.get_ref().clone())
+        })
+}
+
+fn tenant_id_from_host(req: &ServiceRequest) -> Option<String> {
+    let connection_info = req.connection_info();
+    let host = connection_info.host();
+    let trimmed_host = host.trim().to_lowercase();
+    if trimmed_host.is_empty() {
+        return None;
+    }
+
+    let host = trimmed_host
+        .split(':')
+        .next()
+        .unwrap_or(trimmed_host.as_str());
+    if host == "localhost" || host == "127.0.0.1" || host == "[::1]" {
+        return None;
+    }
+
+    let host_parts: Vec<&str> = host.split('.').collect();
+    if host_parts.len() < 3 {
+        return None;
+    }
+
+    host_parts
+        .first()
+        .filter(|tenant| !tenant.is_empty() && !tenant.eq_ignore_ascii_case("www"))
+        .map(|tenant| tenant.to_string())
+}
+
+fn derive_tenant_id(req: &ServiceRequest) -> Option<String> {
+    tenant_id_from_host(req).or_else(|| {
+        req.app_data::<Data<AppState>>()
+            .map(|state| state.config().bootstrap.default_tenant_id.clone())
+    })
+}
+
+fn unauthorized_response() -> HttpResponse {
+    HttpResponse::Unauthorized().json(ResponseBody::new(
+        constants::MESSAGE_INVALID_TOKEN,
+        constants::EMPTY,
+    ))
+}
+
+fn internal_server_error_response() -> HttpResponse {
+    HttpResponse::InternalServerError().json(ResponseBody::new(
+        constants::MESSAGE_INTERNAL_SERVER_ERROR,
+        constants::EMPTY,
+    ))
+}
 
 pub struct Authentication;
 
@@ -73,17 +140,13 @@ where
     /// // }
     /// ```
     fn call(&self, req: ServiceRequest) -> Self::Future {
+        // HOT PATH: every protected HTTP request passes through this authentication path.
         // Let CORS middleware handle preflight requests without auth checks
         if Method::OPTIONS == *req.method() {
             let fut = self.service.call(req);
             return Box::pin(async move { fut.await.map(ServiceResponse::map_into_left_body) });
         }
 
-        if Method::OPTIONS == *req.method() {
-            let fut = self.service.call(req);
-            return Box::pin(async move { fut.await.map(ServiceResponse::map_into_left_body) });
-        }
-
         // Check if route should be bypassed (no authentication required)
         let path = req.path();
         if constants::IGNORE_ROUTES
@@ -94,44 +157,24 @@ where
             return Box::pin(async move { fut.await.map(ServiceResponse::map_into_left_body) });
         }
 
-        let keycloak_client = match req.app_data::<Data<KeycloakClient>>() {
-            Some(k) => k.clone(),
+        let keycloak_client = match keycloak_client_from_request(&req) {
+            Some(client) => client,
             None => {
                 let (request, _pl) = req.into_parts();
-                let response = HttpResponse::Unauthorized()
-                    .json(ResponseBody::new(
-                        constants::MESSAGE_INVALID_TOKEN,
-                        constants::EMPTY,
-                    ))
-                    .map_into_right_body();
+                let response = internal_server_error_response().map_into_right_body();
                 return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
             }
         };
-        // Check if route should be bypassed (no authentication required)
-        let path = req.path();
-        if constants::IGNORE_ROUTES
-            .iter()
-            .any(|route| path.starts_with(route))
-        {
-            let fut = self.service.call(req);
-            return Box::pin(async move { fut.await.map(ServiceResponse::map_into_left_body) });
-        }
 
         // Extract dependencies - early exit if not available
-        let manager = match req.app_data::<Data<TenantPoolManager>>() {
-            Some(m) => m.clone(),
+        let manager = match tenant_manager_from_request(&req) {
+            Some(manager) => manager,
             None => {
                 let (request, _pl) = req.into_parts();
-                let response = HttpResponse::Unauthorized()
-                    .json(ResponseBody::new(
-                        constants::MESSAGE_INVALID_TOKEN,
-                        constants::EMPTY,
-                    ))
-                    .map_into_right_body();
+                let response = internal_server_error_response().map_into_right_body();
                 return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
             }
         };
-
 
         let token = if let Some(cookie) = req.cookie("auth_token") {
             Some(cookie.value().to_string())
@@ -140,12 +183,7 @@ where
                 Ok(s) => s,
                 Err(_) => {
                     let (request, _pl) = req.into_parts();
-                    let response = HttpResponse::Unauthorized()
-                        .json(ResponseBody::new(
-                            constants::MESSAGE_INVALID_TOKEN,
-                            constants::EMPTY,
-                        ))
-                        .map_into_right_body();
+                    let response = unauthorized_response().map_into_right_body();
                     return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
                 }
             };
@@ -162,12 +200,16 @@ where
             Some(t) if !t.is_empty() => t,
             _ => {
                 let (request, _pl) = req.into_parts();
-                let response = HttpResponse::Unauthorized()
-                    .json(ResponseBody::new(
-                        constants::MESSAGE_INVALID_TOKEN,
-                        constants::EMPTY,
-                    ))
-                    .map_into_right_body();
+                let response = unauthorized_response().map_into_right_body();
+                return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
+            }
+        };
+
+        let server_tenant_id = match derive_tenant_id(&req) {
+            Some(tenant_id) => tenant_id,
+            None => {
+                let (request, _pl) = req.into_parts();
+                let response = internal_server_error_response().map_into_right_body();
                 return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
             }
         };
@@ -175,58 +217,63 @@ where
         let req_path = req.path().to_string();
 
         // Validate token using async approach
-        match crate::utils::token_utils::decode_token(token.clone()) {
+        match token_utils::decode_token(token.clone()) {
             Ok(token_data) => {
-                let tenant_id = token_data.claims.tenant_id.clone();
-                if let Some(tenant_pool) = manager.get_tenant_pool(&tenant_id) {
-                    match crate::utils::token_utils::verify_token(&token_data, &tenant_pool, Some(&keycloak_client)) {
+                if token_data.claims.tenant_id != server_tenant_id {
+                    error!(
+                        "Tenant mismatch in token (token: {}, request: {})",
+                        token_data.claims.tenant_id, server_tenant_id
+                    );
+                    let (request, _pl) = req.into_parts();
+                    let response = unauthorized_response().map_into_right_body();
+                    return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
+                }
+
+                match manager.get_pool(&server_tenant_id) {
+                    Ok(tenant_pool) => match token_utils::verify_token(
+                        &token_data,
+                        &tenant_pool,
+                        Some(&keycloak_client),
+                    ) {
                         Ok(_) => {
                             info!(
                                 "Successful authentication - tenant: {}, user: {}, route: {}",
-                                tenant_id, token_data.claims.user, req_path
+                                server_tenant_id, token_data.claims.user, req_path
                             );
 
                             // Augment request extensions with tenant context
                             req.extensions_mut().insert(tenant_pool);
-                            req.extensions_mut().insert(TenantId(tenant_id.clone()));
+                            req.extensions_mut()
+                                .insert(TenantId(server_tenant_id.clone()));
 
                             // Call the service with augmented request
                             let fut = self.service.call(req);
-                            Box::pin(async move { fut.await.map(ServiceResponse::map_into_left_body) })
+                            Box::pin(
+                                async move { fut.await.map(ServiceResponse::map_into_left_body) },
+                            )
                         }
                         Err(e) => {
                             error!("Token verification failed: {}", e);
                             let (request, _pl) = req.into_parts();
-                            let response = HttpResponse::Unauthorized()
-                                .json(ResponseBody::new(
-                                    constants::MESSAGE_INVALID_TOKEN,
-                                    constants::EMPTY,
-                                ))
-                                .map_into_right_body();
+                            let response = unauthorized_response().map_into_right_body();
                             Box::pin(async { Ok(ServiceResponse::new(request, response)) })
                         }
+                    },
+                    Err(err) => {
+                        error!(
+                            "Tenant pool unavailable for '{}': {}",
+                            server_tenant_id, err
+                        );
+                        let (request, _pl) = req.into_parts();
+                        let response = unauthorized_response().map_into_right_body();
+                        Box::pin(async { Ok(ServiceResponse::new(request, response)) })
                     }
-                } else {
-                    error!("Tenant '{}' not found for token", tenant_id);
-                    let (request, _pl) = req.into_parts();
-                    let response = HttpResponse::Unauthorized()
-                        .json(ResponseBody::new(
-                            constants::MESSAGE_INVALID_TOKEN,
-                            constants::EMPTY,
-                        ))
-                        .map_into_right_body();
-                    Box::pin(async { Ok(ServiceResponse::new(request, response)) })
                 }
             }
             Err(e) => {
                 error!("Token decode failed: {}", e);
                 let (request, _pl) = req.into_parts();
-                let response = HttpResponse::Unauthorized()
-                    .json(ResponseBody::new(
-                        constants::MESSAGE_INVALID_TOKEN,
-                        constants::EMPTY,
-                    ))
-                    .map_into_right_body();
+                let response = unauthorized_response().map_into_right_body();
                 Box::pin(async { Ok(ServiceResponse::new(request, response)) })
             }
         }
@@ -384,48 +431,33 @@ pub mod functional_auth {
                 return Box::pin(async move { fut.await.map(ServiceResponse::map_into_left_body) });
             }
 
-            let manager = match req.app_data::<Data<TenantPoolManager>>() {
-                Some(mgr) => mgr.clone(),
+            let manager = match tenant_manager_from_request(&req) {
+                Some(manager) => manager,
                 None => {
                     error!("TenantPoolManager not found in app data");
                     let (request, _pl) = req.into_parts();
-                    let response = HttpResponse::Unauthorized()
-                        .json(ResponseBody::new(
-                            constants::MESSAGE_INVALID_TOKEN,
-                            constants::EMPTY,
-                        ))
-                        .map_into_right_body();
+                    let response = internal_server_error_response().map_into_right_body();
                     return Box::pin(async move { Ok(ServiceResponse::new(request, response)) });
                 }
             };
 
-            let keycloak_client = match req.app_data::<Data<KeycloakClient>>() {
-                Some(client) => client.clone(),
+            let keycloak_client = match keycloak_client_from_request(&req) {
+                Some(client) => client,
                 None => {
                     error!("KeycloakClient not found in app data");
                     let (request, _pl) = req.into_parts();
-                    let response = HttpResponse::Unauthorized()
-                        .json(ResponseBody::new(
-                            constants::MESSAGE_INVALID_TOKEN,
-                            constants::EMPTY,
-                        ))
-                        .map_into_right_body();
+                    let response = internal_server_error_response().map_into_right_body();
                     return Box::pin(async move { Ok(ServiceResponse::new(request, response)) });
                 }
             };
 
             let (tenant_id, user_id, token, tenant_pool) =
-                match Self::process_authentication(&keycloak_client, &req, manager.get_ref()) {
+                match Self::process_authentication(&keycloak_client, &req, &manager) {
                     Ok(data) => data,
                     Err(auth_error) => {
                         error!("Functional authentication failed: {:?}", auth_error);
                         let (request, _pl) = req.into_parts();
-                        let response = HttpResponse::Unauthorized()
-                            .json(ResponseBody::new(
-                                constants::MESSAGE_INVALID_TOKEN,
-                                constants::EMPTY,
-                            ))
-                            .map_into_right_body();
+                        let response = unauthorized_response().map_into_right_body();
                         return Box::pin(
                             async move { Ok(ServiceResponse::new(request, response)) },
                         );
@@ -440,10 +472,8 @@ pub mod functional_auth {
             let auth_header_value = format!("Bearer {}", token);
             match actix_web::http::header::HeaderValue::from_str(&auth_header_value) {
                 Ok(header_value) => {
-                    req.headers_mut().insert(
-                        actix_web::http::header::AUTHORIZATION,
-                        header_value,
-                    );
+                    req.headers_mut()
+                        .insert(actix_web::http::header::AUTHORIZATION, header_value);
                 }
                 Err(e) => {
                     log::debug!(
@@ -483,7 +513,8 @@ pub mod functional_auth {
         }
 
         /// Functional pipeline for token extraction and validation
-        fn process_authentication(keycloak_client: &Data<KeycloakClient>,
+        fn process_authentication(
+            keycloak_client: &KeycloakClient,
             req: &ServiceRequest,
             manager: &TenantPoolManager,
         ) -> Result<(String, String, String, crate::config::db::Pool), &'static str> {
@@ -495,14 +526,19 @@ pub mod functional_auth {
                 token_utils::decode_token(token.clone()).map_err(|_| "Token decode failed")?;
 
             let tenant_id = token_data.claims.tenant_id.clone();
+            let server_tenant_id = derive_tenant_id(req).ok_or("Tenant context missing")?;
             let user_id = token_data.claims.user.clone();
+
+            if tenant_id != server_tenant_id {
+                return Err("Token tenant mismatch");
+            }
 
             // Verify token against tenant database
             let tenant_pool = manager
-                .get_tenant_pool(&tenant_id)
-                .ok_or("Tenant not found")?;
+                .get_pool(&tenant_id)
+                .map_err(|_| "Tenant not found")?;
 
-            match crate::utils::token_utils::verify_token(&token_data, &tenant_pool, Some(keycloak_client)) {
+            match token_utils::verify_token(&token_data, &tenant_pool, Some(keycloak_client)) {
                 Ok(_) => Ok((tenant_id, user_id, token, tenant_pool.clone())),
                 Err(_) => Err("Token verification failed"),
             }

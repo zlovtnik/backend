@@ -42,13 +42,13 @@ fn find_by_id_reader(id: i32) -> QueryReader<Person> {
 }
 
 fn filter_reader(filter: PersonFilter) -> QueryReader<Page<Person>> {
-    use log::{debug, error};
+    use log::debug;
 
     QueryReader::new(move |conn| {
         debug!("Executing Person::filter with filter: {:?}", filter);
         Person::filter(filter.clone(), conn).map_err(|e| {
-            error!("Database error in Person::filter: {}", e);
-            ServiceError::internal_server_error(format!("Database error: {}", e))
+            debug!("Person::filter returned an error: {:?}", e);
+            e
         })
     })
 }
