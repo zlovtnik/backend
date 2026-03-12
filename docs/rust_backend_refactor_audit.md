@@ -124,7 +124,7 @@ Scope: `/src` (backend crate), pre-refactor baseline and migration scaffolding.
 ## 4) gRPC Surface Audit
 
 - Current baseline includes additive gRPC scaffolding only:
-  - `proto/core.proto` with `HealthService.Check` (unary).
+  - `proto/nexus/core/core.proto` with `HealthService.Check` (unary).
   - generated module wiring in `build.rs`.
   - Tonic server bootstrap in `src/adapters/grpc/server.rs`.
 - No existing auth/user/tenant/nfag parity RPCs are implemented yet; HTTP remains the only business transport.
