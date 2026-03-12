@@ -109,7 +109,10 @@ pub fn try_init_redis_client(url: &str) -> Option<Pool> {
     let client = match client_result {
         Either::Right(client) => client,
         Either::Left(e) => {
-            warn!("Failed to create Redis client for {}: {}. Redis cache will be disabled.", masked_url, e);
+            warn!(
+                "Failed to create Redis client for {}: {}. Redis cache will be disabled.",
+                masked_url, e
+            );
             return None;
         }
     };
@@ -119,7 +122,7 @@ pub fn try_init_redis_client(url: &str) -> Option<Pool> {
     let pool_result = Either::from_result(
         r2d2::Pool::builder()
             .connection_timeout(std::time::Duration::from_secs(5))
-            .build(manager)
+            .build(manager),
     );
 
     match pool_result {
@@ -128,7 +131,10 @@ pub fn try_init_redis_client(url: &str) -> Option<Pool> {
             Some(pool)
         }
         Either::Left(e) => {
-            warn!("Failed to create Redis pool for {}: {}. Redis cache will be disabled.", masked_url, e);
+            warn!(
+                "Failed to create Redis pool for {}: {}. Redis cache will be disabled.",
+                masked_url, e
+            );
             None
         }
     }

@@ -209,9 +209,7 @@ mod tests {
     #[test]
     fn from_request_reads_tenant_id_newtype() {
         let manager = ConnectionManager::<db::Connection>::new("postgres://localhost/test");
-        let pool = db::Pool::builder()
-            .max_size(1)
-            .build_unchecked(manager);
+        let pool = db::Pool::builder().max_size(1).build_unchecked(manager);
 
         let req = TestRequest::default().to_http_request();
         req.extensions_mut().insert(pool.clone());

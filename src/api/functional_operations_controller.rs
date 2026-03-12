@@ -1,6 +1,6 @@
 use actix_web::{get, post, web, HttpResponse};
-use serde::{Deserialize, Serialize};
 use log::info;
+use serde::{Deserialize, Serialize};
 
 use crate::error::ServiceError;
 use crate::functional::chain_builder::ChainBuilder;
@@ -116,10 +116,13 @@ async fn demo_filter(req: web::Json<FilterDemoRequest>) -> Result<HttpResponse, 
 
     // Validate condition before processing
     match req.condition.as_str() {
-        "even" | "odd" | "greater_than_5" | "less_than_10" => {},
-        _ => return Err(ServiceError::bad_request(
-            &format!("Invalid condition '{}'. Supported: even, odd, greater_than_5, less_than_10", req.condition)
-        )),
+        "even" | "odd" | "greater_than_5" | "less_than_10" => {}
+        _ => {
+            return Err(ServiceError::bad_request(&format!(
+                "Invalid condition '{}'. Supported: even, odd, greater_than_5, less_than_10",
+                req.condition
+            )))
+        }
     }
 
     let input_data = req.data.clone();
@@ -291,10 +294,12 @@ async fn demo_chain(req: web::Json<ChainDemoRequest>) -> Result<HttpResponse, Se
                 });
             }
             "take" => {
-                let count: usize = operation.param.parse()
-                    .map_err(|_| ServiceError::bad_request(
-                        &format!("Invalid count for 'take' operation: '{}' must be a positive integer", operation.param)
-                    ))?;
+                let count: usize = operation.param.parse().map_err(|_| {
+                    ServiceError::bad_request(&format!(
+                        "Invalid count for 'take' operation: '{}' must be a non-negative integer",
+                        operation.param
+                    ))
+                })?;
                 output_data = ChainBuilder::from_vec(current_data.clone())
                     .take(count)
                     .collect();
@@ -308,10 +313,12 @@ async fn demo_chain(req: web::Json<ChainDemoRequest>) -> Result<HttpResponse, Se
                 });
             }
             "skip" => {
-                let count: usize = operation.param.parse()
-                    .map_err(|_| ServiceError::bad_request(
-                        &format!("Invalid count for 'skip' operation: '{}' must be a positive integer", operation.param)
-                    ))?;
+                let count: usize = operation.param.parse().map_err(|_| {
+                    ServiceError::bad_request(&format!(
+                        "Invalid count for 'skip' operation: '{}' must be a non-negative integer",
+                        operation.param
+                    ))
+                })?;
                 output_data = ChainBuilder::from_vec(current_data.clone())
                     .skip(count)
                     .collect();
@@ -324,9 +331,7 @@ async fn demo_chain(req: web::Json<ChainDemoRequest>) -> Result<HttpResponse, Se
                     duration_ms: step_start.elapsed().as_millis() as u64,
                 });
             }
-            _ => {
-                return Err(ServiceError::bad_request("Unknown operation type"))
-            }
+            _ => return Err(ServiceError::bad_request("Unknown operation type")),
         }
 
         current_data = output_data;
@@ -395,9 +400,12 @@ async fn demo_state_transitions(
                 current_state / mutation.value
             }
             "set" => mutation.value,
-            _ => return Err(ServiceError::bad_request(
-                &format!("Unknown mutation type: '{}'", mutation.mutation_type)
-            )),
+            _ => {
+                return Err(ServiceError::bad_request(&format!(
+                    "Unknown mutation type: '{}'",
+                    mutation.mutation_type
+                )))
+            }
         };
 
         steps.push(TransformationStep {
@@ -467,7 +475,7 @@ async fn get_available_operations() -> Result<HttpResponse, ServiceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actix_web::{test, App, http::StatusCode};
+    use actix_web::{http::StatusCode, test, App};
 
     #[actix_web::test]
     async fn test_demo_filter_even_success() {
@@ -500,7 +508,7 @@ mod tests {
         let body = test::read_body(resp).await;
         let visualization: PipelineVisualization = serde_json::from_slice(&body)
             .expect("Failed to parse response as PipelineVisualization");
-        
+
         assert_eq!(visualization.initial_data, vec![1, 2, 3, 4, 5, 6]);
         assert_eq!(visualization.final_result, vec![2, 4, 6]);
         assert_eq!(visualization.steps.len(), 1);
@@ -567,7 +575,7 @@ mod tests {
         let body = test::read_body(resp).await;
         let visualization: PipelineVisualization = serde_json::from_slice(&body)
             .expect("Failed to parse response as PipelineVisualization");
-        
+
         assert_eq!(visualization.initial_data, vec![1, 2, 3, 4, 5]);
         assert_eq!(visualization.final_result, vec![2, 4, 6, 8, 10]);
         assert_eq!(visualization.steps.len(), 1);
@@ -642,7 +650,7 @@ mod tests {
         let body = test::read_body(resp).await;
         let visualization: PipelineVisualization = serde_json::from_slice(&body)
             .expect("Failed to parse response as PipelineVisualization");
-        
+
         assert_eq!(visualization.initial_data, vec![1, 2, 3, 4, 5, 6]);
         assert_eq!(visualization.final_result, vec![4, 8, 12]); // even then double
         assert_eq!(visualization.steps.len(), 2);
@@ -664,12 +672,10 @@ mod tests {
 
         let req_body = ChainDemoRequest {
             data: vec![1, 2, 3, 4, 5],
-            operations: vec![
-                ChainOperation {
-                    op_type: "take".to_string(),
-                    param: "not_a_number".to_string(),
-                },
-            ],
+            operations: vec![ChainOperation {
+                op_type: "take".to_string(),
+                param: "not_a_number".to_string(),
+            }],
         };
 
         let req = test::TestRequest::post()
@@ -721,7 +727,7 @@ mod tests {
         let body = test::read_body(resp).await;
         let visualization: PipelineVisualization = serde_json::from_slice(&body)
             .expect("Failed to parse response as PipelineVisualization");
-        
+
         assert_eq!(visualization.initial_data, vec![10]);
         assert_eq!(visualization.final_result, vec![30]); // 10 + 5 = 15, then 15 * 2 = 30
         assert_eq!(visualization.steps.len(), 2);
@@ -743,12 +749,10 @@ mod tests {
 
         let req_body = StateTransitionDemoRequest {
             initial_value: 10,
-            transitions: vec![
-                StateMutation {
-                    mutation_type: "divide".to_string(),
-                    value: 0,
-                },
-            ],
+            transitions: vec![StateMutation {
+                mutation_type: "divide".to_string(),
+                value: 0,
+            }],
         };
 
         let req = test::TestRequest::post()

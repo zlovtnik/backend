@@ -282,7 +282,7 @@ mod tests {
 
     use crate::config;
     use crate::config::db::TenantPoolManager;
-    use crate::models::person::{Gender, Person, PersonDTO};
+    use crate::models::person::{Person, PersonDTO, PersonGender};
     use crate::models::user::{LoginDTO, UserDTO};
     use crate::services::{account_service, address_book_service};
 
@@ -355,9 +355,9 @@ mod tests {
                     email: format!("user{}@example.com", x),
                     name: format!("user{}", x),
                     gender: Some(if x % 2 == 0 {
-                        Gender::Male
+                        PersonGender::Male
                     } else {
-                        Gender::Female
+                        PersonGender::Female
                     }),
                     age: x * 10,
                     address: "US".to_string(),

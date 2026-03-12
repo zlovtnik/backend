@@ -208,12 +208,34 @@ impl TenantPoolManager {
     }
 
     pub fn get_tenant_pool(&self, tenant_id: &str) -> Option<Pool> {
-        match self.tenant_pools.read() {
-            Ok(pools) => pools.get(tenant_id).cloned(),
-            Err(_) => {
-                log::warn!("Tenant pools lock was poisoned");
+        match self.get_pool(tenant_id) {
+            Ok(pool) => Some(pool),
+            Err(err) => {
+                if matches!(
+                    &err,
+                    ServiceError::InternalServerError { error_message, .. }
+                        if error_message == LOCK_POISONED_ERROR
+                ) {
+                    log::warn!(
+                        "Lock poisoning detected in get_tenant_pool for tenant '{}': {}",
+                        tenant_id,
+                        err
+                    );
+                }
                 None
             }
+        }
+    }
+
+    pub fn get_pool(&self, tenant_id: &str) -> Result<Pool, ServiceError> {
+        match self.tenant_pools.read() {
+            Ok(pools) => pools
+                .get(tenant_id)
+                .cloned()
+                .ok_or_else(|| ServiceError::not_found(format!("Tenant not found: {tenant_id}"))),
+            Err(_) => Err(ServiceError::internal_server_error(
+                LOCK_POISONED_ERROR.to_string(),
+            )),
         }
     }
 
@@ -515,9 +537,7 @@ impl TenantPoolManager {
         log::info!("Provisioning NFe schema for tenant: {}", tenant_id);
 
         // Get the tenant pool
-        let pool = self.get_tenant_pool(tenant_id).ok_or_else(|| {
-            ServiceError::not_found(format!("No pool found for tenant: {}", tenant_id))
-        })?;
+        let pool = self.get_pool(tenant_id)?;
 
         // Get a connection and run the NFe schema provisioning
         let mut conn = pool.get().map_err(|e| {

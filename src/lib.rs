@@ -3,8 +3,8 @@
 //! This library provides the core functionality for the multi-tenant REST API
 //! with JWT authentication and advanced functional programming capabilities.
 
-pub mod api;
 pub mod adapters;
+pub mod api;
 pub mod app_error;
 pub mod config;
 pub mod constants;

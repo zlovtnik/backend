@@ -40,7 +40,10 @@ async fn main() -> anyhow::Result<()> {
             match result {
                 Some(join_res) => {
                     let task_result = join_res.context("server task join failure")?;
-                    task_result.map_err(anyhow::Error::from)?;
+                    match task_result {
+                        Ok(()) => anyhow::bail!("server task stopped unexpectedly"),
+                        Err(task_err) => return Err(anyhow::Error::from(task_err)),
+                    }
                 }
                 None => {
                     anyhow::bail!("both server tasks stopped unexpectedly");

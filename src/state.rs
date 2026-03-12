@@ -96,7 +96,9 @@ impl AppState {
         let sqlx_pool = PgPoolOptions::new()
             .max_connections(cfg.db.max_connections)
             .min_connections(cfg.db.min_connections)
-            .acquire_timeout(std::time::Duration::from_secs(cfg.db.connect_timeout_seconds))
+            .acquire_timeout(std::time::Duration::from_secs(
+                cfg.db.connect_timeout_seconds,
+            ))
             .connect(&cfg.db.url)
             .await
             .context("failed to establish primary sqlx pool")?;
@@ -146,37 +148,30 @@ impl AppState {
         self.inner.session_key.clone()
     }
 
-    pub fn sqlx_pool_for_tenant(&self, tenant_id: &str) -> Option<sqlx::PgPool> {
-        match self.inner.sqlx_pools.read() {
-            Ok(pools) => pools.get(tenant_id).cloned(),
-            Err(poisoned) => {
-                tracing::error!(
-                    tenant_id = tenant_id,
-                    error = %poisoned,
-                    "sqlx pool map lock poisoned during read; recovering inner guard"
-                );
-                let pools = poisoned.into_inner();
-                pools.get(tenant_id).cloned()
-            }
-        }
+    pub fn sqlx_pool_for_tenant(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Option<sqlx::PgPool>, std::sync::PoisonError<()>> {
+        self.inner
+            .sqlx_pools
+            .read()
+            .map(|pools| pools.get(tenant_id).cloned())
+            .map_err(|_| std::sync::PoisonError::new(()))
     }
 
-    pub fn insert_sqlx_pool(&self, tenant_id: impl Into<String>, pool: sqlx::PgPool) {
+    pub fn insert_sqlx_pool(
+        &self,
+        tenant_id: impl Into<String>,
+        pool: sqlx::PgPool,
+    ) -> Result<(), std::sync::PoisonError<()>> {
         let tenant_id = tenant_id.into();
-        match self.inner.sqlx_pools.write() {
-            Ok(mut pools) => {
+        self.inner
+            .sqlx_pools
+            .write()
+            .map(|mut pools| {
                 pools.insert(tenant_id, pool);
-            }
-            Err(poisoned) => {
-                tracing::error!(
-                    tenant_id = tenant_id.as_str(),
-                    error = %poisoned,
-                    "sqlx pool map lock poisoned during write; recovering inner guard"
-                );
-                let mut pools = poisoned.into_inner();
-                pools.insert(tenant_id, pool);
-            }
-        }
+            })
+            .map_err(|_| std::sync::PoisonError::new(()))
     }
 }
 
@@ -192,20 +187,16 @@ fn load_or_generate_session_key(cfg: &AppConfig) -> anyhow::Result<Key> {
             Ok(Key::from(&key_bytes))
         }
         None if cfg.bootstrap.app_env == "dev" => Ok(Key::generate()),
-        None => anyhow::bail!(
-            "SESSION_ENCRYPTION_KEY must be configured when APP_ENV is not dev"
-        ),
+        None => anyhow::bail!("SESSION_ENCRYPTION_KEY must be configured when APP_ENV is not dev"),
     }
 }
 
 fn redact_connection_url(url: &str) -> String {
-    let at_pos = match url.find('@') {
-        Some(pos) => pos,
-        None => return url.to_string(),
-    };
-    let colon_pos = match url[..at_pos].rfind(':') {
-        Some(pos) => pos,
-        None => return url.to_string(),
-    };
-    format!("{}:<redacted>{}", &url[..colon_pos], &url[at_pos..])
+    match url::Url::parse(url) {
+        Ok(mut parsed_url) => {
+            let _ = parsed_url.set_password(Some("<redacted>"));
+            parsed_url.to_string()
+        }
+        Err(_) => "<unparseable-url>".to_string(),
+    }
 }

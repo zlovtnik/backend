@@ -23,11 +23,7 @@ impl HealthService for HealthGrpcService {
         &self,
         _request: Request<HealthCheckRequest>,
     ) -> Result<Response<HealthCheckResponse>, Status> {
-        let snapshot = self
-            .service
-            .check()
-            .await
-            .map_err(Status::from)?;
+        let snapshot = self.service.check().await.map_err(Status::from)?;
 
         Ok(Response::new(HealthCheckResponse {
             status: snapshot.status,

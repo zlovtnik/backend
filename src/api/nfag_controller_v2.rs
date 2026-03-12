@@ -1,10 +1,6 @@
 use actix_web::{web, HttpRequest, HttpResponse, Result};
 
-use crate::{
-    api::crud_engine::CrudHandler,
-    error::ServiceError,
-    models::nfag::Nfag,
-};
+use crate::{api::crud_engine::CrudHandler, error::ServiceError, models::nfag::Nfag};
 
 // Type alias for the handler
 type NfagHandler = CrudHandler<Nfag>;
@@ -101,9 +97,6 @@ pub async fn update(
     ),
     tag = "nfag"
 )]
-pub async fn delete(
-    req: HttpRequest,
-    path: web::Path<i32>,
-) -> Result<HttpResponse, ServiceError> {
+pub async fn delete(req: HttpRequest, path: web::Path<i32>) -> Result<HttpResponse, ServiceError> {
     NfagHandler::delete(req, path).await
 }

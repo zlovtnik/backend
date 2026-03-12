@@ -144,7 +144,11 @@ impl<S> tracing_subscriber::Layer<S> for WebSocketLogLayer
 where
     S: tracing::Subscriber,
 {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
         let metadata = event.metadata();
         let level = metadata.level();
         let span_name = metadata.name().to_string();

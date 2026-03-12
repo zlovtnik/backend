@@ -382,9 +382,11 @@ pub fn refresh(
         .and_then(|token_data| {
             query_service.query(|conn| {
                 if user_ops::is_valid_login_session(&token_data.claims, conn, None) {
-                    user_ops::find_login_info_by_token(&token_data.claims, conn, None).map_err(|_| {
-                        ServiceError::unauthorized(constants::MESSAGE_TOKEN_MISSING.to_string())
-                    })
+                    user_ops::find_login_info_by_token(&token_data.claims, conn, None).map_err(
+                        |_| {
+                            ServiceError::unauthorized(constants::MESSAGE_TOKEN_MISSING.to_string())
+                        },
+                    )
                 } else {
                     Err(ServiceError::unauthorized(
                         constants::MESSAGE_TOKEN_MISSING.to_string(),
@@ -501,7 +503,11 @@ pub fn refresh_with_token(
 /// let pool: Pool = unimplemented!();
 /// let _ = me(&auth, &pool);
 /// ```
-pub fn me(authen_header: &HeaderValue, pool: &Pool, keycloak_client: &KeycloakClient) -> Result<LoginInfoDTO, ServiceError> {
+pub fn me(
+    authen_header: &HeaderValue,
+    pool: &Pool,
+    keycloak_client: &KeycloakClient,
+) -> Result<LoginInfoDTO, ServiceError> {
     let query_service = FunctionalQueryService::new(pool.clone());
 
     authen_header
@@ -533,8 +539,14 @@ pub fn me(authen_header: &HeaderValue, pool: &Pool, keycloak_client: &KeycloakCl
                 })
                 .and_then(|verified_token_data| {
                     query_service.query(|conn| {
-                        user_ops::find_login_info_by_token(&verified_token_data.claims, conn, Some(keycloak_client))
-                            .map_err(|_| ServiceError::internal_server_error("Database error".to_string()))
+                        user_ops::find_login_info_by_token(
+                            &verified_token_data.claims,
+                            conn,
+                            Some(keycloak_client),
+                        )
+                        .map_err(|_| {
+                            ServiceError::internal_server_error("Database error".to_string())
+                        })
                     })
                 })
         })

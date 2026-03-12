@@ -147,10 +147,16 @@ impl AppConfig {
             .set_default("db.max_connections", 20)?
             .set_default("db.min_connections", 5)?
             .set_default("redis.connect_timeout_seconds", 5)?
-            .set_default("keycloak.issuer_url", "http://localhost:8080/realms/middleware")?
+            .set_default(
+                "keycloak.issuer_url",
+                "http://localhost:8080/realms/middleware",
+            )?
             .set_default("keycloak.client_id", "middleware-app")?
             .set_default("keycloak.client_secret", "")?
-            .set_default("keycloak.redirect_url", "http://localhost:8000/api/callback")?
+            .set_default(
+                "keycloak.redirect_url",
+                "http://localhost:8000/api/callback",
+            )?
             .set_default("session.cookie_secure", false)?
             .set_default("session.ttl_seconds", 600)?
             .set_default("runtime.ws_log_buffer_size", 1000)?
@@ -159,56 +165,33 @@ impl AppConfig {
             .set_default("bootstrap.default_tenant_id", "tenant1")?
             .add_source(::config::Environment::default().separator("__"));
 
-        if let Some(v) = env_opt("APP_HOST") {
-            builder = builder.set_override("server.host", v)?;
-        }
-        if let Some(v) = env_opt("APP_PORT") {
-            builder = builder.set_override("server.port", v)?;
-        }
-        if let Some(v) = env_opt("CORS_ALLOW_CREDENTIALS") {
-            builder = builder.set_override("server.cors_allow_credentials", v)?;
-        }
-        if let Some(v) = env_opt("APP_GRPC_HOST") {
-            builder = builder.set_override("grpc.host", v)?;
-        }
-        if let Some(v) = env_opt("APP_GRPC_PORT") {
-            builder = builder.set_override("grpc.port", v)?;
-        }
-        if let Some(v) = env_opt("DATABASE_URL") {
-            builder = builder.set_override("db.url", v)?;
-        }
-        if let Some(v) = env_opt("REDIS_URL") {
-            builder = builder.set_override("redis.url", v)?;
-        }
-        if let Some(v) = env_opt("KEYCLOAK_ISSUER_URL") {
-            builder = builder.set_override("keycloak.issuer_url", v)?;
-        }
-        if let Some(v) = env_opt("KEYCLOAK_CLIENT_ID") {
-            builder = builder.set_override("keycloak.client_id", v)?;
-        }
-        if let Some(v) = env_opt("KEYCLOAK_MIDDLEWARE_APP_SECRET") {
-            builder = builder.set_override("keycloak.client_secret", v)?;
-        }
-        if let Some(v) = env_opt("KEYCLOAK_REDIRECT_URL") {
-            builder = builder.set_override("keycloak.redirect_url", v)?;
-        }
-        if let Some(v) = env_opt("SESSION_COOKIE_SECURE") {
-            builder = builder.set_override("session.cookie_secure", v)?;
-        }
-        if let Some(v) = env_opt("SESSION_ENCRYPTION_KEY") {
-            builder = builder.set_override("session.encryption_key_b64", v)?;
-        }
-        if let Some(v) = env_opt("WS_LOG_BUFFER_SIZE") {
-            builder = builder.set_override("runtime.ws_log_buffer_size", v)?;
-        }
-        if let Some(v) = env_opt("RUST_LOG") {
-            builder = builder.set_override("observability.rust_log", v)?;
-        }
-        if let Some(v) = env_opt("APP_ENV") {
-            builder = builder.set_override("bootstrap.app_env", v)?;
-        }
-        if let Some(v) = env_opt("DEFAULT_TENANT_ID") {
-            builder = builder.set_override("bootstrap.default_tenant_id", v)?;
+        // Canonical overrides use the nested form consumed by config::Environment
+        // (for example SERVER__HOST and DB__URL). The block below intentionally
+        // keeps these flat legacy names as compatibility shims.
+        let legacy_env_overrides = [
+            ("APP_HOST", "server.host"),
+            ("APP_PORT", "server.port"),
+            ("CORS_ALLOW_CREDENTIALS", "server.cors_allow_credentials"),
+            ("APP_GRPC_HOST", "grpc.host"),
+            ("APP_GRPC_PORT", "grpc.port"),
+            ("DATABASE_URL", "db.url"),
+            ("REDIS_URL", "redis.url"),
+            ("KEYCLOAK_ISSUER_URL", "keycloak.issuer_url"),
+            ("KEYCLOAK_CLIENT_ID", "keycloak.client_id"),
+            ("KEYCLOAK_MIDDLEWARE_APP_SECRET", "keycloak.client_secret"),
+            ("KEYCLOAK_REDIRECT_URL", "keycloak.redirect_url"),
+            ("SESSION_COOKIE_SECURE", "session.cookie_secure"),
+            ("SESSION_ENCRYPTION_KEY", "session.encryption_key_b64"),
+            ("WS_LOG_BUFFER_SIZE", "runtime.ws_log_buffer_size"),
+            ("RUST_LOG", "observability.rust_log"),
+            ("APP_ENV", "bootstrap.app_env"),
+            ("DEFAULT_TENANT_ID", "bootstrap.default_tenant_id"),
+        ];
+
+        for (env_name, config_key) in legacy_env_overrides {
+            if let Some(v) = env_opt(env_name) {
+                builder = builder.set_override(config_key, v)?;
+            }
         }
 
         let cfg = builder
@@ -222,9 +205,7 @@ impl AppConfig {
         }
 
         if cfg.bootstrap.app_env != "dev" && cfg.keycloak.client_secret.trim().is_empty() {
-            anyhow::bail!(
-                "KEYCLOAK_MIDDLEWARE_APP_SECRET is required when APP_ENV is not dev"
-            );
+            anyhow::bail!("KEYCLOAK_MIDDLEWARE_APP_SECRET is required when APP_ENV is not dev");
         }
 
         Ok(cfg)

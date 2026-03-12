@@ -21,36 +21,35 @@ impl OracleConnectionConfig {
     fn parse(url: &str) -> Result<Self, ServiceError> {
         // Try URL format with scheme
         if url.starts_with("oracle://") {
-            let parsed = url::Url::parse(url).map_err(|e| {
-                ServiceError::bad_request(format!("Invalid Oracle URL: {}", e))
-            })?;
-            
+            let parsed = url::Url::parse(url)
+                .map_err(|e| ServiceError::bad_request(format!("Invalid Oracle URL: {}", e)))?;
+
             let username = parsed.username().to_string();
             let password = parsed.password().unwrap_or("").to_string();
-            let host = parsed.host_str().ok_or_else(|| {
-                ServiceError::bad_request("Missing host in Oracle URL")
-            })?;
+            let host = parsed
+                .host_str()
+                .ok_or_else(|| ServiceError::bad_request("Missing host in Oracle URL"))?;
             let port = parsed.port().unwrap_or(1521);
             let service_name = parsed.path().trim_start_matches('/');
-            
+
             let connection_string = format!("{}:{}/{}", host, port, service_name);
-            
+
             return Ok(OracleConnectionConfig {
                 connection_string,
                 username,
                 password,
             });
         }
-        
+
         // Try traditional format: username/password@host:port/service
         if let Some(at_pos) = url.find('@') {
             let (creds, conn_str) = url.split_at(at_pos);
             let connection_string = conn_str[1..].to_string(); // skip '@'
-            
+
             if let Some(slash_pos) = creds.find('/') {
                 let username = creds[..slash_pos].to_string();
                 let password = creds[slash_pos + 1..].to_string();
-                
+
                 return Ok(OracleConnectionConfig {
                     connection_string,
                     username,
@@ -58,17 +57,17 @@ impl OracleConnectionConfig {
                 });
             }
         }
-        
+
         // Fallback: hostname:port/service format, credentials from environment
         let username = std::env::var("ORACLE_USER").unwrap_or_else(|_| String::new());
         let password = std::env::var("ORACLE_PASSWORD").unwrap_or_else(|_| String::new());
-        
+
         if username.is_empty() || password.is_empty() {
             return Err(ServiceError::bad_request(
                 "Oracle credentials not found. Use oracle://user:pass@host:port/service or set ORACLE_USER/ORACLE_PASSWORD env vars"
             ));
         }
-        
+
         Ok(OracleConnectionConfig {
             connection_string: url.to_string(),
             username,
@@ -90,12 +89,12 @@ impl OracleConnectionGuard {
             pool,
         }
     }
-    
+
     /// Get mutable reference to the underlying connection
     pub fn as_mut(&mut self) -> &mut Connection {
         self.conn.as_mut().expect("Connection already taken")
     }
-    
+
     /// Check if connection is valid
     pub fn is_valid(&self) -> bool {
         self.conn.as_ref().map_or(false, |c| c.is_valid())
@@ -112,7 +111,7 @@ impl Drop for OracleConnectionGuard {
 
 impl std::ops::Deref for OracleConnectionGuard {
     type Target = Connection;
-    
+
     fn deref(&self) -> &Self::Target {
         self.conn.as_ref().expect("Connection already taken")
     }
@@ -136,7 +135,7 @@ impl OracleConnectionPool {
     /// Create a new Oracle connection pool
     pub fn new(connection_string: String, max_connections: usize) -> Result<Self, ServiceError> {
         let config = OracleConnectionConfig::parse(&connection_string)?;
-        
+
         Ok(OracleConnectionPool {
             config,
             max_connections,
@@ -156,7 +155,10 @@ impl OracleConnectionPool {
                 }
             }
             Err(e) => {
-                log::warn!("Lock poisoned in connection pool, creating new connection: {}", e);
+                log::warn!(
+                    "Lock poisoned in connection pool, creating new connection: {}",
+                    e
+                );
             }
         }
 
@@ -166,8 +168,10 @@ impl OracleConnectionPool {
             &self.config.username,
             &self.config.password,
         )
-        .map_err(|e| ServiceError::internal_server_error(format!("Oracle connection failed: {}", e)))?;
-        
+        .map_err(|e| {
+            ServiceError::internal_server_error(format!("Oracle connection failed: {}", e))
+        })?;
+
         Ok(OracleConnectionGuard::new(conn, Arc::clone(self)))
     }
 
@@ -180,7 +184,7 @@ impl OracleConnectionPool {
             // Otherwise let it drop and close
         }
     }
-    
+
     /// Return a connection to the pool for reuse (deprecated - use OracleConnectionGuard instead)
     #[deprecated(note = "Use OracleConnectionGuard which returns connections automatically")]
     pub fn return_connection(&self, conn: Connection) {
@@ -215,41 +219,50 @@ impl OracleTenantPoolManager {
     }
 
     /// Add a tenant's Oracle connection pool
-    pub fn add_tenant_pool(&self, tenant_id: String, connection_string: String) -> Result<(), ServiceError> {
+    pub fn add_tenant_pool(
+        &self,
+        tenant_id: String,
+        connection_string: String,
+    ) -> Result<(), ServiceError> {
         let pool = Arc::new(OracleConnectionPool::new(connection_string.clone(), 20)?);
-        
-        let mut pools = self.tenant_pools.write()
+
+        let mut pools = self
+            .tenant_pools
+            .write()
             .map_err(|_| ServiceError::internal_server_error("Lock poisoned: tenant_pools"))?;
-        
-        let mut conn_strings = self.tenant_connection_strings.write()
-            .map_err(|_| ServiceError::internal_server_error("Lock poisoned: connection_strings"))?;
+
+        let mut conn_strings = self.tenant_connection_strings.write().map_err(|_| {
+            ServiceError::internal_server_error("Lock poisoned: connection_strings")
+        })?;
 
         pools.insert(tenant_id.clone(), pool);
         conn_strings.insert(tenant_id, connection_string);
-        
+
         Ok(())
     }
 
     /// Get a tenant's Oracle connection pool
     pub fn get_tenant_pool(&self, tenant_id: &str) -> Option<Arc<OracleConnectionPool>> {
-        self.tenant_pools.read()
+        self.tenant_pools
+            .read()
             .ok()
             .and_then(|pools| pools.get(tenant_id).cloned())
     }
 
     /// Get an Oracle connection guard for a tenant
     pub fn get_connection(&self, tenant_id: &str) -> Result<OracleConnectionGuard, ServiceError> {
-        let pool = self.get_tenant_pool(tenant_id)
-            .ok_or_else(|| ServiceError::not_found(format!("Oracle pool not found for tenant: {}", tenant_id)))?;
-        
+        let pool = self.get_tenant_pool(tenant_id).ok_or_else(|| {
+            ServiceError::not_found(format!("Oracle pool not found for tenant: {}", tenant_id))
+        })?;
+
         pool.get()
     }
 
     /// Get or create a tenant pool by querying the main PostgreSQL database
     pub fn get_or_create_pool(
-        &self, 
-        tenant_id: &str, 
-        main_pg_pool: &crate::config::db::Pool
+        &self,
+        tenant_id: &str,
+        main_pg_pool: &crate::config::db::Pool,
     ) -> Result<Arc<OracleConnectionPool>, ServiceError> {
         // Check if pool exists
         if let Some(pool) = self.get_tenant_pool(tenant_id) {
@@ -261,8 +274,9 @@ impl OracleTenantPoolManager {
         use crate::schema::tenants::dsl::*;
         use diesel::prelude::*;
 
-        let mut conn = main_pg_pool.get()
-            .map_err(|e| ServiceError::internal_server_error(format!("Failed to get PG connection: {}", e)))?;
+        let mut conn = main_pg_pool.get().map_err(|e| {
+            ServiceError::internal_server_error(format!("Failed to get PG connection: {}", e))
+        })?;
 
         let tenant = tenants
             .filter(id.eq(tenant_id))
@@ -275,9 +289,10 @@ impl OracleTenantPoolManager {
 
         // Create the pool
         self.add_tenant_pool(tenant_id.to_string(), oracle_conn_string)?;
-        
-        self.get_tenant_pool(tenant_id)
-            .ok_or_else(|| ServiceError::internal_server_error("Failed to retrieve newly created pool"))
+
+        self.get_tenant_pool(tenant_id).ok_or_else(|| {
+            ServiceError::internal_server_error("Failed to retrieve newly created pool")
+        })
     }
 
     /// Check health of all tenant pools
@@ -287,42 +302,51 @@ impl OracleTenantPoolManager {
             Err(_) => return vec![],
         };
 
-        pools.iter().map(|(tenant_id, pool)| {
-            let (is_healthy, error_msg) = match pool.get() {
-                Ok(conn_guard) => {
-                    // Connection guard automatically returns to pool on drop
-                    let healthy = conn_guard.is_valid();
-                    (healthy, None)
-                },
-                Err(e) => (false, Some(format!("{:?}", e))),
-            };
+        pools
+            .iter()
+            .map(|(tenant_id, pool)| {
+                let (is_healthy, error_msg) = match pool.get() {
+                    Ok(conn_guard) => {
+                        // Connection guard automatically returns to pool on drop
+                        let healthy = conn_guard.is_valid();
+                        (healthy, None)
+                    }
+                    Err(e) => (false, Some(format!("{:?}", e))),
+                };
 
-            let active = pool.active_connections.read()
-                .map(|conns| conns.len())
-                .unwrap_or(0);
+                let active = pool
+                    .active_connections
+                    .read()
+                    .map(|conns| conns.len())
+                    .unwrap_or(0);
 
-            OraclePoolHealthStatus {
-                tenant_id: tenant_id.clone(),
-                active_connections: active,
-                max_connections: pool.max_connections,
-                is_healthy,
-                last_check: chrono::Utc::now().naive_utc(),
-                error_message: error_msg,
-            }
-        }).collect()
+                OraclePoolHealthStatus {
+                    tenant_id: tenant_id.clone(),
+                    active_connections: active,
+                    max_connections: pool.max_connections,
+                    is_healthy,
+                    last_check: chrono::Utc::now().naive_utc(),
+                    error_message: error_msg,
+                }
+            })
+            .collect()
     }
 
     /// Remove a tenant pool
     pub fn remove_tenant_pool(&self, tenant_id: &str) -> Result<bool, ServiceError> {
-        let mut pools = self.tenant_pools.write()
+        let mut pools = self
+            .tenant_pools
+            .write()
             .map_err(|_| ServiceError::internal_server_error("Lock poisoned"))?;
-        
-        let mut conn_strings = self.tenant_connection_strings.write()
+
+        let mut conn_strings = self
+            .tenant_connection_strings
+            .write()
             .map_err(|_| ServiceError::internal_server_error("Lock poisoned"))?;
 
         let removed = pools.remove(tenant_id).is_some();
         conn_strings.remove(tenant_id);
-        
+
         Ok(removed)
     }
 }

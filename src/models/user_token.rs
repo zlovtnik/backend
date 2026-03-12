@@ -59,7 +59,6 @@ impl UserToken {
     /// assert!(!token.is_empty());
     /// ```
     pub fn generate_token(login: &LoginInfoDTO) -> String {
-        let _ = dotenvy::dotenv();
         let max_age: i64 = match env::var("MAX_AGE") {
             Ok(val) => val.parse::<i64>().unwrap_or(ONE_WEEK),
             Err(_) => ONE_WEEK,

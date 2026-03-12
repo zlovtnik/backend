@@ -35,6 +35,54 @@ fn keycloak_client_from_request(req: &ServiceRequest) -> Option<KeycloakClient> 
         })
 }
 
+fn tenant_id_from_host(req: &ServiceRequest) -> Option<String> {
+    let connection_info = req.connection_info();
+    let host = connection_info.host();
+    let trimmed_host = host.trim().to_lowercase();
+    if trimmed_host.is_empty() {
+        return None;
+    }
+
+    let host = trimmed_host
+        .split(':')
+        .next()
+        .unwrap_or(trimmed_host.as_str());
+    if host == "localhost" || host == "127.0.0.1" || host == "[::1]" {
+        return None;
+    }
+
+    let host_parts: Vec<&str> = host.split('.').collect();
+    if host_parts.len() < 3 {
+        return None;
+    }
+
+    host_parts
+        .first()
+        .filter(|tenant| !tenant.is_empty() && !tenant.eq_ignore_ascii_case("www"))
+        .map(|tenant| tenant.to_string())
+}
+
+fn derive_tenant_id(req: &ServiceRequest) -> Option<String> {
+    tenant_id_from_host(req).or_else(|| {
+        req.app_data::<Data<AppState>>()
+            .map(|state| state.config().bootstrap.default_tenant_id.clone())
+    })
+}
+
+fn unauthorized_response() -> HttpResponse {
+    HttpResponse::Unauthorized().json(ResponseBody::new(
+        constants::MESSAGE_INVALID_TOKEN,
+        constants::EMPTY,
+    ))
+}
+
+fn internal_server_error_response() -> HttpResponse {
+    HttpResponse::InternalServerError().json(ResponseBody::new(
+        constants::MESSAGE_INTERNAL_SERVER_ERROR,
+        constants::EMPTY,
+    ))
+}
+
 pub struct Authentication;
 
 impl<S, B> Transform<S, ServiceRequest> for Authentication
@@ -113,12 +161,7 @@ where
             Some(client) => client,
             None => {
                 let (request, _pl) = req.into_parts();
-                let response = HttpResponse::Unauthorized()
-                    .json(ResponseBody::new(
-                        constants::MESSAGE_INVALID_TOKEN,
-                        constants::EMPTY,
-                    ))
-                    .map_into_right_body();
+                let response = internal_server_error_response().map_into_right_body();
                 return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
             }
         };
@@ -128,16 +171,10 @@ where
             Some(manager) => manager,
             None => {
                 let (request, _pl) = req.into_parts();
-                let response = HttpResponse::Unauthorized()
-                    .json(ResponseBody::new(
-                        constants::MESSAGE_INVALID_TOKEN,
-                        constants::EMPTY,
-                    ))
-                    .map_into_right_body();
+                let response = internal_server_error_response().map_into_right_body();
                 return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
             }
         };
-
 
         let token = if let Some(cookie) = req.cookie("auth_token") {
             Some(cookie.value().to_string())
@@ -146,12 +183,7 @@ where
                 Ok(s) => s,
                 Err(_) => {
                     let (request, _pl) = req.into_parts();
-                    let response = HttpResponse::Unauthorized()
-                        .json(ResponseBody::new(
-                            constants::MESSAGE_INVALID_TOKEN,
-                            constants::EMPTY,
-                        ))
-                        .map_into_right_body();
+                    let response = unauthorized_response().map_into_right_body();
                     return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
                 }
             };
@@ -168,12 +200,16 @@ where
             Some(t) if !t.is_empty() => t,
             _ => {
                 let (request, _pl) = req.into_parts();
-                let response = HttpResponse::Unauthorized()
-                    .json(ResponseBody::new(
-                        constants::MESSAGE_INVALID_TOKEN,
-                        constants::EMPTY,
-                    ))
-                    .map_into_right_body();
+                let response = unauthorized_response().map_into_right_body();
+                return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
+            }
+        };
+
+        let server_tenant_id = match derive_tenant_id(&req) {
+            Some(tenant_id) => tenant_id,
+            None => {
+                let (request, _pl) = req.into_parts();
+                let response = internal_server_error_response().map_into_right_body();
                 return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
             }
         };
@@ -183,9 +219,18 @@ where
         // Validate token using async approach
         match token_utils::decode_token(token.clone()) {
             Ok(token_data) => {
-                let tenant_id = token_data.claims.tenant_id.clone();
-                if let Some(tenant_pool) = manager.get_tenant_pool(&tenant_id) {
-                    match token_utils::verify_token(
+                if token_data.claims.tenant_id != server_tenant_id {
+                    error!(
+                        "Tenant mismatch in token (token: {}, request: {})",
+                        token_data.claims.tenant_id, server_tenant_id
+                    );
+                    let (request, _pl) = req.into_parts();
+                    let response = unauthorized_response().map_into_right_body();
+                    return Box::pin(async { Ok(ServiceResponse::new(request, response)) });
+                }
+
+                match manager.get_pool(&server_tenant_id) {
+                    Ok(tenant_pool) => match token_utils::verify_token(
                         &token_data,
                         &tenant_pool,
                         Some(&keycloak_client),
@@ -193,50 +238,42 @@ where
                         Ok(_) => {
                             info!(
                                 "Successful authentication - tenant: {}, user: {}, route: {}",
-                                tenant_id, token_data.claims.user, req_path
+                                server_tenant_id, token_data.claims.user, req_path
                             );
 
                             // Augment request extensions with tenant context
                             req.extensions_mut().insert(tenant_pool);
-                            req.extensions_mut().insert(TenantId(tenant_id.clone()));
+                            req.extensions_mut()
+                                .insert(TenantId(server_tenant_id.clone()));
 
                             // Call the service with augmented request
                             let fut = self.service.call(req);
-                            Box::pin(async move { fut.await.map(ServiceResponse::map_into_left_body) })
+                            Box::pin(
+                                async move { fut.await.map(ServiceResponse::map_into_left_body) },
+                            )
                         }
                         Err(e) => {
                             error!("Token verification failed: {}", e);
                             let (request, _pl) = req.into_parts();
-                            let response = HttpResponse::Unauthorized()
-                                .json(ResponseBody::new(
-                                    constants::MESSAGE_INVALID_TOKEN,
-                                    constants::EMPTY,
-                                ))
-                                .map_into_right_body();
+                            let response = unauthorized_response().map_into_right_body();
                             Box::pin(async { Ok(ServiceResponse::new(request, response)) })
                         }
+                    },
+                    Err(err) => {
+                        error!(
+                            "Tenant pool unavailable for '{}': {}",
+                            server_tenant_id, err
+                        );
+                        let (request, _pl) = req.into_parts();
+                        let response = unauthorized_response().map_into_right_body();
+                        Box::pin(async { Ok(ServiceResponse::new(request, response)) })
                     }
-                } else {
-                    error!("Tenant '{}' not found for token", tenant_id);
-                    let (request, _pl) = req.into_parts();
-                    let response = HttpResponse::Unauthorized()
-                        .json(ResponseBody::new(
-                            constants::MESSAGE_INVALID_TOKEN,
-                            constants::EMPTY,
-                        ))
-                        .map_into_right_body();
-                    Box::pin(async { Ok(ServiceResponse::new(request, response)) })
                 }
             }
             Err(e) => {
                 error!("Token decode failed: {}", e);
                 let (request, _pl) = req.into_parts();
-                let response = HttpResponse::Unauthorized()
-                    .json(ResponseBody::new(
-                        constants::MESSAGE_INVALID_TOKEN,
-                        constants::EMPTY,
-                    ))
-                    .map_into_right_body();
+                let response = unauthorized_response().map_into_right_body();
                 Box::pin(async { Ok(ServiceResponse::new(request, response)) })
             }
         }
@@ -399,12 +436,7 @@ pub mod functional_auth {
                 None => {
                     error!("TenantPoolManager not found in app data");
                     let (request, _pl) = req.into_parts();
-                    let response = HttpResponse::Unauthorized()
-                        .json(ResponseBody::new(
-                            constants::MESSAGE_INVALID_TOKEN,
-                            constants::EMPTY,
-                        ))
-                        .map_into_right_body();
+                    let response = internal_server_error_response().map_into_right_body();
                     return Box::pin(async move { Ok(ServiceResponse::new(request, response)) });
                 }
             };
@@ -414,12 +446,7 @@ pub mod functional_auth {
                 None => {
                     error!("KeycloakClient not found in app data");
                     let (request, _pl) = req.into_parts();
-                    let response = HttpResponse::Unauthorized()
-                        .json(ResponseBody::new(
-                            constants::MESSAGE_INVALID_TOKEN,
-                            constants::EMPTY,
-                        ))
-                        .map_into_right_body();
+                    let response = internal_server_error_response().map_into_right_body();
                     return Box::pin(async move { Ok(ServiceResponse::new(request, response)) });
                 }
             };
@@ -430,12 +457,7 @@ pub mod functional_auth {
                     Err(auth_error) => {
                         error!("Functional authentication failed: {:?}", auth_error);
                         let (request, _pl) = req.into_parts();
-                        let response = HttpResponse::Unauthorized()
-                            .json(ResponseBody::new(
-                                constants::MESSAGE_INVALID_TOKEN,
-                                constants::EMPTY,
-                            ))
-                            .map_into_right_body();
+                        let response = unauthorized_response().map_into_right_body();
                         return Box::pin(
                             async move { Ok(ServiceResponse::new(request, response)) },
                         );
@@ -450,10 +472,8 @@ pub mod functional_auth {
             let auth_header_value = format!("Bearer {}", token);
             match actix_web::http::header::HeaderValue::from_str(&auth_header_value) {
                 Ok(header_value) => {
-                    req.headers_mut().insert(
-                        actix_web::http::header::AUTHORIZATION,
-                        header_value,
-                    );
+                    req.headers_mut()
+                        .insert(actix_web::http::header::AUTHORIZATION, header_value);
                 }
                 Err(e) => {
                     log::debug!(
@@ -506,18 +526,19 @@ pub mod functional_auth {
                 token_utils::decode_token(token.clone()).map_err(|_| "Token decode failed")?;
 
             let tenant_id = token_data.claims.tenant_id.clone();
+            let server_tenant_id = derive_tenant_id(req).ok_or("Tenant context missing")?;
             let user_id = token_data.claims.user.clone();
+
+            if tenant_id != server_tenant_id {
+                return Err("Token tenant mismatch");
+            }
 
             // Verify token against tenant database
             let tenant_pool = manager
-                .get_tenant_pool(&tenant_id)
-                .ok_or("Tenant not found")?;
+                .get_pool(&tenant_id)
+                .map_err(|_| "Tenant not found")?;
 
-            match token_utils::verify_token(
-                &token_data,
-                &tenant_pool,
-                Some(keycloak_client),
-            ) {
+            match token_utils::verify_token(&token_data, &tenant_pool, Some(keycloak_client)) {
                 Ok(_) => Ok((tenant_id, user_id, token, tenant_pool.clone())),
                 Err(_) => Err("Token verification failed"),
             }

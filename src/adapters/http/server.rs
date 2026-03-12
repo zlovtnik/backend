@@ -74,7 +74,7 @@ pub async fn run_http_server(
                     .cookie_name("oauth_session".to_string())
                     .cookie_path("/api".to_string())
                     .cookie_http_only(true)
-                    .cookie_same_site(SameSite::Strict)
+                    .cookie_same_site(SameSite::Lax)
                     .cookie_secure(state.config().session.cookie_secure)
                     .build(),
             )

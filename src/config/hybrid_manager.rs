@@ -22,16 +22,16 @@ struct CachedTenantDbType {
 pub struct HybridDatabaseManager {
     /// PostgreSQL for admin operations, users, tenants table, and NFe schema
     pub pg_admin_pool: PgPool,
-    
+
     /// PostgreSQL tenant pools (if some tenants still use PG)
     pub pg_tenant_manager: PgTenantPoolManager,
-    
+
     /// Oracle tenant pools (for production tenant data)
     pub oracle_tenant_manager: OracleTenantPoolManager,
-    
+
     /// TTL cache for tenant database types (reduces admin DB queries)
     tenant_db_type_cache: Arc<RwLock<HashMap<String, CachedTenantDbType>>>,
-    
+
     /// Cache TTL duration (default 5 minutes)
     cache_ttl: Duration,
 }
@@ -50,7 +50,7 @@ impl HybridDatabaseManager {
     pub fn new(pg_admin_pool: PgPool) -> Self {
         Self::with_cache_ttl(pg_admin_pool, Duration::from_secs(300))
     }
-    
+
     /// Create a new hybrid database manager with custom cache TTL
     pub fn with_cache_ttl(pg_admin_pool: PgPool, cache_ttl: Duration) -> Self {
         let pg_tenant_manager = PgTenantPoolManager::new(pg_admin_pool.clone());
@@ -78,11 +78,15 @@ impl HybridDatabaseManager {
         match db_type {
             TenantDbType::Postgres => {
                 // Use PostgreSQL tenant pool
-                let pool = self.pg_tenant_manager
+                let pool = self
+                    .pg_tenant_manager
                     .get_tenant_pool(tenant_id)
                     .or_else(|| {
                         // Try to create pool from tenants table
-                        match self.pg_tenant_manager.get_or_create_pool_functional(tenant_id) {
+                        match self
+                            .pg_tenant_manager
+                            .get_or_create_pool_functional(tenant_id)
+                        {
                             crate::services::functional_patterns::Either::Right(pool) => Some(pool),
                             crate::services::functional_patterns::Either::Left(err) => {
                                 log::error!("Failed to create PG tenant pool: {}", err);
@@ -91,18 +95,25 @@ impl HybridDatabaseManager {
                         }
                     })
                     .ok_or_else(|| {
-                        ServiceError::not_found(format!("PostgreSQL pool not found for tenant: {}", tenant_id))
+                        ServiceError::not_found(format!(
+                            "PostgreSQL pool not found for tenant: {}",
+                            tenant_id
+                        ))
                     })?;
 
                 let conn = pool.get().map_err(|e| {
-                    ServiceError::internal_server_error(format!("Failed to get PG connection: {}", e))
+                    ServiceError::internal_server_error(format!(
+                        "Failed to get PG connection: {}",
+                        e
+                    ))
                 })?;
 
                 Ok(DbConnection::Postgres(Box::new(conn)))
             }
             TenantDbType::Oracle => {
                 // Use Oracle tenant pool
-                let conn = self.oracle_tenant_manager
+                let conn = self
+                    .oracle_tenant_manager
                     .get_or_create_pool(tenant_id, &self.pg_admin_pool)
                     .and_then(|pool| pool.get())?;
 
@@ -114,7 +125,7 @@ impl HybridDatabaseManager {
     /// Determine which database type a tenant uses by parsing the db_url (with caching)
     fn get_tenant_db_type(&self, tenant_id: &str) -> Result<TenantDbType, ServiceError> {
         let now = Instant::now();
-        
+
         // Check cache first
         if let Ok(cache) = self.tenant_db_type_cache.read() {
             if let Some(cached) = cache.get(tenant_id) {
@@ -123,7 +134,7 @@ impl HybridDatabaseManager {
                 }
             }
         }
-        
+
         // Cache miss or expired - query database
         use crate::models::tenant::Tenant;
         use crate::schema::tenants::dsl::*;
@@ -139,7 +150,7 @@ impl HybridDatabaseManager {
             .map_err(|e| ServiceError::not_found(format!("Tenant not found: {}", e)))?;
 
         let db_type = Self::parse_database_type(&tenant.db_url)?;
-        
+
         // Update cache
         if let Ok(mut cache) = self.tenant_db_type_cache.write() {
             cache.insert(
@@ -150,7 +161,7 @@ impl HybridDatabaseManager {
                 },
             );
         }
-        
+
         Ok(db_type)
     }
 
@@ -162,29 +173,34 @@ impl HybridDatabaseManager {
                 "postgres" | "postgresql" | "pg" => return Ok(TenantDbType::Postgres),
                 "oracle" => return Ok(TenantDbType::Oracle),
                 "mysql" | "mariadb" => {
-                    return Err(ServiceError::bad_request(
-                        format!("Unsupported database type: {}. Only PostgreSQL and Oracle are supported.", parsed_url.scheme())
-                    ));
+                    return Err(ServiceError::bad_request(format!(
+                        "Unsupported database type: {}. Only PostgreSQL and Oracle are supported.",
+                        parsed_url.scheme()
+                    )));
                 }
                 scheme => {
-                    return Err(ServiceError::bad_request(
-                        format!("Unknown database scheme: {}. Expected postgres:// or oracle://", scheme)
-                    ));
+                    return Err(ServiceError::bad_request(format!(
+                        "Unknown database scheme: {}. Expected postgres:// or oracle://",
+                        scheme
+                    )));
                 }
             }
         }
-        
+
         // Handle scheme-less URLs by checking common patterns
         let url_lower = db_url.to_lowercase();
-        
+
         // PostgreSQL patterns without scheme
-        if url_lower.contains("@localhost") || url_lower.contains("@127.0.0.1") || url_lower.contains("@::1") {
+        if url_lower.contains("@localhost")
+            || url_lower.contains("@127.0.0.1")
+            || url_lower.contains("@::1")
+        {
             // Likely PostgreSQL connection string format: user:pass@host/db
             if url_lower.contains("/") && !url_lower.contains(":") {
                 return Ok(TenantDbType::Postgres);
             }
         }
-        
+
         // Oracle patterns: typically hostname:port/service_name or user/pass@host:port/service
         if db_url.contains(":") && db_url.contains("/") {
             // Check if it looks like Oracle format (has port number)
@@ -195,7 +211,7 @@ impl HybridDatabaseManager {
                 }
             }
         }
-        
+
         // If we can't determine, return error rather than assuming
         Err(ServiceError::bad_request(
             format!(
@@ -211,8 +227,13 @@ impl HybridDatabaseManager {
     }
 
     /// Add an Oracle tenant pool explicitly
-    pub fn add_oracle_tenant_pool(&self, tenant_id: String, connection_string: String) -> Result<(), ServiceError> {
-        self.oracle_tenant_manager.add_tenant_pool(tenant_id, connection_string)
+    pub fn add_oracle_tenant_pool(
+        &self,
+        tenant_id: String,
+        connection_string: String,
+    ) -> Result<(), ServiceError> {
+        self.oracle_tenant_manager
+            .add_tenant_pool(tenant_id, connection_string)
     }
 
     /// Health check for all databases
@@ -221,12 +242,14 @@ impl HybridDatabaseManager {
         let pg_admin_healthy = self.pg_admin_pool.get().is_ok();
 
         // Check all PG tenant pools
-        let pg_tenant_health = self.pg_tenant_manager
+        let pg_tenant_health = self
+            .pg_tenant_manager
             .list_all_tenant_pools()
             .unwrap_or_default()
             .into_iter()
             .map(|tenant_id| {
-                let healthy = self.pg_tenant_manager
+                let healthy = self
+                    .pg_tenant_manager
                     .get_tenant_pool(&tenant_id)
                     .and_then(|pool| pool.get().ok())
                     .is_some();

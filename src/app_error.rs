@@ -1,8 +1,7 @@
-use actix_web::{
-    http::StatusCode,
-    HttpResponse, ResponseError,
-};
+use actix_web::{http::StatusCode, HttpResponse, ResponseError};
 use serde_json::json;
+use serde_json::to_vec;
+use tonic::Code;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -14,10 +13,25 @@ pub enum AppError {
     Unauthorized,
     #[error("conflict: {0}")]
     Conflict(String),
+    #[error(transparent)]
+    ServiceError(#[from] crate::error::ServiceError),
     #[error("database: {0}")]
     Database(#[from] sqlx::Error),
     #[error("internal: {0}")]
     Internal(#[from] anyhow::Error),
+}
+
+fn code_to_grpc_code(status_code: StatusCode) -> Code {
+    match status_code {
+        StatusCode::BAD_REQUEST => Code::InvalidArgument,
+        StatusCode::UNAUTHORIZED => Code::Unauthenticated,
+        StatusCode::NOT_FOUND => Code::NotFound,
+        StatusCode::CONFLICT => Code::AlreadyExists,
+        StatusCode::UNPROCESSABLE_ENTITY => Code::InvalidArgument,
+        StatusCode::FORBIDDEN => Code::PermissionDenied,
+        StatusCode::INTERNAL_SERVER_ERROR => Code::Internal,
+        _ => Code::Internal,
+    }
 }
 
 impl ResponseError for AppError {
@@ -26,6 +40,7 @@ impl ResponseError for AppError {
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
+            Self::ServiceError(err) => err.http_status(),
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Database(_) | Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -33,6 +48,10 @@ impl ResponseError for AppError {
 
     fn error_response(&self) -> HttpResponse {
         tracing::error!(error = %self);
+        if let Self::ServiceError(err) = self {
+            return err.error_response();
+        }
+
         let public_message = match self {
             Self::Database(_) => "database error".to_string(),
             Self::Internal(_) => "internal server error".to_string(),
@@ -50,6 +69,22 @@ impl From<AppError> for tonic::Status {
             AppError::Validation(m) => tonic::Status::invalid_argument(m),
             AppError::Unauthorized => tonic::Status::unauthenticated("unauthorized"),
             AppError::Conflict(m) => tonic::Status::already_exists(m),
+            AppError::ServiceError(service_error) => {
+                let status_code = service_error.http_status();
+                let envelope = crate::error::ErrorEnvelope::from_error(&service_error);
+                let details = to_vec(&envelope).unwrap_or_else(|_| {
+                    serde_json::to_vec(&serde_json::json!({
+                        "message": envelope.message,
+                    }))
+                    .unwrap_or_default()
+                });
+
+                tonic::Status::with_details(
+                    code_to_grpc_code(status_code),
+                    envelope.message,
+                    details.into(),
+                )
+            }
             AppError::Database(e) => {
                 tracing::error!(error = %e, "database error mapped to grpc internal");
                 tonic::Status::internal("internal server error")
@@ -57,26 +92,6 @@ impl From<AppError> for tonic::Status {
             AppError::Internal(e) => {
                 tracing::error!(error = %e, "internal error mapped to grpc internal");
                 tonic::Status::internal("internal server error")
-            }
-        }
-    }
-}
-
-impl From<crate::error::ServiceError> for AppError {
-    fn from(value: crate::error::ServiceError) -> Self {
-        match value {
-            crate::error::ServiceError::Unauthorized { .. } => Self::Unauthorized,
-            crate::error::ServiceError::BadRequest { error_message, .. } => {
-                Self::Validation(error_message)
-            }
-            crate::error::ServiceError::NotFound { error_message, .. } => {
-                Self::NotFound(error_message)
-            }
-            crate::error::ServiceError::Conflict { error_message, .. } => {
-                Self::Conflict(error_message)
-            }
-            crate::error::ServiceError::InternalServerError { error_message, .. } => {
-                Self::Internal(anyhow::anyhow!(error_message))
             }
         }
     }
