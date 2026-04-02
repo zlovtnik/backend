@@ -11,6 +11,9 @@ use std::iter::{FusedIterator, Iterator};
 
 /// Pagination input parameters represented as a cursor (zero-based page index)
 /// and the desired page size.
+///
+/// **Deprecated**: Use `unified_pagination` (cursor-based, AES-GCM encrypted) for new features.
+#[deprecated(note = "Use unified_pagination for new features. This index-based system is retained for compatibility only.")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pagination {
     cursor: usize,

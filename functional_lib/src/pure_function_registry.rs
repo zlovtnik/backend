@@ -5,7 +5,6 @@
 //! and purity validation. All operations are optimized for performance
 //! with sub-millisecond lookup times.
 
-#[allow(dead_code)]
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -17,8 +16,20 @@ use super::function_traits::{FunctionCategory, FunctionContainer, FunctionWrappe
 pub struct FunctionInfo {
     pub signature: &'static str,
     pub category: FunctionCategory,
-    pub input_type_id: std::any::TypeId,
-    pub output_type_id: std::any::TypeId,
+    input_type_id: std::any::TypeId,
+    output_type_id: std::any::TypeId,
+}
+
+impl FunctionInfo {
+    /// Returns the [`TypeId`] of the function's input type.
+    pub fn input_type_id(&self) -> std::any::TypeId {
+        self.input_type_id
+    }
+
+    /// Returns the [`TypeId`] of the function's output type.
+    pub fn output_type_id(&self) -> std::any::TypeId {
+        self.output_type_id
+    }
 }
 
 /// Performance metrics for registry operations.
@@ -281,6 +292,11 @@ impl PureFunctionRegistry {
     /// // let result = registry.compose_functions("double", "increment", FunctionCategory::Mathematical, "double_then_increment");
     /// // assert!(result.is_ok());
     /// ```
+    /// Compose two registered functions into a new function.
+    ///
+    /// **Not yet implemented.** Always returns [`RegistryError::IncompatibleComposition`].
+    /// This method is reserved for a future release and must not be called in production.
+    #[doc(hidden)]
     pub fn compose_functions(
         &self,
         first_sig: &str,

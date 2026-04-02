@@ -25,6 +25,7 @@ pub mod chain_builder;
 pub mod concurrent_processing;
 pub mod constants;
 pub mod function_traits;
+#[cfg(test)]
 pub mod functional_tests;
 pub mod immutable_state;
 pub mod iterator_engine;
