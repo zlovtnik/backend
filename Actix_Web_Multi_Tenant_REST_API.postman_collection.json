@@ -1,3 +1,4 @@
+//to-do: update the collection with more endpoints and detailed descriptions, especially for admin and monitoring endpoints. Also consider adding example responses and error cases for better documentation.
 {
   "info": {
     "name": "Actix Web Multi-Tenant REST API",
