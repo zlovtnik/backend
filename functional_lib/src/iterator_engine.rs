@@ -12,7 +12,6 @@ use itertools::Itertools;
 
 use crate::performance_monitoring::{get_performance_monitor, Measurable, OperationType};
 
-use std::panic::{self, AssertUnwindSafe};
 
 struct SafeIterator<I>
 where
@@ -48,14 +47,7 @@ where
         if self.terminated {
             return None;
         }
-
-        match panic::catch_unwind(AssertUnwindSafe(|| self.inner.next())) {
-            Ok(item) => item,
-            Err(_) => {
-                self.terminated = true;
-                None
-            }
-        }
+        self.inner.next()
     }
 }
 

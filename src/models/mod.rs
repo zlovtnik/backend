@@ -109,7 +109,9 @@ pub mod functional_utils {
     /// let structured_errors = to_error_messages(errors);
     /// // Each error contains field, code, and message.
     /// ```
-    pub fn to_error_messages(errors: Vec<ValidationError>) -> Vec<String> {
-        errors.into_iter().map(|error| error.message).collect()
+    /// Returns the validation errors with their full structured data.
+    /// Use `.message` on each entry if you only need the human-readable string.
+    pub fn to_error_messages(errors: Vec<ValidationError>) -> Vec<ValidationError> {
+        errors
     }
 }

@@ -5,11 +5,10 @@ use actix_web::{
     HttpResponse,
 };
 use chrono::{DateTime, Utc};
-use derive_more::{Display, Error};
 use log::Level;
 use serde::Serialize;
 use serde_json::to_string as to_json_string;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use tracing;
 
 pub type ServiceResult<T> = Result<T, ServiceError>;
@@ -74,9 +73,8 @@ impl ErrorContext {
     }
 
     fn dedup_tags(&mut self) {
-        let tags = std::mem::take(&mut self.tags);
-        let set: BTreeSet<String> = tags.into_iter().collect();
-        self.tags = set.into_iter().collect();
+        self.tags.sort_unstable();
+        self.tags.dedup();
     }
 }
 
@@ -117,36 +115,31 @@ impl ErrorEnvelope {
     }
 }
 
-#[derive(Debug, Display, Error, Clone, PartialEq)]
+#[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum ServiceError {
-    #[display(fmt = "{error_message}")]
+    #[error("{error_message}")]
     Unauthorized {
         error_message: String,
-        #[error(ignore)]
         context: ErrorContext,
     },
-    #[display(fmt = "{error_message}")]
+    #[error("{error_message}")]
     InternalServerError {
         error_message: String,
-        #[error(ignore)]
         context: ErrorContext,
     },
-    #[display(fmt = "{error_message}")]
+    #[error("{error_message}")]
     BadRequest {
         error_message: String,
-        #[error(ignore)]
         context: ErrorContext,
     },
-    #[display(fmt = "{error_message}")]
+    #[error("{error_message}")]
     NotFound {
         error_message: String,
-        #[error(ignore)]
         context: ErrorContext,
     },
-    #[display(fmt = "{error_message}")]
+    #[error("{error_message}")]
     Conflict {
         error_message: String,
-        #[error(ignore)]
         context: ErrorContext,
     },
 }
@@ -483,32 +476,14 @@ pub mod error_logging {
     }
 
     pub fn compose_transformers<T, E, F, G>(
-        first: F,
-        second: G,
+        mut first: F,
+        mut second: G,
     ) -> impl FnMut(Result<T, E>) -> Result<T, E>
     where
-        T: Send + 'static,
-        E: Send + 'static,
-        F: FnMut(Result<T, E>) -> Result<T, E> + Send + 'static,
-        G: FnMut(Result<T, E>) -> Result<T, E> + Send + 'static,
+        F: FnMut(Result<T, E>) -> Result<T, E>,
+        G: FnMut(Result<T, E>) -> Result<T, E>,
     {
-        let first = std::sync::Arc::new(std::sync::Mutex::new(first));
-        let second = std::sync::Arc::new(std::sync::Mutex::new(second));
-
-        move |result: Result<T, E>| {
-            let intermediate = {
-                let mut first_guard = first
-                    .lock()
-                    .expect("compose_transformers: first transformer mutex poisoned");
-                (&mut *first_guard)(result)
-            };
-
-            let mut second_guard = second
-                .lock()
-                .expect("compose_transformers: second transformer mutex poisoned");
-
-            (&mut *second_guard)(intermediate)
-        }
+        move |result| second(first(result))
     }
 
     pub fn chain_log_and_transform<T, E1, E2>(

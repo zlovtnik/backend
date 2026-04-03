@@ -1,8 +1,8 @@
-//! יהי רצון מלפני ה' שימצא עבודה, בייס שירות פונקציונלי
+//! Functional Service Base
 //!
-//! דפוסי תכנות פונקציונלי ליבתיים וכלים לשימוש בשירות layer.
-//! מספק הקצאות מופשטות נפוצות עבור פעולות מסד נתונים, טיפול בשגיאות, והמרת נתונים
-//! באמצעות עקרונות תכנות פונקציונלי.
+//! Core functional programming patterns and utilities for the service layer.
+//! Provides common abstractions for database operations, error handling, and data
+//! transformation using functional programming principles.
 
 use crate::{
     config::db::Pool,
@@ -16,7 +16,6 @@ use log::Level;
 use std::{
     future::Future,
     pin::Pin,
-    sync::{Arc, Mutex},
 };
 
 /// Simple validation trait for basic validation patterns
@@ -112,28 +111,17 @@ where
             || ServiceError::bad_request("No data provided to pipeline"),
         )?;
 
-        let collected_errors = Arc::new(Mutex::new(Vec::new()));
-        let mut reporter =
-            error_pipeline::build_error_reporter(collected_errors.clone(), |err: &ServiceError| {
-                log::warn!("Validation failed in pipeline: {}", err);
-            });
-
-        let validation_results: Vec<ServiceResult<()>> = validations
+        // Run all validations; log a warning for each failure and return the first error
+        if let Some(err) = validations
             .iter()
-            .map(|validation| validation.validate(&pipeline_data))
-            .collect();
-
-        for result in validation_results.iter().cloned() {
-            reporter(result.map(|_| ()));
-        }
-
-        let _validation_successes =
-            error_pipeline::collect_successes(validation_results.clone(), |_| ());
-
-        if let Some(err) = validation_results.into_iter().find_map(|res| res.err()) {
-            if let Ok(mut collected) = collected_errors.lock() {
-                collected.clear();
-            }
+            .map(|v| v.validate(&pipeline_data))
+            .inspect(|result| {
+                if let Err(e) = result {
+                    log::warn!("Validation failed in pipeline: {}", e);
+                }
+            })
+            .find_map(|result| result.err())
+        {
             return Err(err);
         }
 
@@ -303,48 +291,72 @@ impl<T> FunctionalErrorHandling<T> for ServiceResult<T> {
 
     fn log_error(self, context: &str) -> Result<T, ServiceError> {
         self.map_err(|err| {
-            log::error!("Error in {}: {:?}", context, err);
+            log::error!("Error in {}: {}", context, err);
             err
         })
     }
 }
 
-/// Functional data transformation utilities
+/// Transform data using a functional pipeline.
+pub fn transform<T, U, F>(data: T, transform_fn: F) -> ServiceResult<U>
+where
+    F: FnOnce(T) -> Result<U, ServiceError>,
+{
+    transform_fn(data)
+}
+
+/// Transform collections using iterator chains.
+pub fn transform_collection<T, U, F>(data: Vec<T>, transform_fn: F) -> ServiceResult<Vec<U>>
+where
+    F: Fn(T) -> Result<U, ServiceError>,
+{
+    data.into_iter()
+        .map(transform_fn)
+        .collect::<Result<Vec<_>, _>>()
+}
+
+/// Filter and transform data in a single pass.
+pub fn filter_transform<T, U, P, F>(
+    data: Vec<T>,
+    predicate: P,
+    transform_fn: F,
+) -> ServiceResult<Vec<U>>
+where
+    P: Fn(&T) -> bool,
+    F: Fn(T) -> Result<U, ServiceError>,
+{
+    data.into_iter()
+        .filter(predicate)
+        .map(transform_fn)
+        .collect::<Result<Vec<_>, _>>()
+}
+
+/// Deprecated: use the free functions `transform`, `transform_collection`, `filter_transform` instead.
+#[deprecated(note = "Use the free functions `transform`, `transform_collection`, `filter_transform`")]
 pub struct DataTransformer;
 
+#[allow(deprecated)]
 impl DataTransformer {
-    /// Transform data using a functional pipeline
-    pub fn transform<T, U, F>(data: T, transform: F) -> ServiceResult<U>
+    pub fn transform<T, U, F>(data: T, f: F) -> ServiceResult<U>
     where
         F: FnOnce(T) -> Result<U, ServiceError>,
     {
-        transform(data)
+        transform(data, f)
     }
 
-    /// Transform collections using iterator chains
-    pub fn transform_collection<T, U, F>(data: Vec<T>, transform: F) -> ServiceResult<Vec<U>>
+    pub fn transform_collection<T, U, F>(data: Vec<T>, f: F) -> ServiceResult<Vec<U>>
     where
         F: Fn(T) -> Result<U, ServiceError>,
     {
-        data.into_iter()
-            .map(transform)
-            .collect::<Result<Vec<_>, _>>()
+        transform_collection(data, f)
     }
 
-    /// Filter and transform data in a single pass
-    pub fn filter_transform<T, U, P, F>(
-        data: Vec<T>,
-        predicate: P,
-        transform: F,
-    ) -> ServiceResult<Vec<U>>
+    pub fn filter_transform<T, U, P, F>(data: Vec<T>, predicate: P, f: F) -> ServiceResult<Vec<U>>
     where
         P: Fn(&T) -> bool,
         F: Fn(T) -> Result<U, ServiceError>,
     {
-        data.into_iter()
-            .filter(predicate)
-            .map(transform)
-            .collect::<Result<Vec<_>, _>>()
+        filter_transform(data, predicate, f)
     }
 }
 

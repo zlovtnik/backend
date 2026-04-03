@@ -12,18 +12,16 @@ use actix_web::{http, App, HttpServer};
 use rcs::config;
 use rcs::utils::ws_logger::{init_websocket_logging, LogBroadcaster};
 use std::sync::Arc;
-/// יהי רצון מלפני ה' שימצא עבודה חדשה טובה, בעוד נקודת הכניסה ליישום מסדרת לוגים וסביבה, מאתחלת מסד נתונים ורדיס,
-/// רושמת בריכות טננטים, מסדרת CORS ומיידלוור, ומתחילה שרת Actix HTTP.
+/// Application entry point.
 ///
-/// פונקציה זו קוראת משתני סביבה נחוצים (APP_HOST, APP_PORT, DATABASE_URL, REDIS_URL),
-/// מסדרת לוגים (אופציונלי לקובץ אם LOG_FILE מסופק), מאתחלת בריכה ראשית DB ו
-/// לקוח רדיס, רושמת טננט הדגמה, בונה אפליקציית Actix עם CORS ומיידלוור, קושרת
-/// לכתובת מסודרת, ומריצה שרת עד לכיבוי.
+/// Reads required environment variables (APP_HOST, APP_PORT, DATABASE_URL, REDIS_URL),
+/// initialises the main DB pool and Redis client, registers tenant pools, configures
+/// CORS and middleware, and starts the Actix HTTP server.
 ///
-/// # דוגמאות
+/// # Examples
 ///
 /// ```no_run
-/// // התחל יישום (מחייב משתני סביבה מתאימים).
+/// // Start the application (requires appropriate environment variables).
 /// // let _ = futures::executor::block_on(crate::main());
 /// ```
 #[actix_rt::main]
@@ -41,9 +39,13 @@ async fn main() -> io::Result<()> {
             }
         }
     }
-    // Only set RUST_LOG to a default if not already set in environment
+    // Set RUST_LOG default before any threads are spawned.
+    // NOTE: env::set_var is unsound if called after threads exist; this call is safe
+    // here because it happens before HttpServer::new spawns worker threads.
     if env::var("RUST_LOG").is_err() {
-        env::set_var("RUST_LOG", "info");
+        // Safety: no threads have been spawned at this point in main()
+        #[allow(unsafe_code)]
+        unsafe { env::set_var("RUST_LOG", "info") };
     }
 
     // Read WebSocket log buffer size from environment or use default of 1000
@@ -106,7 +108,13 @@ async fn main() -> io::Result<()> {
     let redis_url = env::var("REDIS_URL").ok();
 
     let main_pool = config::db::init_db_pool(&db_url);
-    config::db::run_migration(&mut main_pool.get().unwrap()).map_err(|e| {
+    let mut conn = main_pool.get().map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("Failed to get database connection for migration: {}", e),
+        )
+    })?;
+    config::db::run_migration(&mut conn).map_err(|e| {
         io::Error::new(
             io::ErrorKind::Other,
             format!("Database migration failed: {}", e),
@@ -132,8 +140,24 @@ async fn main() -> io::Result<()> {
 
     // Initialize Keycloak client
     let keycloak_config = rcs::utils::keycloak::KeycloakConfig {
-        issuer_url: env::var("KEYCLOAK_ISSUER_URL")
-            .unwrap_or_else(|_| "http://localhost:8080/realms/middleware".to_string()),
+        issuer_url: {
+            let default_issuer = "http://localhost:8080/realms/middleware";
+            match env::var("KEYCLOAK_ISSUER_URL") {
+                Ok(url) => url,
+                Err(_) => {
+                    let is_dev = env::var("APP_ENV").map(|v| v == "dev").unwrap_or(false);
+                    if is_dev {
+                        log::warn!("KEYCLOAK_ISSUER_URL not set. Using development default localhost. DO NOT use in production.");
+                        default_issuer.to_string()
+                    } else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "KEYCLOAK_ISSUER_URL must be set in production. Set APP_ENV=dev to use development defaults.",
+                        ));
+                    }
+                }
+            }
+        },
         client_id: env::var("KEYCLOAK_CLIENT_ID").unwrap_or_else(|_| "middleware-app".to_string()),
         client_secret: {
             use secrecy::SecretString;
@@ -212,7 +236,7 @@ async fn main() -> io::Result<()> {
     };
 
     let manager = config::db::TenantPoolManager::new(main_pool.clone());
-    // יהי רצון שימצא עבודה, קוד קשה טננט להדגמה, בייצור טען ממסד נתונים
+    // Hardcoded demo tenant; in production, load from the database
     manager
         .add_tenant_pool("tenant1".to_string(), main_pool.clone())
         .expect("Failed to add tenant pool");
@@ -225,18 +249,17 @@ async fn main() -> io::Result<()> {
     let pure_registry =
         Arc::new(rcs::functional::pure_function_registry::PureFunctionRegistry::new());
 
+    // Compute allowed origins once; the closure clones the Vec per worker thread
+    let allowed_origins = rcs::middleware::ws_security::get_allowed_origins();
+
     // Start the main HTTP server
     HttpServer::new(move || {
-        // Use shared CORS origin configuration from middleware::ws_security
-        let allowed_origins = rcs::middleware::ws_security::get_allowed_origins();
         let mut cors_builder = Cors::default();
-
-        // Apply allowed origins to CORS builder
-        for origin in allowed_origins {
-            cors_builder = cors_builder.allowed_origin(&origin);
+        for origin in &allowed_origins {
+            cors_builder = cors_builder.allowed_origin(origin);
         }
 
-        // יהי רצון שימצא עבודה, הוסף שיטות וכותרות נפוצות
+        // Configure allowed HTTP methods and headers
         cors_builder = cors_builder
             .allowed_methods(vec![
                 http::Method::GET,
@@ -258,7 +281,7 @@ async fn main() -> io::Result<()> {
             ])
             .max_age(3600);
 
-        // יהי רצון שימצא עבודה, בדוק דגל אישורים
+        // Apply credentials flag if configured
         let cors = if env::var("CORS_ALLOW_CREDENTIALS")
             .map(|v| v == "true")
             .unwrap_or(false)
@@ -283,8 +306,8 @@ async fn main() -> io::Result<()> {
                     .cookie_same_site(SameSite::Strict) // Prevent CSRF
                     // In production, set to true and ensure HTTPS
                     .cookie_secure(env::var("SESSION_COOKIE_SECURE")
-                        .map(|v| v == "true")
-                        .unwrap_or(false))
+                        .map(|v| v != "false")
+                        .unwrap_or(true))
                     .build()
             )
             .app_data(web::Data::new(manager.clone()))
